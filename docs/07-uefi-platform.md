@@ -303,28 +303,53 @@ transferred". Repeating it after `fastboot reboot-bootloader` (the workaround
 recorded for the P1 attempts) produced the same result, so this is not the
 stale-state problem that troubled P1.
 
-### A structural fact worth knowing: ABL is AArch32
+### Corrected: the ELF32 header is a container, and the code inside is AArch64
 
-Carved from the backup and read directly:
+Reading the partition header gives this, and it is where an earlier version of
+this document stopped:
 
-| partition | format | architecture |
+| partition | container | architecture of the container |
 |---|---|---|
 | `xbl` | ELF64 | AArch64 |
 | `tz`, `hyp`, `devcfg` | ELF64 | AArch64 |
-| `abl` | **ELF32** | **ARM (AArch32)** |
+| `abl` | ELF32 | ARM (AArch32) |
 | `aop` | ELF32 | ARM (AArch32) |
 
-`abl` is the Android Bootloader — the component that serves the `fastboot`
-protocol. On this device it is a **32-bit ARM** executable. That is a real
-constraint on any chain-load: whatever ABL hands control to, it does so from
-AArch32, and a payload that assumes it was entered in AArch64 state will fault
-immediately. On a device with no UART that presents as "nothing happened".
+From which the earlier text concluded "ABL is a 32-bit ARM executable, so a
+chain-loaded payload entered in AArch32 state would fault immediately", and
+offered that as the leading hypothesis for the failed jump. **That conclusion
+was wrong, and the way it was wrong is worth recording**, because everything
+needed to see it was one level further in.
 
-This is offered as the leading hypothesis for the failed jump, **not as an
-established cause.** ABL clearly can start a 64-bit kernel in normal operation,
-so it has an AArch64 transition; whether its `fastboot boot` path takes that
-transition, or takes it with the same entry conventions a chain-loaded payload
-needs, is not known.
+`abl` is ELF32 with a single real `PT_LOAD`: `vaddr 0x9fa00000`, `filesz
+0x30000`. That address is the **"ABOOT FV"** region from this board's own
+`uefiplat.cfg` (`0x9FA00000, 0x00200000`). At segment offset `0x78` — file
+offset `0x3078` — sits an LZMA stream. Decompressing it gives 917,704 bytes,
+and that is a firmware volume containing exactly **one PE image**:
+
+```
+machine  0xAA64        (IMAGE_FILE_MACHINE_ARM64 - AArch64, not ARM32)
+sections .text VA 0x1000 size 0xC2000
+         .data VA 0xC3000 size 0x1C000
+         .reloc VA 0xDF000 size 0x1000
+span     0xE0000
+```
+
+Every fastboot string and every boot-decision string lives in **that AArch64
+image's `.text`**: the command table (`oem uefilog`, `oem lkmsg`, `flash:`,
+`erase:`), `CmdBoot`, `FindBootableSlot`, `HandleActiveSlotUnbootable`, and
+`Failed to load/authenticate boot image: %r`.
+
+So the component that serves `fastboot` and decides whether to boot is
+**AArch64**, and the ELF32/ARM header is the container XBL ships it in, not the
+code. The AArch32 hand-off hypothesis is therefore unsupported and is withdrawn:
+there is no AArch32 state for ABL to hand control from.
+
+Two things this does *not* change: the failed jump is still unexplained, and
+`fastboot boot`'s silence is still unexplained. It removes one candidate rather
+than supplying an answer. But it removes the one that was doing the most work in
+the reasoning — "a 64-bit payload cannot survive an AArch32 hand-off" was a tidy
+explanation and it is not available.
 
 ### Why the supported path is probably `fastboot flash boot`
 `Mu-gauguin.img` is not an arbitrary payload. It is an Android boot image, and
@@ -681,11 +706,61 @@ The same volume gives the list of ways in. ABL's fastboot entry points are:
 - `HandleActiveSlotUnbootable` — which **reboots** rather than serving fastboot;
 - the `oem edl` / `oem poweroff` commands.
 
-There is no "boot failed, so enter fastboot" path in the string table. ABL's
-banner is `FastBoot Mode`, and the failures on the boot path (`Failed to
-load/authenticate boot image: %r`, and the ten validation messages above) are
-reported to the UART this phone does not have.
+### Corrected: ABL *does* have a boot-failed-to-fastboot path, and this device takes it
 
+An earlier version of this section said: "There is no 'boot failed, so enter
+fastboot' path in the string table." **That was wrong.** It came from grepping
+`strings` output for `fastboot` and reading the command list, which is not the
+same as reading what the boot path does. Extracting ABL's AArch64 payload
+properly (see the correction above) and mapping every string reference to the
+RVA that uses it turns up, in `QcomModulePkg/Library/BootLib`:
+
+```
+0x0b1c68  No bootable slots found enter fastboot mode
+0x0b1c95  Non Multi-slot: Unbootable entering fastboot mode
+0x0ba75a  Slot %s is unbootable
+0x0bb26c  GetActiveSlot: Slot attr: Priority %ld, Retry %ld, Active %ld, Success %ld, unboot %ld
+0x0baa6d  Active Slot %s is bootable, retry count %ld
+0x0baa9a  A/B retry count NOT decremented
+0x0beb5b  slot-retry-count
+0x0beb6c  slot-unbootable
+0x0bf17f  CmdBoot: ClearUnbootable failed
+```
+
+The second line is the one that matters here. **This device reports no
+`current-slot`** — `fastboot getvar current-slot` returns `GetVar Variable Not
+found` — so it is the *non multi-slot* case, and if ABL judges its boot slot
+unbootable it goes to fastboot. That is a mechanism that produces exactly what
+was observed: a reboot that lands in fastboot and stays.
+
+It also explains the shape of the observation better than "ABL refused the
+image and fell through":
+
+- `misc` was checked immediately before the write and was **all zeros**. If ABL
+  sets an unbootable flag when a boot fails, it did so *during* the failed
+  attempt, and the flag would not have been visible beforehand.
+- Every subsequent reboot also went to fastboot. A one-shot refusal would not
+  necessarily do that; a persisted flag would.
+
+**This is a hypothesis, not a finding, and it is cheap to test** — the
+variables are named in ABL's own fastboot handler:
+
+```
+fastboot getvar slot-unbootable
+fastboot getvar slot-retry-count
+fastboot oem device-info
+```
+
+and, independently, reading `misc` again *now* and comparing it with the
+all-zeros that was there before the write. If ABL wrote a BCB or a flag, it is
+in one of those. `tools/fastboot-capture.sh` asks for the first two; the `misc`
+comparison needs TWRP (Power + Volume Up), which does not go through ABL.
+
+If the flag is set, that is also the explanation for the run of failed
+reboots — and clearing it is a documented ABL action (`CmdBoot:
+ClearUnbootable`, and `fastboot` publishes `slot-unbootable`), not a mystery.
+
+### `fastboot getvar kernel` returns `uefi`, and it means nothing
 The observation itself, from the host side:
 
 ```

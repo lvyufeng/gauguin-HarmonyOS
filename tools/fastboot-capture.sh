@@ -73,10 +73,21 @@ log "== device state"
 run 20-device-info.txt oem device-info
 run 21-getvar-all.txt  getvar all
 
-# --- 3. Summarise anything that looks like a decision --------------------
+# --- 3. Is the boot slot marked unbootable? --------------------------------
+# ABL contains "Non Multi-slot: Unbootable entering fastboot mode" and this
+# device reports no current-slot, so it IS the non-multi-slot case: if ABL has
+# judged the boot slot unbootable it goes to fastboot, and a failed boot can be
+# what sets that. These two names come from ABL's own getvar handler, so asking
+# for them is not a guess.
+log "== boot slot state (ABL has a non-multislot 'unbootable -> fastboot' path)"
+for v in slot-unbootable slot-retry-count slot-count current-slot; do
+    timeout 20 fastboot getvar "$v" >"$OUT/30-$v.txt" 2>&1
+    printf '  %-20s %s\n' "$v" "$(tr '\n' ' ' <"$OUT/30-$v.txt")"
+done
+
 log "== boot-path lines found"
 PATTERN='bootstats|kernel load|image header|magic|dtb|decompress|avb|verified|authen|unbootable|bootable|slot|boot reason|fastboot mode|cmdline|load address|kernel size'
-if grep -rhiE "$PATTERN" "$OUT"/1*.txt 2>/dev/null; then
+if grep -rhiE "$PATTERN" "$OUT"/1*.txt "$OUT"/2*.txt "$OUT"/30-*.txt 2>/dev/null; then
     :
 else
     echo "  (nothing - see $OUT, and consider that the log may be empty)"
@@ -96,3 +107,15 @@ How to read the result:
     different problem: something before it (a BCB, a key, a slot decision)
     routed to fastboot, and the payload is not implicated at all.
 EOF
+
+# A third reading, added after the ABL payload was disassembled properly:
+#
+#   slot-unbootable:yes (or "Non Multi-slot: Unbootable" in a log) means ABL
+#   has marked the boot slot unbootable and is going to fastboot on purpose.
+#   This device has no A/B slots, so it is the non-multislot case, and a failed
+#   boot can be what sets the flag. In that situation the payload may well have
+#   been attempted - the fastboot is a consequence, not a refusal.
+#
+#   To check whether ABL wrote that flag, read `misc` from TWRP (Power + Volume
+#   Up) and compare with the all-zeros it held before the write:
+#       adb shell dd if=/dev/block/by-name/misc bs=4096 count=1 | od -c | head
