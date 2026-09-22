@@ -50,12 +50,15 @@ fi
 log "ABL is answering:"
 sed 's/^/    /' "$OUT/00-probe.txt"
 
-# helper: run a fastboot command, capture to a file, report the size.
+# helper: run a fastboot command, capture to a file, report which file it wrote.
+# The label is the output file name, not the subcommand: with `oem uefilog` and
+# friends the subcommand is just "oem" three times in a row, which makes the
+# progress output useless for telling which capture is which.
 run() {  # run <filename> <fastboot args...>
     local f="$OUT/$1"; shift
     timeout 30 fastboot "$@" >"$f" 2>&1
     local rc=$?
-    printf '  %-28s rc=%-3s %s\n' "$1" "$rc" "$(wc -c <"$f") bytes"
+    printf '  %-28s rc=%-3s %s\n' "$(basename "$f")" "$rc" "$(wc -c <"$f") bytes"
     return 0
 }
 
