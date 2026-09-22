@@ -15,7 +15,7 @@ except P0's. This table is the honest state; the sections under it are the plan.
 | phase | gate | state |
 |---|---|---|
 | **P0** survey + backup | partitions dumped and verified; no existing port | **done** — 74 partitions carved and signature-checked, `boot`/`abl`/`recovery` hashes match the device, 86 XBL drivers recovered, and `git ls-files Silicon/Qualcomm` confirms no SM7225 package upstream |
-| **P1** mainline kernel | device boots mainline and prints something | **not done** — `Image.gz` + DTB built (`work/out/boot.img`, stock-shaped v2) and `fastboot boot` was refused with `Failed to load/authenticate boot image`; never re-tried |
+| **P1** mainline kernel | device boots mainline and prints something | **not done** — `work/out/boot-pstore.img` is built, reproducible (`make_boot_image.py --kernel`), and now carries a log channel; the earlier `fastboot boot` was refused with `Failed to load/authenticate boot image` on the RAM path, and the partition path has never been tried |
 | **P2** UEFI skeleton | UEFI reaches a shell on the phone | **gate open** — platform package built, image written to `boot` and verified byte-for-byte, **never observed to execute an instruction** |
 | **P3** ACPI | Windows installer boots and sees UFS | not started — `AcpiTableUpdate` is a deliberate no-op |
 | **P4** Windows | desktop appears | not started — destroys `userdata` |
@@ -38,7 +38,12 @@ outcome means and which payload to try next, is
    `slot-retry-count`.
 2. `tools/restore-stock-boot.sh` — the A/B control: put the stock `boot` back
    and see whether Android returns.
-3. `work/out/p2-variants/Mu-gauguin-stock-{none,gzip}.img` — two stock-shaped
+3. `work/out/boot-pstore.img` — P1's mainline kernel, rebuilt with
+   `CONFIG_PSTORE_CONSOLE=y` / `CONFIG_PSTORE_RAM=y` and a cmdline that puts the
+   kernel log in the phone's own pstore region (`0xbff00000`), so a payload with
+   no UART and no screen driver can still be read afterwards at
+   `/sys/fs/pstore/console-ramoops-0` (step 4.5 in the runbook).
+4. `work/out/p2-variants/Mu-gauguin-stock-{none,gzip}.img` — two stock-shaped
    builds, one per surviving candidate (uncompressed vs gzip kernel).
 
 ### Standing decisions, with one amendment
@@ -90,7 +95,10 @@ Work:
 1. Fetch a mainline kernel and `sm6350`/`sm7225` DTS support
 2. Write `arch/arm64/boot/dts/qcom/sm7225-xiaomi-gauguin.dts` — clone the Fairphone 4
    board file, change panel, touch controller, regulators, and the `qcom,board-id`
-3. Build `Image` + `dtb`, wrap into an Android boot image
+3. Build `Image` + `dtb`, wrap into an Android boot image — with our tree in the
+   boot image's DTB slot, because ABL uses it as-is when the `msm-id`/`board-id`
+   match exactly, instead of overlaying the vendor tree on top (`docs/07`). Add
+   the pstore cmdline so the boot leaves a readable log.
 4. `fastboot boot boot.img` — nothing written to the device
 5. Use `extract_dtb` / `/proc/device-tree` output as the hardware reference
 

@@ -20,9 +20,9 @@ after step 4 has established that the phone is healthy. Confirm the pieces are
 present first, because a missing file mid-session costs a whole cycle:
 
 ```sh
-ls -la work/out/boot.img                              # P1's mainline kernel
-ls -la work/out/p2-variants/Mu-gauguin-stock-*.img    # the two P2 variants
-tools/restore-stock-boot.sh --check                   # must print "ok"
+ls -la work/out/boot-pstore.img                     # P1's kernel + the log channel
+ls -la work/out/p2-variants/Mu-gauguin-stock-*.img   # the two P2 variants
+tools/restore-stock-boot.sh --check                  # must print "ok"
 ```
 
 If `--check` fails, stop. Every write in this runbook depends on that file being
@@ -109,24 +109,40 @@ Each attempt: write, reboot, watch the screen, then run
 
 Order matters — cheapest and most informative first:
 
-**4a. P1's mainline kernel** (`work/out/boot.img`, stock-shaped v2, gzip kernel,
-real ramdisk). Worth trying before the UEFI builds for two reasons: it is a
-much better-understood payload, and **its earlier failure was on `fastboot boot`
-— the RAM chain-load path — which is not the same code path as booting from the
-`boot` partition.** So its failure does not predict anything about this test,
-and if it boots we have learned that the phone boots our images and that P2's
-problem is specific to the UEFI build.
+**4a. P1's mainline kernel with a log channel** — `work/out/boot-pstore.img`.
+Stock-shaped v2, gzip kernel (`Image-pstore.gz`, built with
+`CONFIG_PSTORE_CONSOLE=y` + `CONFIG_PSTORE_RAM=y`), the real initramfs, and our
+own DTB in the declared DTB slot with gauguin's exact `msm-id`/`board-id` — which
+is the one case where ABL uses our tree as-is instead of overlaying the vendor's
+on top (see `docs/07`). Its cmdline asks for both consoles and a pstore ring at
+`0xbff00000`, the phone's own pstore region.
+
+Worth trying before the UEFI builds for two reasons: it is a much better-known
+payload, and **its earlier failure was on `fastboot boot` — the RAM chain-load
+path — which is not the same code path as booting from the `boot` partition.**
+So its failure does not predict anything about this test.
+
+Read this before spending the cycle: **a black screen does not mean the payload
+failed.** With the vendor device tree there is no framebuffer and no serial, so
+a perfectly successful boot of this kernel prints to a dummy console. The
+evidence to look for is instead:
+
+1. Does it come back to fastboot at all? If the phone sits there dark and does
+   *not* return to ABL's fastboot, something executed.
+2. `oem fbreason` after the next boot (see the table in step 2).
+3. The pstore log — step 4c below. This is the one that can actually say
+   whether UFS enumerated and where the kernel stopped.
 
 ```sh
-fastboot flash boot work/out/boot.img
+fastboot flash boot work/out/boot-pstore.img
 ```
 
 (or, from TWRP, `adb push` + `dd`, which is what `restore-stock-boot.sh --twrp`
 does and which does not depend on ABL's fastboot answering at all — use that if
 the fastboot route has just stranded itself.)
 
-**4b. `Mu-gauguin-stock-gzip.img`** — stock-shaped, compressed kernel, dummy
-ramdisk. Same as the image already on the phone except the header is this
+**4b. `Mu-gauguin-stock-gzip.img`** — stock-shaped UEFI, compressed kernel,
+dummy ramdisk. Same as the image already on the phone except the header is this
 device's own shape.
 
 **4c. `Mu-gauguin-stock-none.img`** — the same but uncompressed. This is the
@@ -136,6 +152,24 @@ a **raw** kernel, and everything we have produced has been compressed.
 After each: if `oem fbreason` changes to `LoadImageAndAuth Fail`, the payload is
 being reached and the difference between this attempt and the last one is the
 variable that matters.
+
+## Step 4.5 — Read the log back, before touching the power button
+
+If step 4a ran, the kernel may have left a log in the pstore ring even though it
+could not print anything. **It survives a warm reboot but not a power cycle**, so
+this is the one step where the phone must be left to restart on its own
+(`panic=10` does that after a panic) and read before holding the power button.
+
+From Android (root) or from TWRP:
+
+```sh
+adb shell 'ls -la /sys/fs/pstore/'
+adb shell 'cat /sys/fs/pstore/console-ramoops-0' | tail -200
+```
+
+Look for `UFS`, `ufshcd`, `geni`, `simple-framebuffer`, `ramoops`, and the last
+line before it stops. That output is what P1's gate is actually asking for, and
+it is also the input to P2.
 
 ## Step 5 — Leave it bootable
 
@@ -156,11 +190,12 @@ For each attempt, one line — the phone is at a distance and memory is not a
 channel:
 
 ```
-attempt  image                          fbreason                     screen
--------  -----------------------------  ---------------------------  ------
-1        (as found)                     LoadImageAndAuth Fail        Redmi logo, then fastboot
-2        work/out/boot.img              ...
+attempt  image                          fbreason                     screen            pstore
+-------  -----------------------------  ---------------------------  ----------------  ------
+1        (as found)                     LoadImageAndAuth Fail        Redmi logo, then fastboot   n/a
+2        work/out/boot-pstore.img       ...
 ```
 
 That table is the entire output of a session. Everything else is in the files
-`fastboot-capture.sh` wrote.
+`fastboot-capture.sh` wrote, and — if step 4a ran — in the pstore ring, which is
+gone the moment the power button is held.

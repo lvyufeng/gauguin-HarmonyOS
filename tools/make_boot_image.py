@@ -16,10 +16,16 @@ explicit validation strings for the header it expects:
 
 So there are two profiles here:
 
-  silicon   reproduces exactly what Mu-Silicium's builder produces
+  silicon   reproduces what Mu-Silicium's builder produces
             (v1, page 0x800, 0x10008000-ish addresses, DTB glued into
-            kernel_size). Byte-comparable against `Mu-<device>.img` as a
-            regression check on this script.
+            kernel_size). Not byte-comparable with `Mu-<device>.img`, and
+            checking that is a mistake made twice before being measured: the
+            reference's kernel blob is a gzip stream made by a different
+            implementation, so it differs in the header (it carries FNAME
+            `SILICIUM_UEFI.fd-`, this script's does not) and by 26 bytes in the
+            deflate body. What *is* reproducible, and is the actual regression
+            check, is the size and every header field. Use `--compare` and read
+            the two dumps side by side, not `cmp`.
 
   stock     matches the phone's own boot image field for field:
             v2, page 0x1000, kernel 0x8000, ramdisk 0x1000000, tags 0x100,
@@ -31,9 +37,17 @@ image was built for P1 and ABL still rejected it with
 "Failed to load/authenticate boot image", so header shape is demonstrably not
 sufficient on its own.
 
+A kernel that is already compressed is passed with `--kernel` rather than
+`--fd`/`--bootshim`, and is used verbatim: re-compressing an `Image.gz` would
+produce a gzip stream that decompresses to a gzip stream, which the arm64
+decompressor rejects.
+
 Usage:
     make_boot_image.py --fd SILICIUM_UEFI.fd --bootshim BootShim.bin \\
         --dtb gauguin.dtb --profile stock -o Mu-gauguin-stock.img
+
+    make_boot_image.py --kernel Image.gz --ramdisk initramfs.cpio.gz \\
+        --dtb gauguin.dtb --profile stock -o p1-boot.img
 """
 import argparse
 import gzip
@@ -54,6 +68,7 @@ OFF_TAGS_ADDR, OFF_PAGE_SIZE, OFF_HEADER_VERSION = 32, 36, 40
 OFF_OS_VERSION = 44
 OFF_HEADER_SIZE = 1644
 OFF_DTB_SIZE, OFF_DTB_ADDR = 1648, 1652
+OFF_CMDLINE = 64          # 512 bytes of the header, after name(16) and id(32)
 
 PROFILES = {
     # what the phone's own `boot` partition says (measured, see docs/07)
@@ -76,7 +91,7 @@ def pad_to(data, page):
     return data if rem == 0 else data + b"\x00" * (page - rem)
 
 
-def build(kernel, ramdisk, dtb, p):
+def build(kernel, ramdisk, dtb, p, cmdline=""):
     """Return the boot image bytes for profile `p`."""
     page, hv = p["page_size"], p["header_version"]
 
@@ -105,6 +120,13 @@ def build(kernel, ramdisk, dtb, p):
     struct.pack_into("<I", hdr, OFF_PAGE_SIZE, page)
     struct.pack_into("<I", hdr, OFF_HEADER_VERSION, hv)
     struct.pack_into("<I", hdr, OFF_OS_VERSION, p["os_version"])
+    # The kernel command line lives at 64..576 (512 bytes, NUL-terminated), and
+    # is part of the id hash below. Mu-Silicium's images leave it empty because
+    # UEFI takes its input from the bootloader; a Linux payload needs one.
+    cmd = cmdline.encode()
+    if len(cmd) > 511:
+        sys.exit(f"cmdline is {len(cmd)} bytes, the header field holds 511")
+    hdr[OFF_CMDLINE:OFF_CMDLINE + len(cmd)] = cmd
     if hv >= 1:
         struct.pack_into("<I", hdr, OFF_HEADER_SIZE, 1648 if hv == 1 else 1660)
     if hv >= 2:
@@ -175,11 +197,17 @@ def describe(d, f, label):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--fd", required=True, help="SILICIUM_UEFI.fd")
-    ap.add_argument("--bootshim", required=True, help="BootShim.bin")
+    ap.add_argument("--fd", help="SILICIUM_UEFI.fd")
+    ap.add_argument("--bootshim", help="BootShim.bin")
+    ap.add_argument("--kernel",
+                    help="use this file as the kernel blob instead of "
+                         "--fd/--bootshim (already-compressed images such as "
+                         "P1's Image.gz must not be re-compressed)")
     ap.add_argument("--dtb", required=True, help="the device DTB")
     ap.add_argument("--ramdisk", default=None,
                     help="default: Mu-Silicium's Resources/ramdisk (5 bytes, 'dummy')")
+    ap.add_argument("--cmdline", default="",
+                    help="kernel command line to put in the header (max 511 bytes)")
     ap.add_argument("--compression", choices=("gzip", "none"), default="gzip")
     ap.add_argument("--profile", choices=sorted(PROFILES), default="stock")
     ap.add_argument("--compare", metavar="IMG",
@@ -188,26 +216,40 @@ def main():
     args = ap.parse_args()
 
     p = PROFILES[args.profile]
-    shim = open(args.bootshim, "rb").read()
-    fd = open(args.fd, "rb").read()
     dtb = open(args.dtb, "rb").read()
     ramdisk = open(args.ramdisk, "rb").read() if args.ramdisk else b"dummy"
 
-    # The FD must be exactly FD_SIZE, because BootShim copies FD_SIZE bytes from
-    # its own load address to FD_BASE and does not stop early.
-    if len(fd) != 0x300000:
-        sys.exit(f"FD is {len(fd):#x}, expected 0x300000 (FD_SIZE in the toml)")
+    if args.kernel:
+        if args.fd or args.bootshim:
+            sys.exit("--kernel and --fd/--bootshim are mutually exclusive")
+        # Taken as-is. P1's Image.gz is already gzip; running gzip over it again
+        # would produce a gzip stream that decompresses to a gzip stream, which
+        # the kernel does not accept as an arm64 image.
+        kernel = open(args.kernel, "rb").read()
+        print(f"profile {args.profile}: kernel={args.kernel} (verbatim, "
+              f"{len(kernel):#x} bytes), dtb "
+              f"{'declared' if p['dtb_in_header'] else 'appended to kernel'}")
+    else:
+        if not (args.fd and args.bootshim):
+            sys.exit("need either --kernel, or both --fd and --bootshim")
+        shim = open(args.bootshim, "rb").read()
+        fd = open(args.fd, "rb").read()
 
-    payload = shim + fd
-    kernel = gzip.compress(payload, mtime=0) if args.compression == "gzip" else payload
+        # The FD must be exactly FD_SIZE, because BootShim copies FD_SIZE bytes
+        # from its own load address to FD_BASE and does not stop early.
+        if len(fd) != 0x300000:
+            sys.exit(f"FD is {len(fd):#x}, expected 0x300000 (FD_SIZE in the toml)")
 
-    img = build(kernel, ramdisk, dtb, p)
+        payload = shim + fd
+        kernel = gzip.compress(payload, mtime=0) if args.compression == "gzip" else payload
+        print(f"profile {args.profile}: compression={args.compression} "
+              f"dtb={'declared' if p['dtb_in_header'] else 'appended to kernel'}")
+        print(f"  bootshim {len(shim)} + fd {len(fd):#x} -> kernel {len(kernel):#x}, "
+              f"dtb {len(dtb):#x}")
+
+    img = build(kernel, ramdisk, dtb, p, args.cmdline)
     open(args.output, "wb").write(img)
 
-    print(f"profile {args.profile}: compression={args.compression} "
-          f"dtb={'declared' if p['dtb_in_header'] else 'appended to kernel'}")
-    print(f"  bootshim {len(shim)} + fd {len(fd):#x} -> kernel {len(kernel):#x}, "
-          f"dtb {len(dtb):#x}")
     print()
     got, gf = parse(args.output)
     describe(got, gf, f"-> {args.output}")

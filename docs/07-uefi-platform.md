@@ -465,11 +465,15 @@ no AVB footer either. That is the state of the diagnosis: narrowing, not solved.
 For the next device attempt, `tools/make_boot_image.py` builds the image itself
 rather than letting Mu-Silicium's builder do it, because that builder never
 passes `--pagesize` and so every image it makes is page 2048 / header v1. The
-two profiles are byte-comparable:
+two profiles:
 
-- `silicon` reproduces `Mu-gauguin.img` exactly in shape — same 1,122,304 bytes,
-  same header fields, same region offsets. That is the regression check that
-  says the wrapper is right.
+- `silicon` reproduces `Mu-gauguin.img` **in shape**: same 1,122,304 bytes, same
+  header fields, same region offsets. That is the regression check that says the
+  wrapper is right. It is not byte-identical and should not be expected to be —
+  the reference kernel blob is a gzip stream from a different implementation
+  (it carries `FNAME = "SILICIUM_UEFI.fd-"`, ours does not, and the deflate body
+  differs by 26 bytes). Checking this with `cmp` was a mistake made twice;
+  `--compare` and the two field dumps side by side is the check.
 - `stock` matches the phone's own `boot` field for field, including
   `dtb_addr = 0x01F00000`, `header_size = 1660`, and the DTB placed after the
   ramdisk at `page*(1+nk+nr)` rather than glued into `kernel_size`.
@@ -648,6 +652,167 @@ entry **13** is
 The only board-id `0x23` in the whole table, and it is gauguin's. This is a
 claim that had been recorded earlier from a summary; it is now checked against
 the partition rather than trusted.
+
+### Corrected: entry 13 is an *overlay*, and the base tree comes from `boot`
+
+The paragraph above stopped one step short. Entry 13 is not a device tree — it
+is an **overlay**, 40-odd `fragment@N { target = <phandle>; __overlay__ {...} }`
+nodes plus a `model`/`msm-id`/`board-id` header so ABL can identify it. It has
+no `chosen`, no `memory`, no `reserved-memory` of its own. So there must be a
+**base** tree for it to be applied to, and the only other place a device tree
+lives is the `boot` image's own declared DTB region.
+
+That region is not empty, and it explains a string that looked like a copy-paste
+mistake:
+
+```
+$ dtc -I dtb -O dts stock-boot.img@0x2BFC000
+  model = "Qualcomm Technologies, Inc. APQ 8016 SBC";
+  chosen { stdout-path = "serial0"; };
+  reserved-memory { ramoops@bff00000 { reg = <0 0xbff00000 0 0x100000>; }; mpss@86800000 {...}; };
+  soc { interrupt-controller@b000000 {...}; sdhci@7824000 {...}; mdss@1a00000 {...}; };
+```
+
+`APQ 8016 SBC` is a DragonBoard 410c, so the *model string* is boilerplate — but
+the **contents are not**: `sdhci@7824000`, `mdss@1a00000`, `usb@78d9000` and
+`mpss@86800000` are this SoC family's addresses. It is Qualcomm's generic base
+tree, and Android boots with it *plus* the entry-13 overlay applied on top.
+
+Two consequences that matter:
+
+1. **The boot image's DTB region is a DTB slot, not a vestigial field.** Our own
+   tree put there becomes the base.
+2. **`ramoops@bff00000`, 1 MB, is this device's pstore region** — it is in the
+   phone's own boot image, and it is inside usable RAM at the top of the first
+   DRAM bank (it ends exactly at `0xc0000000`, where bank 1 begins). That is the
+   address to give a payload that wants a log channel, and it is also where
+   Android's own `/sys/fs/pstore` reads from.
+
+### What ABL does with a device tree, from its own strings
+
+ABL's string table describes the algorithm precisely, and it was read out rather
+than guessed:
+
+```
+Single appended DTB found / Not the single appended DTB
+DTB offset is incorrect, kernel image does not have appended DTB
+DTB offset goes beyond kernel size / Dtb offset goes beyond the image size
+Best match DTB tags %u/%08x/0x%08x/%x/%x/%x/%x/%x/(offset)0x%08x/(size)0x%08x
+Exact DTB match found. DTBO search is not required
+Error: Board Dtbo blob not found / Error: Device Tree blob not found
+ApplyOverlay: After overlay DTB size exceeded than supported
+Error: Dtb overlay failed / Device Tree update failed Status:%r
+Override DTB: GetBlkIOHandles failed loading user_dtbo!
+```
+
+So the order is: take the base tree (appended inside the kernel image if there
+is one, otherwise the boot image's DTB region), and if its `msm-id`/`board-id`
+match this device **exactly**, stop — the DTBO partition is not searched and no
+overlay is applied. Only on a non-exact match does it pick the "best match DTB
+tags" out of `dtbo` and overlay it. There is also an override through a
+`user_dtbo` partition.
+
+Our tree carries `qcom,msm-id = <0x1b2 0x10000 0x1cb 0x10000>` and
+`qcom,board-id = <0x23 0x00>`, which is exactly what entry 13 carries. **So a
+payload whose DTB slot holds our tree is the one case where ABL uses it
+untouched** — no vendor overlay merging itself into our mainline nodes. That is
+the scheme to use, and it is the stock shape, not the appended one.
+
+### BootShim preserves `x0`, so it does not choose the device tree
+
+Worth writing down because it is easy to assume otherwise. BootShim is 112 bytes
+and uses only `x1`–`x6`:
+
+```
+_Head:  adr x1, _Payload ; b _Start
+_Start: mov x4, x1 ; ldr x5,=FD_BASE ; ... copy loop ... ; br x5
+```
+
+`x0` — the DTB pointer on the arm64 boot path — is passed through untouched. So
+the DTB appended **inside `kernel_size`** in Mu-Silicium's images is there for
+ABL's benefit (it is what `Single appended DTB found` looks at), not because
+BootShim reads it.
+
+### P1's payload as built could not print anything, and now can
+
+This was found by reading P1's kernel `.config` against its command line, and it
+is the reason step 4a of the runbook has been rewritten rather than re-run.
+
+| what | state | consequence |
+|---|---|---|
+| `console=tty0` | in the cmdline | the console is the framebuffer, so it needs one |
+| `CONFIG_FRAMEBUFFER_CONSOLE=y` | set | fbcon exists |
+| `CONFIG_DRM_SIMPLEDRM=y`, `DRM_FBDEV_EMULATION=y` | set | a `simple-framebuffer` **node in the DT** is drawn on |
+| `CONFIG_DRM_MSM=m` | module | the real panel driver is not built in |
+| `CONFIG_ARM64_APPENDED_DTB` | **does not exist on arm64** | a Linux payload can only get a DT from ABL |
+
+Bluntly: with the vendor tree (no `chosen`, no `simple-framebuffer`) the kernel
+prints to a dummy console and the screen stays black **even on a successful
+boot**. A black screen would have been indistinguishable from a payload that
+never ran, which is exactly the ambiguity that has cost this project its device
+cycles. Two things change that:
+
+**Our tree goes in the DTB slot, and it declares a framebuffer.** The tree's
+`/chosen` carries
+
+```
+stdout-path = "serial0:115200n8";
+framebuffer@a0000000 { compatible = "simple-framebuffer";
+    reg = <0 0xa0000000 0 0x9e3400>;  width = 0x438;  height = 0x960;
+    stride = 0x10e0;  format = "a8r8g8b8"; };
+```
+
+`0x438 x 0x960 x 4 = 0x9E3400` is exactly the reserved size, so the geometry is
+self-consistent with the panel (1080x2400). The **address is not verified**, and
+it is worth saying which value is suspect: `0xa0000000` came from the Fairphone
+4 tree this file was derived from, while gauguin's own vendor tree reserves
+`disp_rdump_region@ac000000` (16 MB, `no-map`) as its display region. If the
+screen stays black while `oem fbreason` says the boot was attempted, try
+`0xac000000` — `drivers/of/platform.c` looks for `simple-framebuffer` in
+`/chosen`, so this is a one-line change to the DTS.
+
+**A log channel that needs no cable at all.** The kernel is now built with:
+
+```
+CONFIG_PSTORE=y  CONFIG_PSTORE_RAM=y  CONFIG_PSTORE_CONSOLE=y
+```
+
+and P1's command line carries
+
+```
+ramoops.mem_address=0xbff00000 ramoops.mem_size=0x100000
+ramoops.console_size=0x80000 ramoops.record_size=0x20000
+```
+
+which is the pstore region out of the phone's own base tree (above). With
+`PSTORE_CONSOLE` every `printk` is written into that 512 KB ring as well as to
+the console, it survives a **warm** reboot, and Android reads the same region at
+`/sys/fs/pstore/console-ramoops-0`. So the sequence "boot our payload → it dies
+or panics (`panic=10`) → the phone reboots itself → Android comes up → read
+`/sys/fs/pstore`" produces the kernel log of a payload that had no UART, no
+screen driver, and nothing else to say. `panic=10` was already in the cmdline;
+this is what makes it useful.
+
+`ramoops` calls `request_mem_region`, so if ABL has handed the region out as
+ordinary System RAM the init fails (`EBUSY`) and the log is simply absent — a
+silent no-op, not a hazard. Warm reboots keep RAM; a power cycle does not, so
+read the log before pulling the battery on the phone.
+
+Both are reproducible:
+
+```sh
+cd work/linux
+./scripts/config --enable PSTORE_RAM --enable PSTORE_CONSOLE
+make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- olddefconfig
+make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- -j8 Image
+gzip -9 -c arch/arm64/boot/Image > ../out/Image-pstore.gz
+
+cd ..; cd ..
+python3 tools/make_boot_image.py --kernel work/out/Image-pstore.gz \
+    --ramdisk work/out/initramfs.cpio.gz --dtb work/out/sm7225-xiaomi-gauguin.dtb \
+    --profile stock --cmdline "$(cat docs/p1-cmdline.txt)" \
+    -o work/out/boot-pstore.img
+```
 
 **The boot image is laid out the way the framework intends.** Parsed field by
 field, ours and the reference `Mu-surya.img` are byte-for-byte the same shape:
