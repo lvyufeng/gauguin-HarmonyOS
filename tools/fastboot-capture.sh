@@ -43,6 +43,13 @@ if ! timeout "$PROBE_TIMEOUT" fastboot getvar product >"$OUT/00-probe.txt" 2>&1;
     echo "  The USB device may well still be listed - that proves nothing:"
     echo "    $(lsusb 2>/dev/null | grep -i 18d1 || echo '(not listed either)')"
     echo
+    # Which wedge it is decides whether the reset is actually needed, and this
+    # is the only cheap way to ask. See tools/unwedge-fastboot.py for why EP0
+    # answering while the bulk endpoints are unarmed means the fastboot thread
+    # is stuck rather than merely blocked on us.
+    timeout 60 python3 "$(dirname "$0")/unwedge-fastboot.py" \
+        --log "$OUT/01-wedge.txt" 2>&1 | sed 's/^/  /'
+    echo
     echo "  Hold the power button ~20s until the phone restarts. It needs a"
     echo "  physical reset; a host-side port reset does not clear it."
     exit 2

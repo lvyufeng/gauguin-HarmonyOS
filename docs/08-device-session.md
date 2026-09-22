@@ -30,7 +30,7 @@ the byte-identical stock image.
 
 ---
 
-## Step 0 — Try the free recovery first
+## Step 0 — Try the free recovery first, then classify what you are looking at
 
 A stranded fastboot has so far been treated as needing the power button. Before
 that, three host-side resets were tried and **none works** — recorded so nobody
@@ -44,11 +44,50 @@ spends time on them again:
 
 The third is the interesting one: it forces a real USB reset on the wire and the
 device re-enumerates, so the host side is provably clean — and `getvar product`
-still times out. The stuck state is in ABL's firmware, not in the host stack or
-the link. **Only the power button clears it.**
+still times out. The stuck state is not in the host stack or the link.
 
 (For reference, `fastboot devices` will keep working through all of this,
 because it only reads the USB descriptor.)
+
+### Which silence is it
+
+`tools/fastboot-capture.sh` now runs `tools/unwedge-fastboot.py` when the probe
+fails, because "wedged" is three different states and only two of them are worth
+trying to recover from. It reads the endpoints directly with libusb and prints
+which one this is. Measured on the phone as it stands (2026-09-23):
+
+```
+EP0 GET_DESCRIPTOR(device)  rc=18  (18 = firmware answers control requests)
+EP0 GET_STATUS(IN  0x81)  rc=2 value=0 not halted
+EP0 GET_STATUS(OUT 0x01)  rc=2 value=0 not halted
+EP0 SET_CONFIGURATION(1)   rc=0  (>=0 = accepted by the firmware)
+--- draining IN (0x81) for 2s, 2000 ms per read
+   bulk_in rc=-7 after 0 bytes (timeout: nothing pending)
+--- sent b'getvar:product' on OUT: rc=-7 wrote 0
+--- response after 20.0s (0 bytes): b''
+```
+
+| state | IN drain | OUT write | recoverable |
+|---|---|---|---|
+| truncation wedge (client closed mid-response) | **returns the unread tail** | — | yes: the drain releases the thread |
+| download wedge (aborted 128 MB transfer) | nothing | **accepted** | in principle; do not guess the reply |
+| fastboot thread stuck outside its transport | nothing | **NAKs** | **no** — power button |
+
+The current state is the third row: EP0 answers and `SET_CONFIGURATION` is even
+accepted, so ABL's USB stack is running, while the bulk endpoints are armed in
+neither direction. That is a USB stack that has outlived its application — ABL's
+fastboot is interrupt-driven, so the interrupt context keeps answering long after
+the thread that owns the command loop has stopped. It also explains the two rows
+above: **neither of the two recorded wedges is what the phone is in now**, and
+`getvar product` timing out is not by itself evidence of the truncation wedge.
+
+Worth knowing for interpreting a session, because it cuts both ways. A
+non-answering fastboot looks like "something ran and took the CPU away", and it
+is not that: the descriptors come back, so ABL's firmware is still resident and
+answering. If our payload had reached the point of taking over, ABL would be gone
+and EP0 with it, and the device would not be enumerating as `18d1:d00d` with
+ABL's serial number at all. **So this state says ABL is still there and stuck —
+not that our image executed.**
 
 ## Step 1 — Reset and power on cleanly
 

@@ -35,7 +35,12 @@ outcome means and which payload to try next, is
    reports why ABL entered fastboot and can say `Reason:LoadImageAndAuth Fail`
    or `Reason:BootLinux Fail`. Either of those means the payload was reached.
    Then `oem uefilog` / `lkmsg` / `lpmsg`, plus `slot-unbootable` /
-   `slot-retry-count`.
+   `slot-retry-count`. If ABL is silent it runs `tools/unwedge-fastboot.py`,
+   which classifies *which* silence it is — a reply left unread (recoverable by
+   draining the endpoint), a download left waiting (recoverable in principle),
+   or a fastboot thread stuck behind a still-live USB stack (not recoverable;
+   power button). The current state is the third, and it also means ABL is
+   still resident, so the silence is not evidence our image ran.
 2. `tools/restore-stock-boot.sh` — the A/B control: put the stock `boot` back
    and see whether Android returns.
 3. `work/out/boot-pstore.img` and its four siblings `-raw`, `-raw-txt`,

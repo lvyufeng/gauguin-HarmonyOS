@@ -1364,3 +1364,26 @@ narrower than "do not abort a transfer" and worth stating precisely:
 > to a file and read the file. `fastboot devices` succeeding says nothing about
 > whether ABL is responsive.
 
+### But that is not what the phone is stuck in
+
+The device has been silent since, and it turns out neither recorded wedge
+describes it. `tools/unwedge-fastboot.py` reads the endpoints directly and
+separates the states: the truncation wedge leaves a reply unread on the IN
+endpoint, the aborted-transfer wedge leaves ABL parked in a bulk OUT read that
+still accepts data, and this device does **neither**. EP0 answers (descriptors,
+`GET_STATUS`, even `SET_CONFIGURATION`) while both bulk endpoints are unarmed.
+
+That combination says ABL's USB stack is running and the thread that owns the
+fastboot command loop is not — which is possible because the stack is
+interrupt-driven and answers from interrupt context. It also means the timeouts
+seen since are not evidence of a truncation wedge, and that no host-side reset
+will help: an endpoint nothing has armed cannot be reached by resetting the link
+above it, which is why all three resets in `docs/08` step 0 re-enumerated the
+device and changed nothing.
+
+There is a second-hand benefit. ABL's descriptors come back, so ABL is still
+resident: had a payload reached the point of taking the CPU, EP0 would have gone
+with it and the device would not be presenting itself as fastboot at all. A
+silent `fastboot` therefore reads as *ABL is stuck*, not as *our image ran* —
+which is the opposite of the obvious interpretation.
+
