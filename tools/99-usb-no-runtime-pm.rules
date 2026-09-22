@@ -1,0 +1,10 @@
+# Keep the Thunderbolt 3 USB controller (Intel JHL6340, Alpine Ridge) out of
+# runtime suspend.
+#
+# This machine has a JHL6340 Thunderbolt controller whose USB ports go to
+# D3cold when idle. On this box that makes it reset roughly once a minute
+# ("Host not accessible, reset failed" then a re-register), which drops any
+# attached device - an attached phone disappears from adb/fastboot within
+# seconds of enumerating. Verified: with runtime PM disabled the resets stop.
+ACTION=="add", SUBSYSTEM=="pci", ATTR{vendor}=="0x8086", ATTR{device}=="0x15db", \
+    ATTR{power/control}="on", ATTR{d3cold_allowed}="0"
