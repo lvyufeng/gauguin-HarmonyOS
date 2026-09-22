@@ -773,6 +773,31 @@ If the flag is set, that is also the explanation for the run of failed
 reboots — and clearing it is a documented ABL action (`CmdBoot:
 ClearUnbootable`, and `fastboot` publishes `slot-unbootable`), not a mystery.
 
+### Checked, and ruled out: the slot metadata is not in the GPT
+
+ABL prints `Slot suffix %s Part Attr 0x%lx` and contains a full GPT writer
+(`Updating GPT partition`, `Failed to write Gpt partition`, `Error writing
+partition entries array for Primary Table`), so the obvious next guess is that
+the unbootable state lives in the `boot` partition's GPT attribute bits — the
+Android `bootloader_control` layout (priority / tries / successful) is exactly
+that shape. **It does not, on this device, and the backup settles it.**
+
+Parsing every GPT entry in `LUN-sde.img` and grouping by the Attributes field:
+
+| attribute | count | which partitions |
+|---|---|---|
+| `0x0000000000000000` | 19 | `qupfw`, `apdp`, `devcfg`, `aopbak`, `uefisecapp`, `tzbak`, `hyp`, **`boot`** |
+| `0x0000000000000001` | 2 | `imagefv`, `imagefvbak` |
+| `0x1000000000000000` | 41 | `multiimgoem`, `sec`, `limits`, `vbmeta*`, `aop`, `uefivarstore`, `storsec`, … |
+
+Bit 60 only, on firmware that is read-only, which is the Qualcomm "read-only"
+convention rather than A/B metadata — `docs/02` already records the same bit
+meaning read-only for `super`. **`boot` is attribute 0**: no priority, no tries,
+no unbootable bit, nothing. There is no slot metadata in this GPT to consult,
+which is consistent with `current-slot` not existing, and it kills any theory of
+the form "the failed boot set a flag in the partition attributes". If a flag was
+set, it is in `misc`.
+
 ### `fastboot getvar kernel` returns `uefi`, and it means nothing
 The observation itself, from the host side:
 
