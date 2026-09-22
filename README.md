@@ -72,11 +72,16 @@ map and the restore procedure.
 | Phase | Deliverable | Gate | Status |
 |---|---|---|---|
 | **P0** | Device survey + full partition backup + XBL driver inventory | every partition dumped; DXE set identified | ✅ done |
-| **P1** | Mainline Linux on gauguin (`gauguin.dts` + kernel + `fastboot boot`) | framebuffer up, UFS mounted, USB console | ← **in progress** |
-| **P2** | UEFI skeleton (`Silicon/Qualcomm/BitraPkg` + `Platforms/Xiaomi/gauguinPkg`) | `fastboot boot` → UEFI Shell, UFS enumerates | not started |
+| **P1** | Mainline Linux on gauguin (`gauguin.dts` + kernel + `fastboot boot`) | framebuffer up, UFS mounted, USB console | **gate not observed** — image builds, `fastboot boot` was refused |
+| **P2** | UEFI skeleton (`Silicon/Qualcomm/BitraPkg` + `Platforms/Xiaomi/gauguinPkg`) | UEFI Shell on screen, UFS enumerates | **gate open** — package builds, image written to `boot` and byte-verified, never observed to run |
 | **P3** | UEFI with full driver set + ACPI tables | Windows installer boots off USB | not started |
 | **P4** | Windows 11 ARM64 deployment | Windows desktop on the device | not started |
 | **P5** | Hardware enablement in Windows | touch / Wi-Fi / GPU / audio one by one | not started |
+
+**Read the state from this table, not from the commit log.** Every commit so far
+is a checkpoint inside P2; none is a completed phase. `docs/00-plan.md` has the
+per-phase detail, and `docs/08-device-session.md` has the exact sequence for the
+next time the phone is in hand — which is what is currently blocking.
 
 P0 result: all 38 partition images dumped and size-verified against the GPT; **86
 signed AArch64 DXE drivers** and Qualcomm's own `uefiplat.cfg` recovered from the

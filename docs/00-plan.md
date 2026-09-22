@@ -27,7 +27,9 @@ phase state from this table, not from the commit titles.
 ### The one thing blocking progress
 
 The phone needs a **physical reset** — hold the power button ~20s, then a normal
-power-on with no keys held. Everything else is written and waiting:
+power-on with no keys held. The full sequence for that session, with what each
+outcome means and which payload to try next, is
+[`08-device-session.md`](08-device-session.md). The pieces it uses:
 
 1. `tools/fastboot-capture.sh` — first thing it asks is `oem fbreason`, which
    reports why ABL entered fastboot and can say `Reason:LoadImageAndAuth Fail`
