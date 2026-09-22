@@ -1,0 +1,17 @@
+# Backup images — large raw dumps, never commit these.
+backup/
+images/
+*.img
+!device/dxe/*.ffs
+
+# Build trees
+/out/
+mu_aloha_platforms/
+Mu-Silicium/
+edk2/
+workspace/
+
+# Python
+__pycache__/
+*.pyc
+.venv/

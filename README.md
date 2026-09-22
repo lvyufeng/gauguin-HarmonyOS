@@ -1,0 +1,98 @@
+# gauguin-HarmonyOS
+
+**Bringing Windows 11 on ARM to the Xiaomi Redmi Note 9 Pro 5G (codename `gauguin`, Snapdragon 750G).**
+
+> The repository name is a leftover from an earlier goal (HarmonyOS). The active goal is
+> now a full Windows on ARM port. The name is kept so the existing remote keeps working.
+
+---
+
+## What this is
+
+A from-scratch Qualcomm platform bring-up. The device has **no existing UEFI port** — no
+`edk2-msm`, `mu_aloha_platforms` or `Mu-Silicium` target covers `gauguin`, its SoC
+(`SM7225` / BSP codename **Bitra**), or any Bitra-family device. Everything here is new
+work, built on top of:
+
+- the **signed DXE drivers already inside the phone's own XBL** (extracted — see `device/`)
+- **mainline Linux support** for the sibling SoC `SM6350`/`SM7225` (Fairphone 4 is fully
+  mainlined, same `msm-id 459`, same `qcom,sm7225` compatible)
+- the **Project Mu / Mu-Silicium** firmware framework and its closest-spec reference
+  platforms (`RennellPkg` SM7125, `MooreaPkg` SM7150)
+
+## Read this first: what "all hardware working" can and cannot mean
+
+The goal as stated is *"all hardware drivable, feature complete"*. That is **not fully
+achievable**, and no amount of work changes it. Being precise about the ceiling up front:
+
+| Subsystem | Outlook | Why |
+|---|---|---|
+| Display (DSI + Adreno 619) | ✅ achievable | mdss/sde is mainlined for SM6350; DisplayDxe already in our XBL |
+| Storage (UFS 3.1) | ✅ achievable | `UFSDxe` in our XBL, mainline `ufs-qcom` works on SM6350 |
+| USB (device + host) | ✅ achievable | `UsbfnDwc3Dxe`/`UsbDeviceDxe`/`UsbConfigDxe` present |
+| Buttons, power, charging | ✅ achievable | `ButtonsDxe`, `PmicDxe`, `QcomChargerDxeLA` present |
+| Touchscreen | ⚠️ likely | SPI Novatek panel; needs a Windows HID miniport (community has several) |
+| Wi-Fi (WCN3990) | ⚠️ hard | needs a Windows driver for `wcn3990`; done for some devices, always painful |
+| Bluetooth | ⚠️ hard | same chip, same class of problem |
+| GPU acceleration | ⚠️ partial | Adreno 619 is `a6xx`; a WoA driver exists but needs INF re-binding; CPU rendering is the fallback |
+| Audio | ⚠️ partial | needs a UCM-equivalent for Windows; often the last thing to work |
+| Sensors, vibrator, flashlight | ⚠️ partial | piecemeal |
+| **Cellular modem (calls / SMS / data)** | ❌ **never** | no public WoA driver for Qualcomm MDM/modem on Android hardware — universal across every WoA-on-phone project |
+| **Cameras** | ❌ **never** | ISP is unsupported on WoA, no exceptions |
+
+So the realistic end state is: **a Windows 11 ARM tablet** — screen, touch, storage, USB,
+battery, Wi-Fi, GPU. **Not a phone.** No SIM functionality, no cameras, ever.
+
+## Hardware summary
+
+| | |
+|---|---|
+| Board | `gauguin` (Redmi Note 9 Pro 5G / Mi 10T Lite / Mi 10i) |
+| SoC | Qualcomm **SM7225**, BSP **Bitra** (`SM_BITRA_H`), `soc_id 459` |
+| CPU | 2× Cortex-A77 + 6× Cortex-A55 |
+| GPU | Adreno 619 (`Adreno619v1`) |
+| RAM / storage | 8 GB LPDDR4X / 128 GB UFS |
+| Display | 1080×2400 IPS LCD, DSI |
+| Firmware | XBL `BOOT.XF.3.3-00285-BITRALAZ-4` / `BitraPkgLAA` |
+| Bootloader | **unlocked** (`verifiedbootstate=orange`) |
+| Current OS | ported Smartisan R2 ROM (Android 11), `user/dev-keys`, **no public image exists** |
+
+Full details in [`docs/01-hardware.md`](docs/01-hardware.md).
+
+## The non-negotiable first step: back up everything
+
+The Smartisan R2 port on this device is a `user/dev-keys` build with **no downloadable
+image**. If a repartition or a bad flash destroys it, the device is a brick with no
+recovery path. Every partition (except `userdata`) has been dumped to
+`~/backup/gauguin/images/` — see [`docs/02-partitions.md`](docs/02-partitions.md) for the
+map and the restore procedure.
+
+## Phase plan
+
+| Phase | Deliverable | Gate | Status |
+|---|---|---|---|
+| **P0** | Device survey + full partition backup + XBL driver inventory | every partition dumped; DXE set identified | ← **in progress** |
+| **P1** | Mainline Linux on gauguin (`gauguin.dts` + kernel + `fastboot boot`) | framebuffer up, UFS mounted, USB console | not started |
+| **P2** | UEFI skeleton (`Silicon/Qualcomm/BitraPkg` + `Platforms/Xiaomi/gauguinPkg`) | `fastboot boot` → UEFI Shell, UFS enumerates | not started |
+| **P3** | UEFI with full driver set + ACPI tables | Windows installer boots off USB | not started |
+| **P4** | Windows 11 ARM64 deployment | Windows desktop on the device | not started |
+| **P5** | Hardware enablement in Windows | touch / Wi-Fi / GPU / audio one by one | not started |
+
+P1 looks like a detour but is not: it is the cheapest way to obtain a verified hardware
+map (clocks, regulators, GPIO, panel timings, MMIO bases) and that map is exactly what the
+P2 platform package has to encode.
+
+## Layout
+
+```
+docs/       analysis and reference material
+device/     config blobs extracted from this phone's own XBL (uefiplat.cfg, BDS_Menu.cfg, …)
+tools/      scripts used to inspect the device and its firmware
+```
+
+## Safety
+
+- `userdata` (107 GB) is **not** included in the backup — it holds user data and will be
+  re-partitioned for Windows. Anything on the phone worth keeping must be copied off first.
+- Restoring requires `fastboot` and the backups in `~/backup/gauguin/images/`. Do not
+  re-partition `super` or `userdata` until the restore path has been tested.
