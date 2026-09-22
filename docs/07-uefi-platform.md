@@ -484,6 +484,28 @@ session's payload list is worth spending a cycle on:
    it. ABL is itself UEFI, sits between the two, and has strings for both paths,
    so "it does not care" is an assumption rather than a fact.
 
+   The mechanism is one macro, `efi_signature_nop` in
+   `arch/arm64/kernel/efi-header.S`, which `head.S` emits as `code0`:
+
+   ```asm
+   .macro efi_signature_nop
+   #ifdef CONFIG_EFI
+           ccmp    x18, #0, #0xd, pl   /* opcode spells "MZ" */
+   #else
+           nop                         /* 0xd503201f */
+   #endif
+   ```
+
+   With EFI on, `__EFI_PE_HEADER` then lays a real PE header at `. - .L_head`,
+   which is why `res5` reads `0x40` — one 64-byte arm64 header further on — and
+   with EFI off `res5` stays `0`. The comment above the `nop` is the part worth
+   keeping: *"Bootloaders may inspect the opcode at the start of the kernel image
+   to decide if the kernel is capable of booting via UEFI. So put an ordinary NOP
+   here."* Some bootloader, at some point, has inspected that opcode. That is a
+   reason to have a `CONFIG_EFI=n` build in the set, which is what
+   `boot-pstore-raw-noefi.img` is — it is the only one of the five whose `code0`
+   is not `MZ`, and it is first in the table for that reason.
+
 3. **`text_offset`.** Stock declares `0x80000`, ours `0x0`. 0 is correct for
    Linux 6.12 — `TEXT_OFFSET` was removed from arm64 in 6.6, and the field is
    bootloader metadata the kernel never reads back. ABL is from 2020 and predates
@@ -852,13 +874,34 @@ framebuffer@a0000000 { compatible = "simple-framebuffer";
 ```
 
 `0x438 x 0x960 x 4 = 0x9E3400` is exactly the reserved size, so the geometry is
-self-consistent with the panel (1080x2400). The **address is not verified**, and
-it is worth saying which value is suspect: `0xa0000000` came from the Fairphone
-4 tree this file was derived from, while gauguin's own vendor tree reserves
-`disp_rdump_region@ac000000` (16 MB, `no-map`) as its display region. If the
-screen stays black while `oem fbreason` says the boot was attempted, try
-`0xac000000` — `drivers/of/platform.c` looks for `simple-framebuffer` in
-`/chosen`, so this is a one-line change to the DTS.
+self-consistent with the panel (1080x2400).
+
+The address is stronger than "copied from Fairphone", which is what an earlier
+version of this file said. `0xa0000000 + 0x2300000` is `cont_splash_memory` in
+`sm6350.dtsi`, marked `no-map` — the SoC family's continuous-splash carveout, the
+region the bootloader paints the logo into and hands over as a live scanout
+buffer. The *geometry* in our `/chosen` node is gauguin's own, not Fairphone's
+(the Fairphone 4 is 1080x2340). What is still unverified is the direction of
+travel: that ABL leaves that buffer live rather than turning the panel off before
+jumping to the kernel. `CONFIG_DRM_SIMPLEDRM=y`, `CONFIG_FRAMEBUFFER_CONSOLE=y`
+and `CONFIG_DRM_FBDEV_EMULATION=y` are all set, so if the buffer is live, fbcon
+draws on it.
+
+Worth recording what is *not* needed, since it looks like it should be:
+`CONFIG_SYSFB_SIMPLEFB` is deliberately unset. On a device-tree system
+`of_platform_default_populate_init()` finds `/chosen`'s `simple-framebuffer`
+child itself, creates the platform device, and calls `sysfb_disable()` so sysfb
+will not register a second one; `simpledrm` then binds by its own
+`of_device_id` match. sysfb is the x86/UEFI path.
+
+If the screen stays black while `oem fbreason` says the boot was attempted, the
+fallback address to try is `0xac000000`: that is gauguin's own
+`disp_rdump_region@ac000000` (16 MB), and it is in the **overlay** (dtbo entry
+13), not the base tree — so it is only in the tree ABL assembles when it does
+*not* take ours as-is. It is a debug dump region rather than a scanout buffer, so
+it is the weaker candidate of the two, and the mismatch is itself informative:
+if `0xac000000` is what works, the overlay was applied and our tree was not used
+at all. Changing it is a one-line edit to the DTS.
 
 **A log channel that needs no cable at all.** The kernel is now built with:
 
@@ -870,38 +913,120 @@ and P1's command line carries
 
 ```
 ramoops.mem_address=0xbff00000 ramoops.mem_size=0x100000
-ramoops.console_size=0x80000 ramoops.record_size=0x20000
+ramoops.record_size=0x20000 ramoops.console_size=0x20000 ramoops.ftrace_size=0x20000
 ```
 
-which is the pstore region out of the phone's own base tree (above). With
-`PSTORE_CONSOLE` every `printk` is written into that 512 KB ring as well as to
-the console, it survives a **warm** reboot, and Android reads the same region at
-`/sys/fs/pstore/console-ramoops-0`. So the sequence "boot our payload → it dies
-or panics (`panic=10`) → the phone reboots itself → Android comes up → read
-`/sys/fs/pstore`" produces the kernel log of a payload that had no UART, no
-screen driver, and nothing else to say. `panic=10` was already in the cmdline;
-this is what makes it useful.
+which is the pstore region out of the phone's own base tree (above), **with that
+tree's exact record geometry**. The geometry is not decoration. Android is the
+reader, and the vendor kernel parses the region **by position**:
 
-`ramoops` calls `request_mem_region`, so if ABL has handed the region out as
-ordinary System RAM the init fails (`EBUSY`) and the log is simply absent — a
-silent no-op, not a hazard. Warm reboots keep RAM; a power cycle does not, so
-read the log before pulling the battery on the phone.
+| the phone's base tree | a first draft of ours | consequence |
+|---|---|---|
+| `record-size 0x20000` | 0x20000 | same |
+| `console-size 0x20000` | **0x80000** | Android looks for its console record at 0xbffc0000 and finds our *dmesg* records there instead |
+| `ftrace-size 0x20000` | absent | shifts everything after the dmesg ring by 128 KB |
+| `pmsg-size` absent | absent | same |
+| `ecc-size` absent | absent | same |
 
-Both are reproducible:
+The console record is found by walking the region: `dmesg` records first
+(`mem_size - console - ftrace - pmsg`, divided into `record_size` chunks), then
+`console`, then `pmsg`, then `ftrace`. Change any one size and every record
+after it moves, so the 4-byte `persistent_ram` signature Android is looking for
+is not where it is looking. **Getting this wrong costs a device cycle and
+produces nothing at all** — which is the failure mode this whole log channel
+exists to avoid, so it is worth being slow and exact here.
+
+The same values are now in the device tree as a reserved-memory carveout,
+`ramoops@bff00000` with `no-map`, replacing the `ramoops@ffc00000` inherited
+from `sm6350.dtsi` (Fairphone's, different address *and* different geometry).
+The DTS version carries a comment saying why; the build checks for it
+(`tools/build-p1-payloads.sh` refuses to build a DTB that has anything other than
+exactly one `ramoops@bff00000`).
+
+Having both a DT node and cmdline parameters is deliberate, and it does not
+matter which of them wins, because they now say the same thing. It is worth
+knowing which one *does* win, though, because "two sources of truth" is the kind
+of thing that bites later: `ramoops_init` is a `postcore_initcall` and registers
+the cmdline's dummy platform device before `platform_driver_register`, while the
+DT nodes are not populated until `of_platform_default_populate_init` at
+`arch_initcall_sync` — one initcall level later. `ramoops_probe` opens with
+"only a single ramoops area allowed at a time, so fail extra probes", so the
+**cmdline wins and the DT node is the one that gets refused.** That is the
+documented cmdline method working as designed, not a bug.
+
+`no-map` means the kernel never hands the region to the page allocator. That
+matters more than it sounds: the base tree's node has no `no-map`, but the base
+tree also *reserves* the range, and a payload that only set `ramoops.mem_address`
+would be pointing pstore at 1 MB of ordinary System RAM. On arm64
+`request_standard_resources()` never runs, so System RAM is not claimed in
+`iomem_resource` and `ramoops`'s `request_mem_region` **succeeds anyway** — the
+region would look fine and be allocatable, and the log would be corrupted by
+whatever landed on it. An earlier version of this file said the failure would be
+a visible `EBUSY`; it would not have been.
+
+Finally, the cmdline now carries `reboot=panic_warm`. Mainline parses the
+`panic_` prefix in `reboot_setup()` into a separate `panic_reboot_mode`, and
+`psci_sys_reset()` turns `REBOOT_WARM` into `SYSTEM_RESET2` with
+`SYSTEM_WARM_RESET` instead of a plain `SYSTEM_RESET`. A warm reset keeps DRAM,
+so the log survives the reboot `panic=10` triggers. Without it, whether the
+log survives is up to whatever the platform's plain reset happens to do.
+
+With all of that, `PSTORE_CONSOLE` writes every `printk` into the region as it
+is produced — `pstore_console_write` calls the backend directly per chunk and
+registers with `CON_PRINTBUFFER`, so the pre-ramoops boot log is replayed into it
+too; no crash is needed to flush. The sequence "boot our payload → it dies or
+panics (`panic=10`) → the phone reboots itself warm → Android comes up → read
+`/sys/fs/pstore`" therefore produces the kernel log of a payload that had no
+UART, no screen driver, and nothing else to say. Warm reboots keep RAM; a power
+cycle does not, so read the log before pulling the battery on the phone.
+
+Both are reproducible, and reproducible as one command rather than as a recipe
+to retype:
 
 ```sh
-cd work/linux
-./scripts/config --enable PSTORE_RAM --enable PSTORE_CONSOLE
-make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- olddefconfig
-make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- -j8 Image
-gzip -9 -c arch/arm64/boot/Image > ../out/Image-pstore.gz
-
-cd ..; cd ..
-python3 tools/make_boot_image.py --kernel work/out/Image-pstore.gz \
-    --ramdisk work/out/initramfs.cpio.gz --dtb work/out/sm7225-xiaomi-gauguin.dtb \
-    --profile stock --cmdline "$(cat docs/p1-cmdline.txt)" \
-    -o work/out/boot-pstore.img
+tools/build-p1-payloads.sh              # all five variants
+tools/check-payload.py --stock ~/backup/gauguin/images/part-boot.img \
+    work/out/boot-pstore-*.img          # and refuse any structurally wrong one
 ```
+
+The script builds the DTB as well as the kernels — the tree is an **input we
+edit** now, so leaving it out of the reproducible path is how the ramoops
+carveout would quietly go missing. It refuses to proceed unless the built tree
+has exactly one `ramoops` node and that node is `ramoops@bff00000`. Its one
+expensive step, the second full kernel build with `CONFIG_EFI=n`, is reused from
+`work/out/Image-noefi` when it already exists; `--rebuild-noefi` forces it after
+a kernel-source or config change. The config it toggles is restored on every exit
+path, so a failed run cannot leave `CONFIG_EFI=n` behind for the next build.
+
+`check-payload.py` enforces the layout, and it does so against the phone's own
+image rather than a number written into the checker: it parses the DTB slot of
+the stock `boot` that `--stock` points at, reads the ramoops node out of the
+vendor base tree, and fails the payload if the cmdline, or the payload's own
+tree, disagrees with it on address or on any of the five record sizes. That check
+was written by feeding it the payload built *before* the geometry above was
+corrected, and it named the bug on the first run:
+
+```
+!! the cmdline's ramoops console-size is 0x80000, the phone's own is 0x20000 -
+   Android parses this region by position, so the log would be unreadable
+```
+
+The tree itself is versioned, because the kernel tree is not: the board file
+lives in `dts/sm7225-xiaomi-gauguin.dts`, is regenerated from the Fairphone 4
+file by `tools/make_gauguin_dts.py`, and is copied into the build tree by
+`tools/build-kernel.sh`. The carveout is in all three — the generator emits the
+node and the `delete-node` that removes the inherited one — so regenerating the
+board file cannot silently drop it. `build-p1-payloads.sh` re-copies the tracked
+file in before building the DTB and deletes the stale `.dtb` first, which is the
+same guard from the other side: a build tree whose copy has drifted now fails
+instead of producing a payload whose log goes to 0xffc00000.
+
+One consequence worth knowing before it looks like a mystery: the P2 UEFI image
+already written to `boot` was built from an earlier DTB, so a rebuild now differs
+from it by exactly this one carveout. The difference is inert for P2 — nothing in
+ABL's image check or in the UEFI memory map depends on a 1 MiB `no-map`
+reservation — but the two files are no longer identical, and the `gauguin.dtb`
+that a fresh Mu build installs into `Resources/DTBs/` will carry the node.
 
 **The boot image is laid out the way the framework intends.** Parsed field by
 field, ours and the reference `Mu-surya.img` are byte-for-byte the same shape:
@@ -918,7 +1043,7 @@ field, ours and the reference `Mu-surya.img` are byte-for-byte the same shape:
 
 Being identical to a working reference is the point: whatever ABL objects to,
 it would object to on surya as well. And the regions are where the header says
-they are — `kernel` at 0x800 holds the gzip stream, and the 71,737-byte DTB is
+they are — `kernel` at 0x800 holds the gzip stream, and the 71,714-byte DTB is
 appended **inside** `kernel_size`, which is what ABL's
 `DTB offset is incorrect, kernel image does not have appended DTB` is checking
 for.

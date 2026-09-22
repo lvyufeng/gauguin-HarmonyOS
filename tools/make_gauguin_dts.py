@@ -52,6 +52,25 @@ FRAMEBUFFER = '''		framebuffer0: framebuffer@a0000000 {
 		};
 '''
 
+# Where our kernel's log has to land. The SoC file `sm6350.dtsi` carries
+# Fairphone's own ramoops carveout at 0xffc00000; this phone's base tree - the
+# one ABL hands to the vendor kernel - puts it at 0xbff00000 instead, 1 MiB at
+# the top of the first DRAM bank, with record/console/ftrace all 0x20000 and no
+# pmsg and no ECC. Android reads that region back after a failed bring-up and
+# parses it by position, so both the address and the geometry have to be right
+# or the log is unreadable exactly when it is the only evidence there is. The
+# cmdline carries the same values; see docs/07 and docs/p1-cmdline.txt.
+RAMOOPS = '''
+		/* See the delete-node note at the bottom of this file. */
+		ramoops@bff00000 {
+			compatible = "ramoops";
+			reg = <0 0xbff00000 0 0x100000>;
+			record-size = <0x20000>;
+			console-size = <0x20000>;
+			ftrace-size = <0x20000>;
+			no-map;
+		};'''
+
 TAIL = '''
 /*
  * gauguin overrides.
@@ -64,6 +83,28 @@ TAIL = '''
 &mdss {
 	status = "disabled";
 };
+
+/*
+ * The inherited node from sm6350.dtsi is Fairphone's and sits at 0xffc00000
+ * with its own record geometry. This phone's own base tree - the one ABL hands
+ * to the vendor kernel - puts ramoops at 0xbff00000 instead: 1 MiB at the top
+ * of the first DRAM bank, ending exactly where bank 1 begins, with
+ * record/console/ftrace all 0x20000 and no pmsg and no ECC.
+ *
+ * That address and geometry matter because Android is the reader: after a
+ * failed bring-up the log is recovered by warm-rebooting into Android and
+ * reading /sys/fs/pstore/console-ramoops-0, and the vendor kernel parses that
+ * region by position. A different console_size puts our console record where
+ * Android looks for a dmesg record, and an ECC size changes the record format
+ * outright - either way the log becomes unreadable, which is the one thing a
+ * payload with no screen output cannot afford. The build's cmdline carries the
+ * same values, so it does not matter which of the two wins.
+ *
+ * The inherited node is deleted rather than overridden by label: overriding
+ * would leave the old name on the new address, so the tree would read
+ * "ramoops@ffc00000" at 0xbff00000 for anyone looking at it afterwards.
+ */
+/delete-node/ &ramoops;
 '''
 
 
@@ -103,6 +144,18 @@ def main(argv):
         FRAMEBUFFER, text)
     if n != 1:
         sys.exit(f"framebuffer block: expected 1 substitution, made {n}")
+    text = new
+
+    # 3. the pstore carveout. Anchored on the rmtfs node above it, which is the
+    #    last one in the board's reserved-memory block, so the insert lands
+    #    there rather than on whichever node happens to look similar.
+    anchor = (
+        '\t\t\tqcom,client-id = <1>;\n'
+        '\t\t\tqcom,vmid = <QCOM_SCM_VMID_MSS_MSA>;\n'
+        '\t\t};\n')
+    new, n = re.subn(re.escape(anchor), anchor + RAMOOPS + "\n", text)
+    if n != 1:
+        sys.exit(f"rmtfs anchor: expected 1 substitution, made {n}")
     text = new
 
     text += TAIL

@@ -91,6 +91,16 @@
 			qcom,client-id = <1>;
 			qcom,vmid = <QCOM_SCM_VMID_MSS_MSA>;
 		};
+
+		/* See the delete-node note at the bottom of this file. */
+		ramoops@bff00000 {
+			compatible = "ramoops";
+			reg = <0 0xbff00000 0 0x100000>;
+			record-size = <0x20000>;
+			console-size = <0x20000>;
+			ftrace-size = <0x20000>;
+			no-map;
+		};
 	};
 
 	msm_therm_sensor: thermal-sensor-msm {
@@ -1170,3 +1180,25 @@
 &mdss {
 	status = "disabled";
 };
+
+/*
+ * The inherited node from sm6350.dtsi is Fairphone's and sits at 0xffc00000
+ * with its own record geometry. This phone's own base tree - the one ABL hands
+ * to the vendor kernel - puts ramoops at 0xbff00000 instead: 1 MiB at the top
+ * of the first DRAM bank, ending exactly where bank 1 begins, with
+ * record/console/ftrace all 0x20000 and no pmsg and no ECC.
+ *
+ * That address and geometry matter because Android is the reader: after a
+ * failed bring-up the log is recovered by warm-rebooting into Android and
+ * reading /sys/fs/pstore/console-ramoops-0, and the vendor kernel parses that
+ * region by position. A different console_size puts our console record where
+ * Android looks for a dmesg record, and an ECC size changes the record format
+ * outright - either way the log becomes unreadable, which is the one thing a
+ * payload with no screen output cannot afford. The build's cmdline carries the
+ * same values, so it does not matter which of the two wins.
+ *
+ * The inherited node is deleted rather than overridden by label: overriding
+ * would leave the old name on the new address, so the tree would read
+ * "ramoops@ffc00000" at 0xbff00000 for anyone looking at it afterwards.
+ */
+/delete-node/ &ramoops;

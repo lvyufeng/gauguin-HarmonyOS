@@ -20,7 +20,7 @@ after step 4 has established that the phone is healthy. Confirm the pieces are
 present first, because a missing file mid-session costs a whole cycle:
 
 ```sh
-ls -la work/out/boot-pstore-raw*.img                 # P1's kernel, three shapes
+ls -la work/out/boot-pstore-*.img                     # P1's kernel, five shapes
 ls -la work/out/p2-variants/Mu-gauguin-stock-*.img   # the two P2 variants
 tools/restore-stock-boot.sh --check                  # must print "ok"
 ```
@@ -111,10 +111,10 @@ Order matters — cheapest and most informative first:
 
 **4a. P1's mainline kernel — the closest match to what the phone boots today**
 
-Three builds of the same kernel, differing only in the properties that
+Five builds of the same kernel, differing only in the properties that
 distinguish our images from the one that boots (see the table in `docs/07`).
-Order matters: each one removes exactly one difference, so the *change* between
-attempts is the signal.
+Each one removes exactly one difference, so the *change* between attempts is the
+signal.
 
 | # | image | kernel | arm64 header | `text_offset` | `image_size` | size |
 |---|---|---|---|---|---|---|
@@ -127,7 +127,9 @@ attempts is the signal.
 all under `work/out/`. Every one is stock-shaped v2 with our own DTB in the
 declared DTB slot — our tree carries gauguin's exact `msm-id`/`board-id`, which
 is the one case where ABL uses it as-is instead of overlaying the vendor's on
-top — and all five carry the pstore cmdline below.
+top — and all five carry the same cmdline (`docs/p1-cmdline.txt`), whose pstore
+parameters are the phone's own geometry so that step 4.5's log is readable
+(`docs/07`).
 
 Start at the top of the table. **1 is the one most likely to work**: it is the
 only build that matches the phone's own kernel on the raw property, the
@@ -195,9 +197,16 @@ variable that matters.
 ## Step 4.5 — Read the log back, before touching the power button
 
 If step 4a ran, the kernel may have left a log in the pstore ring even though it
-could not print anything. **It survives a warm reboot but not a power cycle**, so
-this is the one step where the phone must be left to restart on its own
-(`panic=10` does that after a panic) and read before holding the power button.
+could not print anything. **It survives a warm reboot but not a power cycle.**
+
+`reboot=panic_warm` is in the cmdline for exactly this reason: mainline turns it
+into a PSCI `SYSTEM_RESET2` warm reset, which keeps DRAM. So the sequence to aim
+for is `panic=10` firing, the phone restarting **by itself**, and then Android
+coming up — with no hands on the phone. Holding the power button, or a
+`fastboot reboot` that happens to take the cold path, throws the log away. If the
+payload hung *without* panicking, there is nothing in the ring at all; a black
+screen and an empty pstore together mean "it never got far enough to say", not
+"it said nothing".
 
 From Android (root) or from TWRP:
 
@@ -206,9 +215,23 @@ adb shell 'ls -la /sys/fs/pstore/'
 adb shell 'cat /sys/fs/pstore/console-ramoops-0' | tail -200
 ```
 
-Look for `UFS`, `ufshcd`, `geni`, `simple-framebuffer`, `ramoops`, and the last
-line before it stops. That output is what P1's gate is actually asking for, and
-it is also the input to P2.
+Our kernel writes the same geometry the vendor kernel reads (`docs/07`), so
+`console-ramoops-0` is the file to read, and `dmesg-ramoops-0` … `-5` hold the
+dmesg ring.
+
+**Check whose log it is before reading anything into it.** Android also writes
+this region on every ordinary boot, so a file that exists is not evidence ours
+ran. The first line settles it:
+
+```sh
+adb shell 'head -1 /sys/fs/pstore/console-ramoops-0'
+```
+
+`Linux version 6.6…` is ours — mainline. The vendor kernel is `4.19`, so a
+`4.19` first line means you are reading Android's own previous boot and our
+payload left nothing. Then read for `UFS`, `ufshcd`, `geni`,
+`simple-framebuffer`, `ramoops`, and the last line before it stops. That output
+is what P1's gate is actually asking for, and it is also the input to P2.
 
 ## Step 5 — Leave it bootable
 

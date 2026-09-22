@@ -16,14 +16,26 @@
 # `raw-noefi` is the only one that matches the phone on all three and is the
 # first thing to try on the device.
 #
-# Usage:  tools/build-p1-payloads.sh [--skip-noefi]
+# The device tree is built here too, not taken from the tree: the ramoops
+# carveout in it (0xbff00000, the vendor's own address and record geometry) is
+# what makes the log readable from Android afterwards, so it is part of the
+# payload, not an input.
+#
+# The no-EFI kernel needs a second full build (`./scripts/config --disable EFI`
+# changes code generation, so it cannot be patched into an existing Image). That
+# build is the slow part and its result does not change when only the DTB or the
+# cmdline does, so by default the saved work/out/Image-noefi is reused. Pass
+# --rebuild-noefi after touching kernel source or config.
+#
+# Usage:  tools/build-p1-payloads.sh [--rebuild-noefi]
 #
 set -eu
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 LINUX="$ROOT/work/linux"
 OUT="$ROOT/work/out"
-DTB="$OUT/sm7225-xiaomi-gauguin.dtb"
+DTB_NAME=sm7225-xiaomi-gauguin
+DTB="$OUT/$DTB_NAME.dtb"
 RAMDISK="$OUT/initramfs.cpio.gz"
 MK="$ROOT/tools/make_boot_image.py"
 
@@ -34,11 +46,31 @@ CMDLINE="$(cat "$ROOT/docs/p1-cmdline.txt")"
 
 log() { printf '\033[1m%s\033[0m\n' "$*"; }
 
-for f in "$DTB" "$RAMDISK" "$ROOT/docs/p1-cmdline.txt"; do
-    [ -f "$f" ] || { echo "missing $f" >&2; exit 1; }
-done
+REBUILD_NOEFI=0
+[ "${1:-}" = "--rebuild-noefi" ] && REBUILD_NOEFI=1
+
+[ -f "$RAMDISK" ] || { echo "missing $RAMDISK" >&2; exit 1; }
+[ -f "$ROOT/docs/p1-cmdline.txt" ] || { echo "missing docs/p1-cmdline.txt" >&2; exit 1; }
 
 cd "$LINUX"
+
+log "== device tree ($DTB_NAME.dtb)"
+# The board DTS is tracked in dts/ and copied into the kernel tree, because that
+# tree is not versioned here. Refresh it, so this build cannot run against a
+# stale copy of the file the ramoops check below is about - the two drifting
+# apart is exactly how the log ends up somewhere Android does not read.
+cp "$ROOT/dts/$DTB_NAME.dts" "arch/arm64/boot/dts/qcom/$DTB_NAME.dts"
+# And make a missing Makefile entry an error rather than a stale .dtb.
+rm -f "arch/arm64/boot/dts/qcom/$DTB_NAME.dtb"
+make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- -j"$(nproc)" dtbs
+cp "arch/arm64/boot/dts/qcom/$DTB_NAME.dtb" "$DTB"
+# A tree that still carries the inherited 0xffc00000 ramoops, or a second
+# ramoops node, would silently move the log somewhere Android does not read.
+n=$(dtc -I dtb -O dts -o - "$DTB" 2>/dev/null | grep -c 'ramoops@')
+[ "$n" = 1 ] || { echo "expected exactly 1 ramoops node in $DTB, found $n" >&2; exit 1; }
+dtc -I dtb -O dts -o - "$DTB" 2>/dev/null | grep -q 'ramoops@bff00000' \
+    || { echo "$DTB has no ramoops@bff00000 - the log would go somewhere Android" \
+              "cannot read" >&2; exit 1; }
 
 # --- 1. the EFI-stub kernel, as configured -----------------------------------
 log "== building Image (CONFIG_EFI as configured)"
@@ -79,8 +111,8 @@ python3 "$MK" --kernel "$OUT/Image-pstore.gz" --ramdisk "$RAMDISK" --dtb "$DTB" 
     -o "$OUT/boot-pstore-gz-fixedsz.img"
 
 # --- 2. the EFI-stub-free kernel, which is a second full build ---------------
-if [ "${1:-}" = "--skip-noefi" ]; then
-    log "== skipping the no-EFI build (--skip-noefi)"
+if [ "$REBUILD_NOEFI" = 0 ] && [ -f "$OUT/Image-noefi" ]; then
+    log "== reusing the saved no-EFI kernel ($OUT/Image-noefi, --rebuild-noefi to redo)"
 else
     log "== building Image with CONFIG_EFI=n (full rebuild)"
     cp .config /tmp/p1-config-with-efi
@@ -93,15 +125,15 @@ else
     cp arch/arm64/boot/Image "$OUT/Image-noefi"
     cp /tmp/p1-config-with-efi .config
     trap - EXIT
-
-    # text_offset 0x80000 because that is what the phone's own kernel declares;
-    # it is bootloader metadata the kernel never reads back, so setting it is a
-    # way to remove a difference rather than a way to change behaviour.
-    log "== raw-noefi variant, the closest match to stock"
-    python3 "$MK" --kernel "$OUT/Image-noefi" --ramdisk "$RAMDISK" --dtb "$DTB" \
-        --profile stock --cmdline "$CMDLINE" --text-offset 0x80000 \
-        -o "$OUT/boot-pstore-raw-noefi.img"
 fi
+
+# text_offset 0x80000 because that is what the phone's own kernel declares; it
+# is bootloader metadata the kernel never reads back, so setting it is a way to
+# remove a difference rather than a way to change behaviour.
+log "== raw-noefi variant, the closest match to stock"
+python3 "$MK" --kernel "$OUT/Image-noefi" --ramdisk "$RAMDISK" --dtb "$DTB" \
+    --profile stock --cmdline "$CMDLINE" --text-offset 0x80000 \
+    -o "$OUT/boot-pstore-raw-noefi.img"
 
 log "== done"
 ls -la "$OUT"/boot-pstore*.img
