@@ -298,7 +298,7 @@ download.
 
 **This has a consequence that is the user's call, not this project's:** passing
 the P2 gate may require `fastboot flash boot`, which writes to the device —
-something the P0 discipline deferred to P4. Two things make it far less
+something the P0 discipline deferred to P4. Three things make it far less
 frightening than it was when that rule was written:
 
 1. `boot` is now backed up and verified (`part-boot.img`, `ANDROID!` magic),
@@ -306,8 +306,46 @@ frightening than it was when that rule was written:
 2. There are **no A/B slots** — `fastboot getvar current-slot` returns
    `GetVar Variable Not found` — so there is exactly one `boot`, and restoring
    it is a single command.
+3. **TWRP is installed on the `recovery` partition**, which is a recovery
+   environment that does not go through ABL's fastboot at all.
 
 The restore path is `fastboot flash boot ~/backup/gauguin/images/part-boot.img`.
+
+### The backups are verified byte-for-byte against the device
+
+A TWRP session with root shell made it possible to stop trusting the backup and
+check it. SHA-256 of three partitions, read from the live device against the
+backup files on the host:
+
+| partition | device | backup | |
+|---|---|---|---|
+| `boot` (sde55) | `50ef59be…8ef3` | `50ef59be…8ef3` | identical |
+| `abl` (sde37) | `6f0b51e2…91f3` | `6f0b51e2…91f3` | identical |
+| `recovery` (sda29) | `8f488a0a…5fb1b` | `8f488a0a…5fb1b` | identical |
+
+This matters more than it looks. Until now the backups were only known to have
+the right magic at the right offset — a check that would pass on a truncated or
+partially-holed dump. A matching hash is a different order of confidence, and it
+is the thing that makes `fastboot flash boot` an acceptable risk rather than a
+gamble on an unverified file.
+
+### TWRP is the real safety net, not fastboot
+
+The `recovery` partition holds **TWRP** (`twrp_gauguin`, `2717:ff68`), and the
+backup of it is byte-identical to what is on the device. That means the recovery
+path does not depend on ABL serving `fastboot` correctly — which is the exact
+thing that wedged earlier. If `boot` is flashed into a non-booting state, the
+way back is:
+
+1. Power + Volume Up → TWRP
+2. `adb push` the 128 MB backup, `adb shell dd of=/dev/block/by-name/boot`
+3. Reboot
+
+**Correction to the section above:** the 128 MB image used for the diagnostic
+that wedged the device was described there as stock recovery. It is not — the
+`recovery` partition contains TWRP. That does not change the conclusion (TWRP is
+a known-good image and it wedged the device just the same, which is the point),
+but the earlier wording was wrong about what the image was.
 
 ## A warning about aborted transfers
 
