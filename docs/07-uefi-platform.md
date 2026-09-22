@@ -840,6 +840,49 @@ The reading is unambiguous either way:
 than `fastbootd`; the `flash:`/`erase:`/`oem unlock` command table found in
 `abl`'s volume says the same thing, so this is a check and not a hope.
 
+### `oem fbreason` was in the command list all along
+
+This one is worth its own heading because of how it was missed. The very first
+`fastboot getvar all` dump showed the command table, and in it, among
+`oem lkmsg`, `oem lpmsg`, `oem uefilog` and the rest:
+
+```
+0x0be2e4  oem fbreason
+```
+
+It was read past. Disassembling the payload properly and dumping the string
+block around it shows what it prints — ABL's complete set of reasons for being
+in fastboot:
+
+```
+0x0bf375  Reason:Down Key Press
+0x0bf38b  Reason:Reboot Bootloader
+0x0bf3a4  Reason:LoadImageAndAuth Fail
+0x0bf3c1  Reason:BootLinux Fail
+0x0bf3d7  Reason:Unknown
+0x0bf3e6  Powerup Reason: %x
+```
+
+Those five strings discriminate **exactly** the cases that have been
+indistinguishable for the whole of P2:
+
+- `LoadImageAndAuth Fail` — ABL *tried* to load `boot` and could not. The
+  payload was reached, and the failure is in the image.
+- `BootLinux Fail` — it loaded, and failed after that. Also "the payload was
+  reached", further along.
+- `Down Key Press` — a button was held, and nothing about our work is implicated.
+- `Reboot Bootloader` — something deliberately asked for fastboot, which with
+  `misc` verified all-zeros points at a control or a command rather than a
+  failure.
+- `Unknown` / `Powerup Reason: 0x...` — inconclusive, and says so.
+
+**This is the feedback channel that was declared not to exist.** The document
+already says, correctly, that ABL's boot-path failures go to a UART this phone
+lacks — but the *decision* to enter fastboot, and whether the boot path was
+entered at all, is separately recorded and separately readable, and it was
+available from the first session. `tools/fastboot-capture.sh` now asks for it
+first, before anything else.
+
 ### The way back is confirmed to work, not just intended to
 
 The A/B control — flash the stock `boot` back and see whether the phone boots

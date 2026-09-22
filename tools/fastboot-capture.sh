@@ -50,9 +50,7 @@ fi
 log "ABL is answering:"
 sed 's/^/    /' "$OUT/00-probe.txt"
 
-# --- 2. Which fastboot are we in? ----------------------------------------
-# is-userspace:no means ABL's own fastboot, which is where the boot decision is
-# made. If it ever says yes we are in fastbootd and none of this applies.
+# helper: run a fastboot command, capture to a file, report the size.
 run() {  # run <filename> <fastboot args...>
     local f="$OUT/$1"; shift
     timeout 30 fastboot "$@" >"$f" 2>&1
@@ -60,6 +58,24 @@ run() {  # run <filename> <fastboot args...>
     printf '  %-28s rc=%-3s %s\n' "$1" "$rc" "$(wc -c <"$f") bytes"
     return 0
 }
+
+# --- 2. WHY is it in fastboot? This is the one that answers the question ----
+# `oem fbreason` is an ABL command that reports why the device entered fastboot.
+# ABL's string table shows the complete set of answers it can give, in a block
+# of five strings plus a raw code, and they discriminate exactly the cases that
+# have been indistinguishable so far:
+#
+#   Reason:Down Key Press            a button was held - nothing to do with us
+#   Reason:Reboot Bootloader         something asked for fastboot
+#   Reason:LoadImageAndAuth Fail     ABL TRIED to load `boot` and could not
+#   Reason:BootLinux Fail            it loaded, and failed after that
+#   Reason:Unknown / Powerup Reason: %x
+#
+# "LoadImageAndAuth Fail" is the one that would confirm ABL attempted our image.
+# Asking this first, and only once, costs one round trip.
+log "== why did it enter fastboot? (oem fbreason)"
+run 05-fbreason.txt oem fbreason
+sed 's/^/    /' "$OUT/05-fbreason.txt"
 
 log "== ABL's own logs (the part that matters)"
 # These are the three windows ABL gives into what it did. On a phone with no
@@ -70,6 +86,9 @@ run 11-lkmsg.txt    oem lkmsg
 run 12-lpmsg.txt    oem lpmsg
 
 log "== device state"
+# is-userspace:no in the getvar dump means this is ABL's own fastboot, which is
+# where the boot decision is made. If it ever says yes we are in fastbootd and
+# none of the boot-path reading applies.
 run 20-device-info.txt oem device-info
 run 21-getvar-all.txt  getvar all
 
@@ -98,6 +117,18 @@ ls -la "$OUT"
 cat <<'EOF'
 
 How to read the result:
+
+  * `oem fbreason` (step 2, the first thing asked) is the closest thing to a
+    direct answer. Read it against ABL's own five possible replies:
+
+      Reason:Down Key Press           a button was held. Nothing to do with us.
+      Reason:Reboot Bootloader        something asked for fastboot.
+      Reason:LoadImageAndAuth Fail    ABL TRIED to load `boot` and could not.
+      Reason:BootLinux Fail           it loaded, and failed after that.
+      Reason:Unknown / Powerup Reason: 0x...   inconclusive.
+
+    "LoadImageAndAuth Fail" or "BootLinux Fail" both mean the payload was
+    reached, which is the thing that has been unknown since the first attempt.
 
   * "BootStats: ID-n: Kernel Load Start" with no matching "Kernel Load Done"
     means ABL began loading `boot` and stopped - the failure is in the image,

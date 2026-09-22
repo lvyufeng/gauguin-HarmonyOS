@@ -29,9 +29,11 @@ phase state from this table, not from the commit titles.
 The phone needs a **physical reset** — hold the power button ~20s, then a normal
 power-on with no keys held. Everything else is written and waiting:
 
-1. `tools/fastboot-capture.sh` — reads ABL's own `oem uefilog` / `lkmsg` /
-   `lpmsg`, plus `slot-unbootable` / `slot-retry-count`. This is what answers
-   "did ABL try to boot at all".
+1. `tools/fastboot-capture.sh` — first thing it asks is `oem fbreason`, which
+   reports why ABL entered fastboot and can say `Reason:LoadImageAndAuth Fail`
+   or `Reason:BootLinux Fail`. Either of those means the payload was reached.
+   Then `oem uefilog` / `lkmsg` / `lpmsg`, plus `slot-unbootable` /
+   `slot-retry-count`.
 2. `tools/restore-stock-boot.sh` — the A/B control: put the stock `boot` back
    and see whether Android returns.
 3. `work/out/p2-variants/Mu-gauguin-stock-{none,gzip}.img` — two stock-shaped
