@@ -172,12 +172,103 @@ extracted originals in `device/dxe/` untouched.
 ## Status
 
 The P2 gate is **"UEFI boots to a shell on the phone"**, and it is **open**.
-The firmware builds; it has not been observed to run. The first honest thing
-to do with `Mu-gauguin.img` is `fastboot boot` it and watch the screen —
-`fastboot boot` downloads to RAM and writes nothing, so this is safe to do
-before P4.
+The firmware builds; it has not been observed to run.
 
-Given that P1 never confirmed a running mainline kernel, a failure here is at
-least as likely to be the platform description as the packaging, and the
-bootloader's own error output is the only diagnostic available — this phone
-exposes no UART, so the screen is the only console.
+## The first attempt to run it, and what it established
+
+`Mu-gauguin.img` was built, verified byte by byte, and loaded with
+`fastboot boot` — the method that writes nothing to the device. The transfer
+succeeded:
+
+```
+Sending 'boot.img' (1182 KB)                       OKAY [  0.041s]
+Booting                                            OKAY [  0.134s]
+```
+
+**The firmware did not run.** The evidence is that XBL never left fastboot:
+
+- `fastboot getvar all` still answered, seconds later, with the complete XBL
+  variable table (`variant: SM_ UFS`, a `token` whose base64 decodes to
+  `...gauguin`). A bootloader that had jumped to the payload would not be
+  listening.
+- `usb 3-1` never re-enumerated. A chain-load either re-initialises USB (new
+  enumeration) or crashes (reset, new enumeration). Neither happened.
+- The screen stayed on the Redmi logo, which **is** XBL's fastboot screen on
+  this device — not a crash screen.
+
+So `Booting OKAY` means "the instruction was accepted", not "control
+transferred". Repeating it after `fastboot reboot-bootloader` (the workaround
+recorded for the P1 attempts) produced the same result, so this is not the
+stale-state problem that troubled P1.
+
+### A structural fact worth knowing: ABL is AArch32
+
+Carved from the backup and read directly:
+
+| partition | format | architecture |
+|---|---|---|
+| `xbl` | ELF64 | AArch64 |
+| `tz`, `hyp`, `devcfg` | ELF64 | AArch64 |
+| `abl` | **ELF32** | **ARM (AArch32)** |
+| `aop` | ELF32 | ARM (AArch32) |
+
+`abl` is the Android Bootloader — the component that serves the `fastboot`
+protocol. On this device it is a **32-bit ARM** executable. That is a real
+constraint on any chain-load: whatever ABL hands control to, it does so from
+AArch32, and a payload that assumes it was entered in AArch64 state will fault
+immediately. On a device with no UART that presents as "nothing happened".
+
+This is offered as the leading hypothesis for the failed jump, **not as an
+established cause.** ABL clearly can start a 64-bit kernel in normal operation,
+so it has an AArch64 transition; whether its `fastboot boot` path takes that
+transition, or takes it with the same entry conventions a chain-loaded payload
+needs, is not known.
+
+### Why the supported path is probably `fastboot flash boot`
+
+`Mu-gauguin.img` is not an arbitrary payload. It is an Android boot image, and
+BootShim is built with `REQUIRES_KERNEL_HEADER=1`, which makes it carry the
+literal `ARM\x64` kernel magic. Those are the two things a bootloader's
+**normal** boot path checks when it loads the `boot` partition. The image is
+shaped to be accepted from `boot`, not to be chain-loaded from RAM.
+
+The reference build agrees: `Mu-surya.img` and `Mu-gauguin.img` have identical
+header layout (`header_version = 1`, `page_size = 0x800`,
+`kernel_addr = 0x10008000`), which is the framework's expectation and not this
+device's. The stock boot image differs on every one of those
+(`header_version = 2`, `page_size = 0x1000`, `kernel_addr = 0x8000`) — and ABL
+evidently accepts both, since it boots the stock one and accepts ours as a
+download.
+
+**This has a consequence that is the user's call, not this project's:** passing
+the P2 gate may require `fastboot flash boot`, which writes to the device —
+something the P0 discipline deferred to P4. Two things make it far less
+frightening than it was when that rule was written:
+
+1. `boot` is now backed up and verified (`part-boot.img`, `ANDROID!` magic),
+   which it was not until this session.
+2. There are **no A/B slots** — `fastboot getvar current-slot` returns
+   `GetVar Variable Not found` — so there is exactly one `boot`, and restoring
+   it is a single command.
+
+The restore path is `fastboot flash boot ~/backup/gauguin/images/part-boot.img`.
+
+## A warning about aborted transfers
+
+A diagnostic attempt to `fastboot boot` the stock recovery image (128 MB, known
+good) **wedged the device**: the transfer stalled at
+`Sending 'boot.img' (131072 KB)`, a 180-second timeout killed the host side, and
+XBL was left waiting for data it would never receive. It then ignored every
+subsequent `fastboot` command until a 20-second power-button reset.
+
+Two lessons:
+
+- **Do not abort a `fastboot` transfer.** The protocol has no cancel; killing
+  the client strands the bootloader mid-download.
+- **The Thunderbolt port cannot do large transfers.** 1.2 MB completed in
+  0.041 s; 128 MB did not complete at all. That port drops its PCIe link
+  roughly once a minute, and every drop kills the transfer. P4 moves several
+  gigabytes. It must not be used.
+
+`boot` was never at risk in either incident: `fastboot boot` writes nothing, and
+the wedge was in ABL's download state machine, not in the partition.
