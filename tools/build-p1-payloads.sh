@@ -52,6 +52,37 @@ REBUILD_NOEFI=0
 [ -f "$RAMDISK" ] || { echo "missing $RAMDISK" >&2; exit 1; }
 [ -f "$ROOT/docs/p1-cmdline.txt" ] || { echo "missing docs/p1-cmdline.txt" >&2; exit 1; }
 
+# The command line asks fbcon for a font by name; fbcon looks that name up with
+# find_font() and, when it is not there, falls back to the default **without
+# printing anything**. That silence is the whole problem. A payload whose kernel
+# lacks the font draws 8x16 text on a 1080-wide panel - 135 columns of glyphs too
+# small to read in a photograph - and the only trace that the request was made at
+# all is the command line, which says what was intended rather than what is in
+# the kernel. Checking the name against the kernel that is about to be packaged
+# closes the loop between `CONFIG_FONT_TER16x32=y` (which build-kernel.sh verifies
+# survived olddefconfig) and `fbcon=font:TER16x32` (which is what the kernel
+# actually looks up). The two are joined only by the font_desc's `.name` field,
+# and nothing else checks that they still agree.
+FONTNAME=$(printf '%s\n' "$CMDLINE" | tr ' ' '\n' | sed -n 's/^fbcon=font://p')
+check_font() {
+    # The `|| true` is load-bearing, and its absence would have been the same bug
+    # one layer up: `grep -c` exits 1 when the count is zero, and under `set -e`
+    # that kills the script at the assignment - so a missing font would abort
+    # silently, with the error message below never reaching anyone. A guard whose
+    # failure prints nothing is not a guard.
+    [ -n "$FONTNAME" ] || { echo "   note: no fbcon=font: on the command line, so" \
+                                  "there is no font to check" >&2; return 0; }
+    case "$1" in
+        *.gz) found=$(gzip -dc "$1" | strings -a | grep -cx "$FONTNAME" || true) ;;
+        *)    found=$(strings -a "$1" | grep -cx "$FONTNAME" || true) ;;
+    esac
+    [ "${found:-0}" -ge 1 ] \
+        || { echo "$1 does not contain the font '$FONTNAME' the command line asks" \
+                  "fbcon for - find_font() would fall back to 8x16 silently, and the" \
+                  "panel would show 135 unreadable columns" >&2; exit 1; }
+    printf '   font %-10s present in %s\n' "$FONTNAME" "$(basename "$1")"
+}
+
 cd "$LINUX"
 
 log "== device tree ($DTB_NAME.dtb)"
@@ -72,10 +103,33 @@ dtc -I dtb -O dts -o - "$DTB" 2>/dev/null | grep -q 'ramoops@bff00000' \
     || { echo "$DTB has no ramoops@bff00000 - the log would go somewhere Android" \
               "cannot read" >&2; exit 1; }
 
+# The other channel, and the one that needs no reboot to read: /chosen's
+# simple-framebuffer is what simpledrm binds to and fbcon draws on, so the
+# kernel's own printk lands on the panel the bootloader just used for the logo.
+# Without this node the boot is undiagnosable from the screen - a kernel that
+# works and a kernel that dies in early setup both look like a dead phone.
+# width/height/stride/format are checked too, because the console geometry is
+# computed from them and a wrong stride draws diagonal text.
+#
+# All four are read out of the DTB rather than grepped as text, so a node that
+# exists but is missing a property cannot pass. compatible/format are strings
+# and width/height/stride are single cells.
+FBNODE=/chosen/framebuffer@a0000000
+command -v fdtget >/dev/null || { echo "fdtget not found (package: device-tree-compiler)" >&2; exit 1; }
+for spec in compatible:s width:i height:i stride:i format:s; do
+    prop=${spec%:*} type=${spec#*:}
+    v=$(fdtget -t "$type" "$DTB" "$FBNODE" "$prop" 2>/dev/null) \
+        || { echo "$DTB: $FBNODE has no '$prop' - the panel would stay dark and" \
+                  "there is no other channel that needs no round trip" >&2; exit 1; }
+    printf '   framebuffer %-10s %s\n' "$prop" "$v"
+done
+
 # --- 1. the EFI-stub kernel, as configured -----------------------------------
 log "== building Image (CONFIG_EFI as configured)"
 make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- -j"$(nproc)" Image
+check_font arch/arm64/boot/Image
 gzip -9 -c arch/arm64/boot/Image > "$OUT/Image-pstore.gz"
+check_font "$OUT/Image-pstore.gz"
 
 log "== raw variants from the EFI-stub kernel"
 python3 "$MK" --kernel arch/arm64/boot/Image --ramdisk "$RAMDISK" --dtb "$DTB" \
@@ -126,6 +180,9 @@ else
     cp /tmp/p1-config-with-efi .config
     trap - EXIT
 fi
+# Checked even when the saved kernel is reused: a stale Image-noefi is exactly
+# how variant 1 - the first thing the runbook flashes - ends up without the font.
+check_font "$OUT/Image-noefi"
 
 # text_offset 0x80000 because that is what the phone's own kernel declares; it
 # is bootloader metadata the kernel never reads back, so setting it is a way to

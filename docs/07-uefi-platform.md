@@ -227,6 +227,53 @@ exists, which is why it does not need a DXE driver. If that SEC code were
 wrong, the phone would reset a few seconds in — which is a distinguishable
 outcome, not an invisible one.
 
+**The shell the volume does not contain — and the reference platform does not
+either.** The drivers a shell needs are all present, which is not the same as the
+shell being present. `ShellPkg/Application/Shell/Shell.inf` appears in neither
+`gauguin.dsc`, `gauguin.fdf`, `Include/{APRIORI,DXE,RAW}.inc`,
+`QcomPkg/Extra.fdf.inc` nor `SiliciumPkg/Common.fdf.inc`, and no `PcdShellFile` is
+set anywhere. The built `FVMAIN` was inventoried file by file to confirm it: 122
+FFS files, 99 with UI section names — `BootManagerMenuApp`, `BDS_Menu.cfg`,
+`SetupBrowser`, `GraphicsConsoleDxe`, `UFSDxe`, `UsbBusDxe`, `ULogDxe`, the panel
+XMLs, `logo1.bmp` — and no `Shell.efi`.
+
+The first reading of that was a platform omission. Searching the tree makes it
+something else: **no platform under `Platforms/` ships `Shell.inf` at all.** The
+only references are `ShellPkg/ShellPkg.dsc` (its own build) and
+`Common/Mu_OEM_Sample/FrontpageDsc.inc` (a sample), and no DSC anywhere sets
+`PcdShellFile`. So the shell is not a file this platform forgot; it is a file no
+Mu-Silicium phone platform ships, including `suryaPkg` — the reference for this
+same `msm-id`, and the image this project compared against byte for byte.
+
+That matters because the phase plan states P2's gate as "UEFI reaches a shell on
+the phone". **The gate as written is not one the reference platform for this SoC
+meets either**, so failing to reach a shell would not distinguish our firmware
+from a working one. What the volume does provide is the thing
+`tools/make_uefi_platform.py:395` already calls "the difference between a working
+firmware and a dead one" on a phone with no UART: `BdsDxe`'s
+`PcdBootManagerMenuFile` resolves to `BootManagerMenuApp`, which draws
+`[Volume Up] Boot Manager` on the panel during its timeout, with `SetupBrowser`
+behind it.
+
+So the honest form of the gate is **"the boot manager draws on the panel and the
+storage it lists includes UFS"**, and the shell is an optional upgrade rather than
+a missing piece. Two things are worth checking before treating it as free, which
+is why it is not being done now:
+
+* our build replaces the vendor BDS with edk2's — `QcomPkg/Drivers/QcomBds/QcomBds.inf`
+  is commented out in `Include/DXE.inc:15` — so this board's own
+  `{"EnableShell", 0x1}` (transcribed from `uefiplat.cfg` into
+  `ConfigurationMapLib.c`, and `0x1` on every platform in the tree) is read by a
+  binary that is not in the image. It is a fact about Qualcomm's firmware, not a
+  request made of ours.
+* adding `Shell.inf` means adding `ShellPkg` to the DSC's packages, building the
+  shell's libraries, and pointing a boot option at
+  `7C04A583-9E3E-4f1c-AD65-E05268D0B4D1` — a real change to the image, which is the
+  wrong thing to spend on while the open question is still whether the image runs.
+
+The shell is therefore recorded as a decision to make after the first execution,
+not as a repair to make now. Nothing in the P2 gate depends on it.
+
 **Not verified — and this is the whole of the P2 gate:**
 
 - **The firmware has never run.** It has never been loaded by a bootloader and
@@ -264,8 +311,9 @@ outcome, not an invisible one.
 - The ACPI tables are absent by choice. The surya DSDT describes a different
   board, and shipping it would tell any OS that boots here a set of confident
   lies about where the interrupt controllers and UART are. `AcpiTableUpdate`
-  is a deliberate no-op with a P3 TODO. The P2 gate is a shell, which does not
-  need ACPI; Windows does, which is why that is P3.
+  is a deliberate no-op with a P3 TODO. The P2 gate is the boot manager drawing
+  on the panel and UFS enumerating, which does not need ACPI; Windows does, which
+  is why that is P3.
 - The MDP SIDs, as noted above.
 
 ### Reading the volume takes some care, and got it wrong twice
@@ -301,8 +349,10 @@ silently drops one and reports 54 of 55.
 
 ## Status
 
-The P2 gate is **"UEFI boots to a shell on the phone"**, and it is **open**.
-The firmware builds; it has not been observed to run.
+The P2 gate is **"the boot manager draws on the phone's screen and UFS enumerates
+as a block device"**, and it is **open**. (It read "boots to a shell" until the
+volume was inventoried; see the note above on why no platform in this tree meets
+that, `suryaPkg` included.) The firmware builds; it has not been observed to run.
 
 ## The first attempt to run it, and what it established
 
@@ -1027,6 +1077,138 @@ from it by exactly this one carveout. The difference is inert for P2 — nothing
 ABL's image check or in the UEFI memory map depends on a 1 MiB `no-map`
 reservation — but the two files are no longer identical, and the `gauguin.dtb`
 that a fresh Mu build installs into `Resources/DTBs/` will carry the node.
+
+#### The console and the log were being claimed, not configured
+
+The device tree half of the two channels above is versioned and checked. The
+kernel half was not, and the way it failed is worth a subsection because nothing
+about it is visible from either end.
+
+`tools/build-kernel.sh` builds the `.config` from a list of `scripts/config`
+calls. Two independent bugs meant that list was a statement of intent rather than
+a description of the kernel:
+
+| # | bug | what it did |
+|---|---|---|
+| 1 | the whole list sat inside `if [ ! -f .config ]` | write-once: it ran when the tree was first configured and never again, so a line added later never reached the kernel |
+| 2 | `scripts/config` upper-cases symbol names unless `--keep-case` is passed | `--enable FONT_TER16x32` wrote `CONFIG_FONT_TER16X32=y`, which matches no Kconfig entry, so Kconfig dropped it in silence |
+
+Both were live at once, on the same block. The console-font lines were added
+after the tree had already been configured (bug 1 meant they never ran), and both
+of them have a lowercase letter in the name (`FONT_8x16`, `FONT_TER16x32`, bug 2
+would have mangled them if they had). The measured result:
+
+```
+$ strings vmlinux | grep -x TER16x32      # before
+$ ls lib/fonts/font_ter16x32.o            # before
+ls: cannot access 'lib/fonts/font_ter16x32.o': No such file or directory
+```
+
+while the command line in every payload said `fbcon=font:TER16x32`. fbcon's
+handler for that option is `strscpy(fontname, options + 5, ...)` followed by
+`if (!fontname[0] || !(font = find_font(fontname))) *font = get_default_font(...)`
+— it falls back to the default font **without printing anything**, so the request
+is unverifiable from the phone. Measured against the kernel those payloads were
+actually built from:
+
+```
+$ strings -a vmlinux | grep -x TER16x32
+$ nm vmlinux | grep -ci ter16x32
+0
+```
+
+— no font, in a kernel whose `fbcon` was told to use one. A payload built this
+way draws 8x16 text: 135 columns of 8-pixel glyphs on a 1080-wide panel, which is
+a photograph the runbook cannot read, on a device whose only diagnostic interface
+is that photograph. After the fix the same two commands find the font, and
+`lib/fonts/font_ter16x32.o` is built.
+
+The same audit turned up the pstore options in the same state — `PSTORE`,
+`PSTORE_RAM` and `PSTORE_CONSOLE` were set in the `.config` on disk but appeared
+nowhere in the build script, so they came from a hand edit. **Every payload in
+`work/out/` was correct by accident**: the tree it was built from carried a
+config that no run of the build script would have produced, and a fresh clone
+would have built a kernel with neither console nor log. That is the same shape as
+the versioned-DTS problem above, one layer down.
+
+Three changes close it, all in `tools/build-kernel.sh`:
+
+* the option list is applied unconditionally, not only when `.config` is absent —
+  `scripts/config` writes nothing when a value is unchanged, so the build stays
+  incremental;
+* every call goes through a `cfg()` wrapper that passes `--keep-case`, because an
+  all-capital name is unaffected and a lowercase one is otherwise destroyed;
+* after `olddefconfig`, the script reads back the fifteen options whose absence
+  would make a device session unreadable — the console chain, the UFS driver, and
+  the pstore trio — and **exits non-zero** rather than building a kernel that
+  cannot report why it failed.
+
+`build-p1-payloads.sh` gained the matching device-tree guard: it reads
+`compatible`, `width`, `height`, `stride` and `format` straight out of
+`/chosen/framebuffer@a0000000` with `fdtget` and refuses to build a payload
+without them. The two guards are deliberately at the two ends of the same claim —
+the DTB half says "the framebuffer is described", the config half says "and there
+is a driver to draw on it" — because a payload that satisfies one and not the
+other is indistinguishable from a payload that works, on a dead screen.
+
+#### Both channels assume the kernel is still running when someone reads them
+
+The two guards above make the payload *able* to speak. Neither makes it *willing*,
+and the audit that found the font bug turned up a third gap on the same theme: a
+payload that fails in either of the two ways this bring-up is most likely to fail
+does not panic, and a kernel that does not panic never restarts itself — which is
+the only way the pstore half of the log is ever read.
+
+The chain was checked in the tree rather than assumed, because the runbook leans
+on it. `reboot_setup()` (`kernel/reboot.c:1012`) takes the `panic_` prefix off the
+argument and assigns the rest to `panic_reboot_mode`; `panic()`
+(`kernel/panic.c:441`) copies that into `reboot_mode` before calling
+`emergency_restart()`; arm64 uses `asm-generic`'s, so that is `machine_restart()`
+→ `do_kernel_restart()` → the notifier chain → `psci_sys_reset()`
+(`drivers/firmware/psci/psci.c:309`), which for `REBOOT_WARM` invokes
+`SYSTEM_RESET2` with reset type 0 (`SYSTEM_WARM_RESET`) instead of the cold
+`SYSTEM_RESET`. So `panic=10 reboot=panic_warm` really is a warm reset and really
+does keep DRAM — in the kernel. What the *device* does with it is a separate
+question, below.
+
+Two things were missing at the front of that chain:
+
+| gap | what happened instead |
+|---|---|
+| no `PANIC_ON_OOPS` | an oops — a wrong property in our DTB causing a NULL dereference in a probe — does not panic. The kernel survives it, which is the worst outcome available here: half-initialised, no console (simpledrm binds late, long after early setup), and no reboot, so the ring is never read and the session learns nothing |
+| no `SOFTLOCKUP_DETECTOR` / `BOOTPARAM_SOFTLOCKUP_PANIC` | a spin in a probe waiting for a clock or regulator that never comes ready — the classic Qualcomm bring-up failure — produces no panic at all. The detector notices it, but on its own it only prints a stack trace to a console that may not exist |
+
+Both are set in `tools/build-kernel.sh` now, and both are in the read-back list,
+because for a kernel whose entire diagnosis path is "did it say anything before it
+stopped", a kernel that panics is strictly more useful than one that limps.
+
+**The one thing that stays unverifiable, recorded because the tempting conclusion
+is wrong.** `psci_init_system_reset2()` (`psci.c:517`) calls
+`psci_features(SYSTEM_RESET2)` and **prints nothing either way**. So the boot log
+cannot tell you whether this device honours a warm reset. If the ring comes back
+empty after what should have been a panic, "SYSTEM_RESET2 is not supported here,
+so the reset was cold and DRAM was lost" and "the payload never panicked" are the
+*same observation*. The natural reading — no log, so it never ran — is not
+supported by it, and on a device with no UART that misreading costs a session.
+
+`build-p1-payloads.sh` also checks the font by name now, not just by config
+symbol. The config read-back in `build-kernel.sh` proves `CONFIG_FONT_TER16x32=y`
+survived `olddefconfig`; only the `font_desc`'s `.name` field connects that to the
+`fbcon=font:TER16x32` on the command line, and nothing checked that the two still
+agreed. The script extracts the name from the command line and requires it to be
+in each kernel it packages — including the reused `Image-noefi`, since a stale one
+is exactly how variant 1, the first thing the runbook flashes, ends up without it.
+And it prints a note when the command line asks for no font at all, so that
+"checked and fine" and "not checked" do not look the same in the log.
+
+The first version of that guard was itself the bug it was written to catch, which
+is why it is worth a sentence. It read
+`found=$(strings -a "$1" | grep -cx "$FONTNAME")` under `set -eu` — and `grep -c`
+**exits 1 when the count is zero**, so on the one input that matters the
+assignment aborted the script before the error message was ever printed. A
+missing font would have failed the build with no output at all: the same silent
+failure, one layer up, in the code meant to detect it. `|| true` inside the
+substitution is what makes the guard able to report.
 
 **The boot image is laid out the way the framework intends.** Parsed field by
 field, ours and the reference `Mu-surya.img` are byte-for-byte the same shape:

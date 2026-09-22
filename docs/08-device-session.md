@@ -28,6 +28,31 @@ tools/restore-stock-boot.sh --check                  # must print "ok"
 If `--check` fails, stop. Every write in this runbook depends on that file being
 the byte-identical stock image.
 
+Both of the payload's output channels live in the device tree that is embedded
+in those images, and both have failed this way before, so check them in one
+command rather than discovering it a session later. `tools/build-p1-payloads.sh`
+refuses to build a DTB that is missing either; this is the check that the file
+you are about to flash was built by it:
+
+```sh
+F=work/out/sm7225-xiaomi-gauguin.dtb
+for p in width height stride format; do
+    printf '%-8s ' "$p"; fdtget "$F" /chosen/framebuffer@a0000000 "$p" 2>&1; done
+dtc -I dtb -O dts -o - "$F" 2>/dev/null | grep ramoops@ | sed 's/^ *//'
+# and the font the command line names must be in the kernels, not just asked for
+fn=$(tr ' ' '\n' < docs/p1-cmdline.txt | sed -n 's/^fbcon=font://p')
+printf 'font %-4s %s\n' "$fn" "$( { strings -a work/out/Image-noefi
+                                   zcat work/out/Image-pstore.gz | strings -a
+                                 } | grep -cx "$fn")"
+```
+
+Expect `1080`, `2400`, `4320`, `a8r8g8b8`, exactly one `ramoops@bff00000`, and
+`font TER16x32 2`. Stride `4320` is 1080x4: a different stride draws diagonal
+text, and a missing node leaves the panel dark with nothing to say why. The font
+count catches the other silent half — `fbcon=font:X` for a font the kernel does
+not carry makes fbcon fall back to 8x16 without printing anything, which on a
+1080-wide panel is 135 unreadable columns and a photograph nobody can read.
+
 ---
 
 ## Step 0 — Try the free recovery first, then classify what you are looking at
@@ -101,6 +126,36 @@ with no keys held is what makes the answer trustworthy.
 
 Watch the screen. Note in one line what appears and whether it ever changes.
 
+## Step 1b — If the reset does not give you an answering fastboot
+
+It may not, and the reason matters: **`boot` currently holds the P2 UEFI image.**
+A reset makes ABL try that image again, so if attempting it is what wedges ABL,
+the reset reproduces the wedge — and repeating the reset is a loop, not a
+retry. The capture script's classifier tells the two apart: it will say the
+thread is stuck with EP0 alive, which is the same verdict as before, and that
+means the image in `boot` is implicated in the wedge rather than merely being
+refused by it.
+
+If that is what happens, do not reset again. Go in through TWRP instead, which
+does not need ABL's fastboot at all:
+
+```
+Power + Volume Up  →  TWRP
+tools/restore-stock-boot.sh --twrp      # push + dd, from the TWRP-visible path
+```
+
+Then reboot and establish that Android comes back (that is the A/B control from
+step 3, and it is worth having before any more payloads), and only then return to
+step 4.
+
+One cost to know about, because it is easy to lose the thing you came for:
+reaching TWRP this way is a power-button path, and a pstore log does not survive
+a cold start — the region is in RAM. So **the payload log is only readable via
+the warm path**, which is the payload panicking on its own (`panic=10`), the
+phone restarting itself (`reboot=panic_warm`), and Android coming up without a
+hand on the power button. If that did not happen, there is no log to go and
+recover; go straight to restoring the stock image.
+
 ## Step 2 — Ask why it is in fastboot
 
 ```sh
@@ -160,8 +215,14 @@ signal.
 | 1 | `boot-pstore-raw-noefi.img` | raw | **no EFI stub** | 0x80000 | 0x2c50000 | 46,075,904 |
 | 2 | `boot-pstore-raw-txt.img` | raw | EFI stub | 0x80000 | 0x2d90000 | 47,255,552 |
 | 3 | `boot-pstore-raw.img` | raw | EFI stub | 0 | 0x2d90000 | 47,255,552 |
-| 4 | `boot-pstore-gz-fixedsz.img` | gzip | EFI stub | 0 | **0x2cb8200** | 15,257,600 |
-| 5 | `boot-pstore.img` | gzip | EFI stub | 0 | 0x2d90000 | 15,257,600 |
+| 4 | `boot-pstore-gz-fixedsz.img` | gzip | EFI stub | 0 | **0x2cb8200** | 15,265,792 |
+| 5 | `boot-pstore.img` | gzip | EFI stub | 0 | 0x2d90000 | 15,261,696 |
+
+The size column is the one that drifts: every rebuild moves it a little, and a
+size that no longer matches reads as "I flashed the wrong file" when the file is
+right. `tools/check-payload.py`, which the step below requires before flashing
+anything, is the authority on all six columns; the sizes are here to be glanced at,
+not compared.
 
 all under `work/out/`. Every one is stock-shaped v2 with our own DTB in the
 declared DTB slot — our tree carries gauguin's exact `msm-id`/`board-id`, which
@@ -204,15 +265,38 @@ Worth noting before spending the cycle: `fastboot boot` — the RAM chain-load p
 as booting from the `boot` partition**, so its failure does not predict anything
 here.
 
-**A black screen does not mean the payload failed.** With the vendor device tree
-there is no framebuffer and no serial, so a perfectly successful boot of this
-kernel prints to a dummy console. The evidence to look for is instead:
+**The screen is the console, so read it before anything else.** This payload does
+not print to a dummy console: the board device tree carries a
+`simple-framebuffer` node at `0xa0000000` (1080x2400, stride 1080x4, `a8r8g8b8`)
+describing exactly the framebuffer ABL has just drawn the logo on, the kernel has
+`DRM_SIMPLEDRM` + `DRM_FBDEV_EMULATION` + `FRAMEBUFFER_CONSOLE`, and the command
+line ends with `console=tty0` — last, so `/dev/console`, and therefore the boot
+log *and* init's output, land on the panel. `fbcon=font:TER16x32` is in there so
+that 1080 pixels carry 67 legible columns rather than 135 unreadable ones.
+
+So the screen is a graded signal, not a pass/fail:
+
+| what the screen does | what it means |
+|---|---|
+| the logo never changes | nothing of ours executed, or it died before `simpledrm` bound — the bootloader's logo is still the framebuffer's contents either way |
+| the logo is replaced by text | the kernel is running, and **the last line is where it stopped** |
+| the text keeps changing (`alive: N s uptime, heartbeat M`) | init reached userspace and the hardware report above it is complete — that is P1's gate |
+| text, then the phone restarts by itself after ~10 s | a panic, and the warm reset that makes the ring readable — **step 4.5 now, not another payload** |
+| the screen goes dark and stays dark | something took the display over and drew nothing; the log is still in pstore, step 4.5 |
+
+Two things the screen can tell you that nothing else can, for free. The **font
+size** says whether you flashed a current payload: 67 columns means TER16x32 is
+in the kernel, and a tiny 135-column wall of text means it is not. And the
+**photograph** is the only record that exists if the phone then wedges, so take
+one at each attempt.
+
+The other evidence, in the order it costs you something:
 
 1. Does it come back to fastboot at all? If the phone sits there dark and does
    *not* return to ABL's fastboot, something executed.
 2. `oem fbreason` after the next boot (the table in step 2).
-3. The pstore log — step 4.5. That is the one that can say whether UFS
-   enumerated and where the kernel stopped.
+3. The pstore log — step 4.5. It outlives the screen and is the one channel that
+   survives a boot that died before `simpledrm` bound.
 
 ```sh
 fastboot flash boot work/out/boot-pstore-raw-noefi.img    # or the next one down
@@ -239,13 +323,28 @@ If step 4a ran, the kernel may have left a log in the pstore ring even though it
 could not print anything. **It survives a warm reboot but not a power cycle.**
 
 `reboot=panic_warm` is in the cmdline for exactly this reason: mainline turns it
-into a PSCI `SYSTEM_RESET2` warm reset, which keeps DRAM. So the sequence to aim
-for is `panic=10` firing, the phone restarting **by itself**, and then Android
-coming up — with no hands on the phone. Holding the power button, or a
-`fastboot reboot` that happens to take the cold path, throws the log away. If the
-payload hung *without* panicking, there is nothing in the ring at all; a black
-screen and an empty pstore together mean "it never got far enough to say", not
-"it said nothing".
+into a PSCI `SYSTEM_RESET2` warm reset, which keeps DRAM (the chain is verified
+one call at a time in `docs/07`). So the sequence to aim for is `panic=10`
+firing, the phone restarting **by itself**, and then Android coming up — with no
+hands on the phone. Holding the power button, or a `fastboot reboot` that happens
+to take the cold path, throws the log away.
+
+The kernel is built so that this is the *expected* shape of a failed attempt
+rather than a lucky one. The two failures this bring-up is most likely to hit —
+an oops (a wrong property in our DTB dereferencing NULL in a probe) and a spin in
+a probe waiting on a clock or regulator that never comes ready — both end in a
+panic now, and a panic is the only thing that makes the phone restart itself and
+flush the ring. So **the phone rebooting on its own roughly ten seconds after the
+logo is a result, not a misfire**: let it come up, then go and read the ring.
+
+If the ring is empty, read the ambiguity before concluding anything. `psci_init_system_reset2()`
+asks the device whether it supports `SYSTEM_RESET2` and prints nothing either
+way, so an empty ring is equally consistent with "the payload never panicked" and
+with "the device answered no, the reset was cold, and DRAM went with it". A
+payload that hung *without* panicking does leave nothing at all; a black screen
+and an empty pstore together mean "it never got far enough to say" — but they do
+not distinguish the two causes, and "no log, so it never ran" is one reading too
+many.
 
 From Android (root) or from TWRP:
 

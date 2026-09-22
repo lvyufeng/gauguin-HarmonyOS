@@ -15,8 +15,8 @@ except P0's. This table is the honest state; the sections under it are the plan.
 | phase | gate | state |
 |---|---|---|
 | **P0** survey + backup | partitions dumped and verified; no existing port | **done** — 74 partitions carved and signature-checked, `boot`/`abl`/`recovery` hashes match the device, 86 XBL drivers recovered, and `git ls-files Silicon/Qualcomm` confirms no SM7225 package upstream |
-| **P1** mainline kernel | device boots mainline and prints something | **not done** — `work/out/boot-pstore.img` is built, reproducible (`make_boot_image.py --kernel`), and now carries a log channel; the earlier `fastboot boot` was refused with `Failed to load/authenticate boot image` on the RAM path, and the partition path has never been tried |
-| **P2** UEFI skeleton | UEFI reaches a shell on the phone | **gate open** — platform package built, image written to `boot` and verified byte-for-byte, **never observed to execute an instruction** |
+| **P1** mainline kernel | device boots mainline and prints something | **not done** — `work/out/boot-pstore.img` is built, reproducible (`make_boot_image.py --kernel`), and carries both channels a device with no UART needs: the panel itself (`simple-framebuffer` + `simpledrm` + fbcon, so the boot log is photographed off the screen) and pstore (`console-ramoops-0`, readable from Android after a warm reboot). The earlier `fastboot boot` was refused with `Failed to load/authenticate boot image` on the RAM path, and the partition path has never been tried |
+| **P2** UEFI skeleton | the boot manager draws on the phone's screen and UFS appears as a block device | **gate open** — platform package built, image written to `boot` and verified byte-for-byte, **never observed to execute an instruction**. The gate said "reaches a shell" until the volume was inventoried and the shell turned out to be absent from *every* platform in the tree, `suryaPkg` included — see `docs/07`, so it would not have distinguished our firmware from a working one |
 | **P3** ACPI | Windows installer boots and sees UFS | not started — `AcpiTableUpdate` is a deliberate no-op |
 | **P4** Windows | desktop appears | not started — destroys `userdata` |
 | **P5** peripherals | touch, Wi-Fi, GPU, audio | not started |
@@ -56,9 +56,17 @@ outcome means and which payload to try next, is
    `/sys/fs/pstore/console-ramoops-0` after the phone reboots itself (step 4.5 in
    the runbook; the reasoning is in `docs/07`). `tools/build-p1-payloads.sh`
    builds the DTB and all of the images in one pass and refuses to ship a tree
-   whose ramoops node is not where Android looks; `tools/check-payload.py` prints
-   them against the stock image and refuses to let a structurally wrong one reach
-   the device.
+   whose ramoops node is not where Android looks **or whose `/chosen` has no
+   `simple-framebuffer`**, because both channels are in that one file and a
+   payload missing either is indistinguishable from one that works;
+   `tools/check-payload.py` prints them against the stock image and refuses to
+   let a structurally wrong one reach the device. The screen half is the one that
+   needs no round trip: the logo being replaced by the kernel log, and then by
+   init's `alive: N s uptime` heartbeat, is P1's gate observed directly. The log
+   half needs the phone to restart itself, so the kernel is also built to panic on
+   the two failures this bring-up is most likely to hit (an oops in a probe, and a
+   spin waiting on a clock or regulator that never comes ready) — otherwise both
+   end in a kernel that neither prints nor reboots, and the ring is never read.
 4. `work/out/p2-variants/Mu-gauguin-stock-{none,gzip}.img` — two stock-shaped
    builds, one per surviving candidate (uncompressed vs gzip kernel).
 
@@ -143,8 +151,17 @@ Approach, mirroring what Mu-Silicium does for other SoCs:
    (`UsbBusDxe`, `UsbKbDxe`, `UsbMassStorageDxe`, `AdrenoDxe`)
 6. Emit an Android boot image, `fastboot boot` it
 
-**Gate:** `fastboot boot` shows the UEFI Shell on the phone's screen, and UFS enumerates as
-a block device. If this fails, stop and reconsider — everything downstream depends on it.
+**Gate:** the boot manager draws on the phone's screen, and the storage it lists includes
+UFS as a block device. If this fails, stop and reconsider — everything downstream depends
+on it.
+
+The gate originally said "`fastboot boot` shows the UEFI Shell". That was wrong twice
+over, and `docs/07` has the evidence: this platform boots via `fastboot flash boot` and
+not `fastboot boot` (different ABL code paths), and **no Mu-Silicium phone platform ships
+the shell at all** — `ShellPkg/Application/Shell/Shell.inf` is referenced by no platform
+under `Platforms/`. A gate the reference for this same `msm-id` cannot meet is not a gate.
+The shell is a decision to revisit after the first execution; what the volume does
+provide, and what the gate now asks for, is `BootManagerMenuApp` drawing on the panel.
 
 **Risk:** **high, and this is the real wall.** No Bitra-family device has ever had a UEFI
 port. The signed blobs are unlikely to load cleanly into a different DXE core on the first
