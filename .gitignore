@@ -5,6 +5,7 @@ images/
 !device/dxe/*.ffs
 
 # Build trees
+work/
 /out/
 mu_aloha_platforms/
 Mu-Silicium/
