@@ -39,6 +39,16 @@ tools/make_uefi_platform.py  ->  uefi/Silicon/Qualcomm/BitraPkg/
 tools/sync-uefi-platform.sh  ->  installs all of it into a Mu-Silicium checkout
 ```
 
+And one that reads the result back rather than producing it:
+
+```
+tools/fv-inventory.py  ->  lists what is really inside a built Mu-<device>.img
+```
+
+`fv-inventory.py` answers "is this driver in the image", which is not the same
+question as "is it in the source tree", and which cannot be answered by grepping
+the image — see "Reading the volume takes some care" below.
+
 ### Binaries/gauguin/
 
 Of the 86 drivers in XBL, 55 are Qualcomm drivers that get packaged as binary
@@ -143,31 +153,102 @@ extracted originals in `device/dxe/` untouched.
 
 ## What was verified, and what was not
 
+Two builds exist and the numbers are different, so they are given separately.
+**Simple** is `USE_CUSTOM_DISPLAY_DRIVER=0` (SiliciumPkg `SimpleFbDxe`) and is
+what is flashed; **Qcom** is `=1` (Qualcomm `DisplayDxe`) and is the goal.
+
+| | Simple (flashed) | Qcom |
+|---|---|---|
+| images validated | 48 | 47 |
+| `Mu-gauguin.img` | 1,122,304 bytes | 1,210,368 bytes |
+| FVMAIN total / taken | `0x702000` / `0x7015c8` | `0x753000` / `0x752050` |
+| FFS files in FVMAIN | 122 | (not on disk any more) |
+| packaged Qcom drivers present | 42 of 55 | 44 of 55 |
+
 **Verified:**
 
-- The build completes: 47 images validated, `Return Code: 0x00000000`.
-- `Mu-gauguin.img` is produced, 1,210,368 bytes, as an Android boot image.
-- The firmware volume is well formed: `EFI_FV_TOTAL_SIZE = 0x753000`,
-  `EFI_FV_TAKEN_SIZE = 0x752050`, 129 FFS files.
-- 44 of the 55 packaged Qualcomm drivers are present in that volume. The 11
-  absent are precisely the ones the generator reports as unlisted, so the two
-  agree.
+- Both builds complete with `Return Code: 0x00000000`.
 - The FD is exactly `FD_SIZE` = `0x300000`, matching the "UEFI FD" region in
   `uefiplat.cfg`, and BootShim is compiled with `FD_BASE=0x9fc00000`, also
   matching.
-- The device tree lands in the image with the right `qcom,msm-id`.
+- The device tree lands in the image with the right `qcom,msm-id` and
+  `qcom,board-id`.
+- **The flashed image's firmware volume was enumerated and checked.** 122 FFS
+  files, every one in state `EFI_FILE_DATA_VALID`. The tool that does it,
+  `tools/fv-inventory.py`, reproduces GenFv's own `FVMAIN.Fv.txt` map exactly —
+  122 offsets, 122 GUIDs, zero mismatches — which is what makes the rest of the
+  numbers here trustworthy rather than plausible.
+- Of the 42 drivers present in the flashed build: `UFSDxe`, the whole USB device
+  stack (`UsbConfigDxe`, `UsbDeviceDxe`, `UsbfnDwc3Dxe`, `UsbMsdDxe`,
+  `UsbPwrCtrlDxe`, plus EDK2's `UsbBusDxe`/`UsbKbDxe`/`UsbMassStorageDxe`),
+  `SimpleFbDxe`, `GraphicsConsoleDxe`, `ConSplitterDxe`, `ConPlatformDxe`,
+  `BdsDxe`, `BootManagerMenuApp`, `SetupBrowser`, `DiskIoDxe`, `PartitionDxe`,
+  `Fat`, and the panel XML set. That is every driver a UEFI Interactive Shell
+  needs, and it is present in the image that is on the phone.
+
+**The 13 absent drivers are all accounted for**, and none is accidental:
+
+- `DisplayDxe`, `CPRDxe` are behind `!if $(USE_CUSTOM_DISPLAY_DRIVER) == 1` in
+  `DXE.inc`; `DisplayReEnablerDxe` is in the same block. They are absent
+  *because* this is the SimpleFbDxe build, which is the check that the display
+  switch does what it claims.
+- The other 11 are the ones the generator reports as unlisted — packaged but
+  given no INF line by the reference package. They are named in `DXE.inc`'s
+  header comment so the omission stays visible. `PILDxe`/`PILProxyDxe`/
+  `ADSPDxe` load firmware to DSPs, `QcomBds` is replaced by EDK2's `BdsDxe`,
+  `VibratorDxe`/`QcomChargerApp` are not needed for a shell, and
+  `VerifiedBootDxe`/`SecRSADxe` are authentication paths this build does not
+  use. None is a prerequisite of the console.
+
+`QcomWDogDxe` being in that list is the one worth naming explicitly: the
+watchdog is disabled by `PlatformSecLib` in SEC, before the driver model
+exists, which is why it does not need a DXE driver. If that SEC code were
+wrong, the phone would reset a few seconds in — which is a distinguishable
+outcome, not an invisible one.
 
 **Not verified — and this is the whole of the P2 gate:**
 
 - **The firmware has never run.** It has never been loaded by a bootloader and
   it has never executed an instruction. Everything above is static inspection
-  of a build product.
+  of a build product. Enumerating the volume proves the software is *in* the
+  image; it says nothing about whether the image is reached.
 - The ACPI tables are absent by choice. The surya DSDT describes a different
   board, and shipping it would tell any OS that boots here a set of confident
   lies about where the interrupt controllers and UART are. `AcpiTableUpdate`
   is a deliberate no-op with a P3 TODO. The P2 gate is a shell, which does not
   need ACPI; Windows does, which is why that is P3.
 - The MDP SIDs, as noted above.
+
+### Reading the volume takes some care, and got it wrong twice
+
+Worth recording, because both mistakes produce the same convincing answer —
+"the firmware volume is empty" — and neither is about the firmware.
+
+**`SILICIUM_UEFI.fd` is not the firmware volume.** It is `FVMAIN_COMPACT`: a
+0x300000-byte volume whose only substantial content is `FVMAIN`, a 7 MB volume,
+inside a single LZMA GUIDed section. Every driver name and driver GUID is
+therefore inside a compressed stream, so grepping the raw image for
+`UsbConfigDxe` finds nothing — 0 occurrences, which reads exactly like a
+firmware that shipped without USB. It did not; the name is just compressed.
+
+**Two off-by-four errors in the FFS walk, both silent.** The file area does not
+begin at `HeaderLength` when the volume has an extension header:
+`ExtHeaderOffset + ExtHeaderSize` is only 4-byte aligned and FFS files must be
+8-byte aligned, so GenFv pads to the next 8 — `0x60 + 0x14` rounds up to
+`0x78`. And GenFv pads *between* files the same way, without counting that
+padding in the size field, so stepping by `size` lands 4 bytes early and reads
+a GUID of `FFFFFFFF-CB7F-D6A2-186A-2F4EB43B9920` — the previous file's last
+four bytes glued to the next GUID. Each mistake ends the walk after one or two
+files.
+
+The fix for all of it is to check the reader against something the reader
+cannot influence: GenFv writes its own map, `FVMAIN.Fv.txt`, into the build
+tree. The walker now has to reproduce that map exactly or it is not believed.
+
+There is a second trap for the same class of mistake: **counting packaged
+drivers by directory name instead of by `.inf` name**. `ScmDxeLA.inf` and
+`TzDxeLA.inf` both live in `QcomPkg/Drivers/TzDxe/`, so a directory-keyed count
+silently drops one and reports 54 of 55.
 
 ## Status
 
