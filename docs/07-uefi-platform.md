@@ -753,7 +753,20 @@ fastboot oem device-info
 
 and, independently, reading `misc` again *now* and comparing it with the
 all-zeros that was there before the write. If ABL wrote a BCB or a flag, it is
-in one of those. `tools/fastboot-capture.sh` asks for the first two; the `misc`
+in one of those. The BCB commands ABL recognises are short enough to grep for
+by name — they sit in a table at RVA `0x0be34d`:
+
+```
+0x0be34d  boot-recovery
+0x0be35d  boot-fastboot
+0x0be36d  boot-bootloader
+```
+
+so the check is `strings` on the first block of `misc` for those three. (The
+`reboot-recovery` / `reboot-fastboot` / `reboot-bootloader` names immediately
+before them are the *fastboot command* spellings of the same three things, which
+is a good reminder that a name being present in the string table says nothing
+about which path uses it.) `tools/fastboot-capture.sh` asks for the first two; the `misc`
 comparison needs TWRP (Power + Volume Up), which does not go through ABL.
 
 If the flag is set, that is also the explanation for the run of failed
