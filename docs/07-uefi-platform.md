@@ -233,6 +233,34 @@ outcome, not an invisible one.
   it has never executed an instruction. Everything above is static inspection
   of a build product. Enumerating the volume proves the software is *in* the
   image; it says nothing about whether the image is reached.
+
+- **The `boot` path and the `fastboot boot` path are different code.** This is
+  not a caveat, it is a reason for optimism that deserves to be stated with the
+  evidence. P1's mainline kernel was rejected by `fastboot boot` with `Failed to
+  load/authenticate boot image: %r`, and for a long time that was read as
+  evidence that the device refuses *our images*. It is evidence about one code
+  path.
+
+  Disassembling ABL's LinuxLoader shows what its `Kernel mode check 32/64` does:
+
+  ```
+  0x02b15c  ldr   w2, [x22, #0x38]      ; the u32 at offset 0x38 of the payload
+  0x02b160  mov   w3, #0x5241
+  0x02b168  movk  w3, #0x644d, lsl #16  ; w3 = 0x644d5241 = "ARMd"
+  0x02b164  adrp  x1, <the message>
+  ...                                   ; compare, and report
+  ```
+
+  That is the point of BootShim's `REQUIRES_KERNEL_HEADER=1`: the byte at offset
+  0x38 of the payload is the ARM64 kernel magic. **Our images carry it, and the
+  stock `boot` does not** — the stock kernel is raw and has no such header. So
+  the two are distinguishable by ABL, and there is no reason to assume the
+  partition path rejects for the same reason the RAM path did.
+
+- The related string is `ERROR: Failed to switch to 32 bit mode` at VA
+  `0x17638`. It is worth naming for the same reason: it makes a *32-bit* kernel
+  path explicit, and no successful boot on this device would take it
+
 - The ACPI tables are absent by choice. The surya DSDT describes a different
   board, and shipping it would tell any OS that boots here a set of confident
   lies about where the interrupt controllers and UART are. `AcpiTableUpdate`
