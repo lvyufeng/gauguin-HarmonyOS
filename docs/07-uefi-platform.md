@@ -29,6 +29,27 @@ unknown hardware; it is arranging known-good parts the way Mu-Silicium's build
 expects. That is why almost everything under `uefi/` is generated rather than
 written, and why the generator scripts are the real deliverable.
 
+### The premise was checked, and it holds — but the name is a trap
+
+The claim above is that no SM7225 UEFI port exists to copy, so this has to be
+assembled rather than adapted. That was verified rather than assumed:
+`git ls-files Silicon/Qualcomm` lists Mu-Silicium's 26 SoC packages — Kona,
+Lahaina, Waipio, Moorea, Kodiak, Napali, Rennell and the rest — and **none of
+them is SM7225 or SM6350**. `Silicon/Qualcomm/BitraPkg` is this project's, and
+is untracked in the Mu-Silicium checkout.
+
+The trap: Mu-Silicium already has a platform called **`bitra`** — and it is
+`Platforms/Realme/bitraPkg`, the Realme GT NEO 2, which includes
+`KonaPkg/KonaPkg.dsc.inc` and declares `0 = SM8250, 1 = SM8250-AB,
+2 = SM8250-AC`. That is **Snapdragon 870, a Kona part**. This device's socinfo
+also says `SM_BITRA_H`, for SM7225. Two unrelated things called bitra — a
+vendor's *board* name in one case and Qualcomm's *silicon* name in the other.
+
+So "there is a bitraPkg, this must be the one" is the mistake to avoid, and
+`Silicon/Qualcomm/BitraPkg` in this project means SM7225 and only SM7225. The
+package was named after the SoC codename the device reports; if that ever
+causes confusion the rename is cheap and the `!include` is one line.
+
 ## What gets generated
 
 ```
@@ -646,6 +667,17 @@ assumed. `~/backup/gauguin/images/part-boot.img` still hashes to
 pass does not overwrite an existing `part-boot.img`. So the restore is one
 128 MB write of a file that is byte-identical to what this phone booted with
 two hours earlier.
+
+`tools/restore-stock-boot.sh` performs it, and refuses to write anything until
+that hash matches — a restore script that will write whatever it is pointed at
+is not a safety net. It takes either route, because they fail independently:
+`fastboot flash boot`, or `adb push` + `dd` from TWRP, which does not go
+through ABL's fastboot at all. Both are one command, and it says which answer
+means what:
+
+- stock boots Android → the firmware is the problem, and the device is healthy;
+- stock does not boot → something other than the image changed state, and the
+  payload is not implicated.
 
 ### The transfer-abort hazard, again — and it is worth a rule
 
