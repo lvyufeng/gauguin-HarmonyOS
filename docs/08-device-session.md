@@ -30,6 +30,26 @@ the byte-identical stock image.
 
 ---
 
+## Step 0 — Try the free recovery first
+
+A stranded fastboot has so far been treated as needing the power button. Before
+that, three host-side resets were tried and **none works** — recorded so nobody
+spends time on them again:
+
+| attempt | result |
+|---|---|
+| toggle `/sys/bus/usb/devices/3-1/authorized` | no re-enumeration |
+| `USBDEVFS_RESET` ioctl on `/dev/bus/usb/003/002` | no re-enumeration |
+| unbind + rebind `0000:6c:00.0` in `xhci_hcd` (full bus teardown) | bus rebuilt, device re-enumerated, **ABL still silent** |
+
+The third is the interesting one: it forces a real USB reset on the wire and the
+device re-enumerates, so the host side is provably clean — and `getvar product`
+still times out. The stuck state is in ABL's firmware, not in the host stack or
+the link. **Only the power button clears it.**
+
+(For reference, `fastboot devices` will keep working through all of this,
+because it only reads the USB descriptor.)
+
 ## Step 1 — Reset and power on cleanly
 
 Hold **Power** ~20 s until the phone restarts. Then, from off, press **Power
