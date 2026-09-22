@@ -182,6 +182,49 @@ fastboot flash <name> ~/backup/gauguin/images/part-<name>.img
 **Do not repartition anything until a restore of at least one small partition has been
 tested end to end.**
 
+### The gap that was there, and the fix
+
+The original backup dumped `sda` partition by partition and the five small LUNs whole. That
+was a mistake for `sde`: it is a 1 GB LUN holding **62 partitions, including `boot`** — and
+nothing carved `boot` out of it. So `boot` existed only as "somewhere inside `LUN-sde.img`
+at LBA 162982", which is not a restore path anyone wants to compute by hand with a phone
+sitting bricked.
+
+`tools/carve-partitions.py` closes it. It parses the GPT inside each whole-LUN dump and
+writes the same `part-<name>.img` files the per-partition dumps produced, so **every**
+partition now has one obvious restore path:
+
+```sh
+python3 tools/carve-partitions.py --images ~/backup/gauguin/images
+```
+
+It re-derives the sector size rather than assuming it, and validates the guess against the
+GPT header's own `MyLBA` field — necessary because a 4096-byte-sector LUN has a valid header
+at byte 4096, which is also LBA 8 of a 512-byte-sector disk, and only one of those readings
+checks out.
+
+74 partitions carved from `sde` and `sdf`, all with their signatures verified:
+
+| | |
+|---|---|
+| `boot` | 128 MB, `ANDROID!` — the stock boot image |
+| `abl`, `ablbak` | XBL itself 
+| `xbl`, `xblbak`, `xbl_config`, `xbl_configbak` | bootloader and its config |
+| `tz`, `tzbak` | TrustZone |
+| `vbmeta`, `vbmeta_system`, `vbmeta_product`, `vbmeta_vendor`, `vbmeta_odm` | all five AVB tables |
+| `modem`, `dsp`, `bluetooth`, `aop`, `hyp`, `cmnlib*`, `keymaster*`, `uefisecapp*` | the rest of the firmware |
+
+`abl` is the one that matters most: it is XBL, the thing that runs `fastboot` and decides
+whether the phone boots at all. Before this it was reachable only through the whole-LUN
+image.
+
+### Note on `sde`'s partition count
+
+The GPT inside `LUN-sde.img` lists **62** entries, but `docs/04`'s table of the same LUN has
+fewer, and the earlier `uefiplat.cfg` work assumed the size. The carve is authoritative — it
+reads the table rather than transcribing it. The count differs from what an earlier note in
+this project recorded, which is worth knowing before trusting any hand-written table here.
+
 ## Before P4: save the user's data
 
 `userdata` holds everything stored on the phone. Installing Windows means repartitioning
