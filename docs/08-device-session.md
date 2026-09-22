@@ -20,7 +20,7 @@ after step 4 has established that the phone is healthy. Confirm the pieces are
 present first, because a missing file mid-session costs a whole cycle:
 
 ```sh
-ls -la work/out/boot-pstore.img                     # P1's kernel + the log channel
+ls -la work/out/boot-pstore-raw*.img                 # P1's kernel, three shapes
 ls -la work/out/p2-variants/Mu-gauguin-stock-*.img   # the two P2 variants
 tools/restore-stock-boot.sh --check                  # must print "ok"
 ```
@@ -109,45 +109,84 @@ Each attempt: write, reboot, watch the screen, then run
 
 Order matters — cheapest and most informative first:
 
-**4a. P1's mainline kernel with a log channel** — `work/out/boot-pstore.img`.
-Stock-shaped v2, gzip kernel (`Image-pstore.gz`, built with
-`CONFIG_PSTORE_CONSOLE=y` + `CONFIG_PSTORE_RAM=y`), the real initramfs, and our
-own DTB in the declared DTB slot with gauguin's exact `msm-id`/`board-id` — which
-is the one case where ABL uses our tree as-is instead of overlaying the vendor's
-on top (see `docs/07`). Its cmdline asks for both consoles and a pstore ring at
-`0xbff00000`, the phone's own pstore region.
+**4a. P1's mainline kernel — the closest match to what the phone boots today**
 
-Worth trying before the UEFI builds for two reasons: it is a much better-known
-payload, and **its earlier failure was on `fastboot boot` — the RAM chain-load
-path — which is not the same code path as booting from the `boot` partition.**
-So its failure does not predict anything about this test.
+Three builds of the same kernel, differing only in the properties that
+distinguish our images from the one that boots (see the table in `docs/07`).
+Order matters: each one removes exactly one difference, so the *change* between
+attempts is the signal.
 
-Read this before spending the cycle: **a black screen does not mean the payload
-failed.** With the vendor device tree there is no framebuffer and no serial, so
-a perfectly successful boot of this kernel prints to a dummy console. The
-evidence to look for is instead:
+| # | image | kernel | arm64 header | `text_offset` | `image_size` | size |
+|---|---|---|---|---|---|---|
+| 1 | `boot-pstore-raw-noefi.img` | raw | **no EFI stub** | 0x80000 | 0x2c50000 | 46,075,904 |
+| 2 | `boot-pstore-raw-txt.img` | raw | EFI stub | 0x80000 | 0x2d90000 | 47,255,552 |
+| 3 | `boot-pstore-raw.img` | raw | EFI stub | 0 | 0x2d90000 | 47,255,552 |
+| 4 | `boot-pstore-gz-fixedsz.img` | gzip | EFI stub | 0 | **0x2cb8200** | 15,257,600 |
+| 5 | `boot-pstore.img` | gzip | EFI stub | 0 | 0x2d90000 | 15,257,600 |
+
+all under `work/out/`. Every one is stock-shaped v2 with our own DTB in the
+declared DTB slot — our tree carries gauguin's exact `msm-id`/`board-id`, which
+is the one case where ABL uses it as-is instead of overlaying the vendor's on
+top — and all five carry the pstore cmdline below.
+
+Start at the top of the table. **1 is the one most likely to work**: it is the
+only build that matches the phone's own kernel on the raw property, the
+EFI-stub property *and* `text_offset` at the same time.
+
+4 is worth understanding rather than skipping. ABL contains
+
+```
+Decompress kernel size is smaller than image header size
+```
+
+and BootShim's image is written so that it *passes* — `image_size` 0x300000,
+decompressed length 0x300070. A Linux `Image.gz` fails it, because `image_size`
+covers BSS and is therefore larger than anything the gzip stream can contain.
+4 declares the real decompressed length instead. That check is the closest thing
+found so far to an explanation of why every compressed image has been refused
+while every raw one boots, so 4 is the attempt that tests it — but it costs a
+cycle, so it goes after 1.
+
+Before flashing anything, run
+
+```sh
+tools/check-payload.py --stock ~/backup/gauguin/images/part-boot.img work/out/boot-pstore-*.img
+```
+
+which prints these properties next to the phone's own image and fails loudly on
+a bad magic, a DTB not at its declared offset, or an AVB footer. The variants
+differ only in things `ls -la` cannot show, and mixing two up mid-session reads
+as "that variable does not matter" when the wrong file was flashed.
+
+Worth noting before spending the cycle: `fastboot boot` — the RAM chain-load path
+— was what refused the earlier gzip image, and that is **not the same code path
+as booting from the `boot` partition**, so its failure does not predict anything
+here.
+
+**A black screen does not mean the payload failed.** With the vendor device tree
+there is no framebuffer and no serial, so a perfectly successful boot of this
+kernel prints to a dummy console. The evidence to look for is instead:
 
 1. Does it come back to fastboot at all? If the phone sits there dark and does
    *not* return to ABL's fastboot, something executed.
-2. `oem fbreason` after the next boot (see the table in step 2).
-3. The pstore log — step 4c below. This is the one that can actually say
-   whether UFS enumerated and where the kernel stopped.
+2. `oem fbreason` after the next boot (the table in step 2).
+3. The pstore log — step 4.5. That is the one that can say whether UFS
+   enumerated and where the kernel stopped.
 
 ```sh
-fastboot flash boot work/out/boot-pstore.img
+fastboot flash boot work/out/boot-pstore-raw-noefi.img    # or the next one down
 ```
 
 (or, from TWRP, `adb push` + `dd`, which is what `restore-stock-boot.sh --twrp`
 does and which does not depend on ABL's fastboot answering at all — use that if
 the fastboot route has just stranded itself.)
 
-**4b. `Mu-gauguin-stock-gzip.img`** — stock-shaped UEFI, compressed kernel,
-dummy ramdisk. Same as the image already on the phone except the header is this
-device's own shape.
-
-**4c. `Mu-gauguin-stock-none.img`** — the same but uncompressed. This is the
-pair that separates the two surviving candidates: the image that boots today has
-a **raw** kernel, and everything we have produced has been compressed.
+**4b/4c. The two UEFI variants** — `Mu-gauguin-stock-gzip.img` (stock-shaped,
+compressed kernel, dummy ramdisk) and `Mu-gauguin-stock-none.img` (the same but
+uncompressed). These test whether P2's silence is the same problem as P1's
+refusal: if 4a changes nothing at all — same `fbreason`, same screen — then the
+two builds fail for different reasons, and the UEFI side needs its own
+investigation rather than more payload variants.
 
 After each: if `oem fbreason` changes to `LoadImageAndAuth Fail`, the payload is
 being reached and the difference between this attempt and the last one is the
@@ -193,7 +232,7 @@ channel:
 attempt  image                          fbreason                     screen            pstore
 -------  -----------------------------  ---------------------------  ----------------  ------
 1        (as found)                     LoadImageAndAuth Fail        Redmi logo, then fastboot   n/a
-2        work/out/boot-pstore.img       ...
+2        work/out/boot-pstore-raw-*.img ...
 ```
 
 That table is the entire output of a session. Everything else is in the files

@@ -453,12 +453,101 @@ difference was a leading explanation) was wrong to lean on it.
 |---|---|---|---|
 | header | stock-shaped v2 | v1 / page 0x800 | stock-shaped v2 |
 | kernel | gzip | gzip | **raw** (`00 00 86 14`) |
+| kernel's own arm64 header | `MZ`, `res5=0x40` (EFI stub) | `ARMd` via BootShim, `res5=0` | a branch, `res5=0` (**no EFI stub**) |
+| `text_offset` | 0 | 0 | **0x80000** |
 | ramdisk | real (279,090 B) | 5-byte `dummy` | real (951,844 B) |
 | AVB footer | absent | absent | **absent too** |
 
 Two candidates survive: **compressed kernels**, and the **`dummy` ramdisk**. The
 third — AVB — is ruled out by the fourth column, since the image that boots has
-no AVB footer either. That is the state of the diagnosis: narrowing, not solved.
+no AVB footer either.
+
+**Three structural differences, all three now controllable offline.** The rows
+above were measured, not reasoned about, and they are the whole reason the next
+session's payload list is worth spending a cycle on:
+
+1. **raw vs compressed.** The stock kernel region is an uncompressed arm64
+   `Image`: `b` at offset 0, `image_size = 0x3598000`, `ARMd` at 0x38, no
+   compression magic that decompresses. (Careful with this one — a plain search
+   for `1f 8b 08` in that 45 MB region *does* hit, at `+0x2954`, and that hit is
+   the only one in the whole region and does not decompress. Testing whether the
+   candidate actually inflates is the difference between confirming this row and
+   "correcting" a row that was right.) The earlier draft of this table is
+   confirmed, not amended.
+
+2. **The kernel's own arm64 header is overlaid on a PE header.** `code0` is a
+   branch (`0x14860000`) in the stock kernel and `0xfa405a4d` — whose low half is
+   `MZ` — in ours, with `res5` (offset 0x3c, "used for PE COFF offset") `0` versus
+   `0x40`. That is not damage: the arm64 image header *is* laid out so it can
+   double as a PE/COFF header, and a kernel built with `CONFIG_EFI=y` fills the
+   MZ form in. So **the stock kernel is built without the EFI stub**, and ours has
+   it. ABL is itself UEFI, sits between the two, and has strings for both paths,
+   so "it does not care" is an assumption rather than a fact.
+
+3. **`text_offset`.** Stock declares `0x80000`, ours `0x0`. 0 is correct for
+   Linux 6.12 — `TEXT_OFFSET` was removed from arm64 in 6.6, and the field is
+   bootloader metadata the kernel never reads back. ABL is from 2020 and predates
+   that, so a bootloader that validates or uses this field would see a value it
+   has never seen from this device. It is a safe field to set.
+
+### ABL decompresses the kernel, and says so
+
+Another string found in ABL while looking for the header check:
+
+```
+Invalid boot image header:%r          Invalid boot image header size: %u
+Invalid image Sizes                   Integer Overflow: Kernel Size = %u
+Integer Overflow: Actual Kernel size = %u
+Kernel Size 1            : 0x%x       Kernel Size 2            : 0x%x
+Failed Kernel Size   : 0x%x
+Decompress kernel size is smaller than image header size
+Image Header version     : 0x%x
+Kernel Load Address: 0x%x             Kernel Size Actual: 0x%x
+Ramdisk Load Address: 0x%x            Device Tree Load Address: 0x%x
+```
+
+So there is a decompression step in ABL's kernel path and a size comparison
+after it. Which two "sizes" are compared is not established by strings alone —
+"Kernel Size 1/2" could be the boot header's declared size against the actual
+file size, but there is a reading worth taking seriously:
+
+| image | `image_size` declared | decompressed | passes "decompressed >= declared"? |
+|---|---|---|---|
+| BootShim (Mu-Silicium) | 0x300000 | 0x300070 | **yes** |
+| stock `boot` (not decompressed) | 0x3598000 | 45,158,412 | n/a — raw, no decompression |
+| our `Image.gz` | 0x2d90000 | 46,891,520 | **no** (declared is 884 KB larger) |
+
+A Linux kernel's `image_size` covers BSS, so it is *larger* than anything the
+compressed stream contains — the check cannot pass for a compressed Image,
+whatever the bootloader does with it. BootShim's image is written the other way
+round, and it is the only compressed payload this project has that was ever
+loaded. That is a real candidate for the difference between the compressed
+images that are refused and the raw one that boots, and it is cheap to test:
+`--image-size` patches the field without touching anything else.
+
+It is not proof. The check might apply only to the `vendor_boot` path, or the
+two sizes might be something else entirely, and this stays labelled as a
+candidate until a device attempt distinguishes it.
+
+### Five raw and compressed variants, built
+
+`--kernel` takes an uncompressed `Image` straight through; `--text-offset` and
+`--image-size` rewrite the two header fields that differ. Reproduce all of them
+with `tools/build-p1-payloads.sh`, and check them with
+`tools/check-payload.py --stock <stock boot> <images>` before flashing:
+
+```
+boot-pstore-raw-noefi.img  46,075,904  raw,  no EFI stub,  text 0x80000, size 0x2c50000
+boot-pstore-raw-txt.img    47,255,552  raw,  EFI stub,     text 0x80000, size 0x2d90000
+boot-pstore-raw.img        47,255,552  raw,  EFI stub,     text 0,       size 0x2d90000
+boot-pstore-gz-fixedsz.img 15,257,600  gzip, EFI stub,    text 0,       size 0x2cb8200
+boot-pstore.img            15,257,600  gzip, EFI stub,    text 0,       size 0x2d90000
+```
+
+`raw-noefi` is the closest match to what the phone's own `boot` carries and
+therefore the most likely to work; `gz-fixedsz` is the one that tests the
+decompression-size candidate. Both were built from scratch here rather than
+described, and both pass the structural check.
 
 ### Two stock-shaped variants, built and validated offline
 

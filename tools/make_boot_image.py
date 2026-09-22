@@ -57,6 +57,7 @@ import struct
 import sys
 
 MAGIC = b"ANDROID!"
+ARM64_MAGIC = b"ARMd"   # the u32 0x644d5241 at offset 0x38 of an arm64 Image
 
 # Boot image header field offsets. v0 is 1632 bytes; v1 adds
 # recovery_dtbo_size(4) + recovery_dtbo_offset(8) + header_size(4) -> 1648;
@@ -195,6 +196,54 @@ def describe(d, f, label):
     print(f"  tags_addr       {f['tags_addr']:#x}")
 
 
+def patch_image_header(kernel, text_offset, image_size):
+    """Patch fields of the 64-byte arm64 image header, compressed or not.
+
+    Both fields are bootloader metadata: the kernel itself never reads them
+    back (text_offset stopped meaning anything on arm64 when TEXT_OFFSET was
+    removed in 6.6, and image_size is informational). Changing them is
+    therefore a way to remove a difference against the phone's own kernel
+    without changing what the kernel does.
+
+    A gzip input is decompressed, patched, and re-compressed. That produces a
+    different gzip byte stream than `gzip -9` would (different deflate encoder
+    settings), which is worth knowing when comparing images by eye — the
+    structural checker, not `cmp`, is the way to compare them.
+    """
+    def patch(blob):
+        if blob[0x38:0x3c] != ARM64_MAGIC:
+            sys.exit("the kernel does not have the arm64 magic at 0x38; "
+                     "header fields would be written into something else")
+        blob = bytearray(blob)
+        for field, off, arg in (("text_offset", 8, text_offset),
+                                ("image_size", 16, image_size)):
+            if arg is None:
+                continue
+            want = int(arg, 16)
+            got, = struct.unpack_from("<Q", blob, off)
+            struct.pack_into("<Q", blob, off, want)
+            print(f"  {field} patched {got:#x} -> {want:#x}")
+
+        # ABL contains "Decompress kernel size is smaller than image header
+        # size", and this is the value that check would compare against. Say
+        # whether the image now passes it, because that is the whole point of
+        # touching image_size — and because a decimal/hex slip is otherwise
+        # silent: `--image-size 46891520` sets 0x46891520, which is larger than
+        # the kernel and would fail the check while looking like a number.
+        if image_size is not None:
+            declared, = struct.unpack_from("<Q", blob, 16)
+            n = len(blob)
+            verdict = "passes" if n >= declared else "FAILS"
+            print(f"  decompressed {n:,} vs declared {declared:,} -> {verdict} "
+                  f"a 'decompressed >= declared' check")
+        return bytes(blob)
+
+    if kernel[:2] == b"\x1f\x8b":
+        print("  kernel is gzip: decompress, patch, recompress")
+        return gzip.compress(patch(gzip.decompress(kernel)), mtime=0)
+    return patch(kernel)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--fd", help="SILICIUM_UEFI.fd")
@@ -208,6 +257,21 @@ def main():
                     help="default: Mu-Silicium's Resources/ramdisk (5 bytes, 'dummy')")
     ap.add_argument("--cmdline", default="",
                     help="kernel command line to put in the header (max 511 bytes)")
+    ap.add_argument("--text-offset", default=None, metavar="HEX",
+                    help="patch text_offset at offset 8 of a raw arm64 Image "
+                         "header. Only meaningful with --kernel. The kernel "
+                         "never reads this field back; it is bootloader "
+                         "metadata, so matching what the phone's own image "
+                         "declares is a safe way to remove a difference")
+    ap.add_argument("--image-size", default=None, metavar="HEX",
+                    help="patch image_size at offset 16 of a raw arm64 Image "
+                         "header. ABL has a check that reads "
+                         "'Decompress kernel size is smaller than image header "
+                         "size', and BootShim's is written so it passes "
+                         "(0x300000 declared, 0x300070 decompressed) while a "
+                         "Linux Image.gz fails it (image_size covers BSS and so "
+                         "exceeds the file). Lowering this to at most the real "
+                         "size is the experiment")
     ap.add_argument("--compression", choices=("gzip", "none"), default="gzip")
     ap.add_argument("--profile", choices=sorted(PROFILES), default="stock")
     ap.add_argument("--compare", metavar="IMG",
@@ -226,6 +290,8 @@ def main():
         # would produce a gzip stream that decompresses to a gzip stream, which
         # the kernel does not accept as an arm64 image.
         kernel = open(args.kernel, "rb").read()
+        if args.text_offset is not None or args.image_size is not None:
+            kernel = patch_image_header(kernel, args.text_offset, args.image_size)
         print(f"profile {args.profile}: kernel={args.kernel} (verbatim, "
               f"{len(kernel):#x} bytes), dtb "
               f"{'declared' if p['dtb_in_header'] else 'appended to kernel'}")

@@ -38,11 +38,16 @@ outcome means and which payload to try next, is
    `slot-retry-count`.
 2. `tools/restore-stock-boot.sh` — the A/B control: put the stock `boot` back
    and see whether Android returns.
-3. `work/out/boot-pstore.img` — P1's mainline kernel, rebuilt with
-   `CONFIG_PSTORE_CONSOLE=y` / `CONFIG_PSTORE_RAM=y` and a cmdline that puts the
-   kernel log in the phone's own pstore region (`0xbff00000`), so a payload with
-   no UART and no screen driver can still be read afterwards at
-   `/sys/fs/pstore/console-ramoops-0` (step 4.5 in the runbook).
+3. `work/out/boot-pstore-{raw-noefi,raw-txt,raw,gz-fixedsz}.img` — P1's mainline
+   kernel in the four shapes that differ on the properties separating our images
+   from the one the phone boots (raw vs compressed, EFI-stub form of the arm64
+   header, `text_offset`), each with `CONFIG_PSTORE_CONSOLE`/`PSTORE_RAM` and a
+   cmdline that puts the kernel log in the phone's own pstore region
+   (`0xbff00000`), so a payload with no UART and no screen driver can still be
+   read afterwards at `/sys/fs/pstore/console-ramoops-0` (step 4.5 in the
+   runbook). `tools/build-p1-payloads.sh` reproduces all of them;
+   `tools/check-payload.py` prints them against the stock image and refuses to
+   let a structurally wrong one reach the device.
 4. `work/out/p2-variants/Mu-gauguin-stock-{none,gzip}.img` — two stock-shaped
    builds, one per surviving candidate (uncompressed vs gzip kernel).
 
