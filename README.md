@@ -71,12 +71,16 @@ map and the restore procedure.
 
 | Phase | Deliverable | Gate | Status |
 |---|---|---|---|
-| **P0** | Device survey + full partition backup + XBL driver inventory | every partition dumped; DXE set identified | ← **in progress** |
-| **P1** | Mainline Linux on gauguin (`gauguin.dts` + kernel + `fastboot boot`) | framebuffer up, UFS mounted, USB console | not started |
+| **P0** | Device survey + full partition backup + XBL driver inventory | every partition dumped; DXE set identified | ✅ done |
+| **P1** | Mainline Linux on gauguin (`gauguin.dts` + kernel + `fastboot boot`) | framebuffer up, UFS mounted, USB console | ← **in progress** |
 | **P2** | UEFI skeleton (`Silicon/Qualcomm/BitraPkg` + `Platforms/Xiaomi/gauguinPkg`) | `fastboot boot` → UEFI Shell, UFS enumerates | not started |
 | **P3** | UEFI with full driver set + ACPI tables | Windows installer boots off USB | not started |
 | **P4** | Windows 11 ARM64 deployment | Windows desktop on the device | not started |
 | **P5** | Hardware enablement in Windows | touch / Wi-Fi / GPU / audio one by one | not started |
+
+P0 result: all 38 partition images dumped and size-verified against the GPT; **86
+signed AArch64 DXE drivers** and Qualcomm's own `uefiplat.cfg` recovered from the
+phone's XBL; confirmed by search that no existing UEFI port covers this SoC.
 
 P1 looks like a detour but is not: it is the cheapest way to obtain a verified hardware
 map (clocks, regulators, GPIO, panel timings, MMIO bases) and that map is exactly what the

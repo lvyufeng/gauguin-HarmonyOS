@@ -65,6 +65,10 @@ dump_gpt sda
 while read -r dev name; do
   case "$name" in
     userdata) continue ;;   # 107 GB, backed up separately
+    # /dev/block/by-name also contains symlinks named after the whole LUNs
+    # (sda, sdb, …) pointing at the raw disks — those are not partitions.
+    sda|sdb|sdc|sdd|sde|sdf) continue ;;
+    */*) continue ;;
   esac
   case "$dev" in
     /dev/block/sda*) dump_part "$name" ;;
