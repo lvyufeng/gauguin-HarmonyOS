@@ -43,7 +43,13 @@ outcome means and which payload to try next, is
    still resident, so the silence is not evidence our image ran.
 2. `tools/restore-stock-boot.sh` — the A/B control: put the stock `boot` back
    and see whether Android returns.
-3. `work/out/boot-pstore.img` and its four siblings `-raw`, `-raw-txt`,
+3. `tools/flash-boot.sh` — the one command that writes a payload to `boot`, over
+   whichever route answers. It exists because step 1b can make the fastboot route
+   unreachable (the image in `boot` wedging ABL, so a reset reproduces the wedge)
+   and TWRP is then not a fallback but the only way in; it also reads the
+   partition back and compares the hash, so "the write landed" is established
+   rather than assumed.
+4. `work/out/boot-pstore.img` and its four siblings `-raw`, `-raw-txt`,
    `-raw-noefi`, `-gz-fixedsz` — P1's mainline kernel in the five shapes that
    differ on the properties separating our images
    from the one the phone boots (raw vs compressed, EFI-stub form of the arm64
@@ -67,8 +73,11 @@ outcome means and which payload to try next, is
    the two failures this bring-up is most likely to hit (an oops in a probe, and a
    spin waiting on a clock or regulator that never comes ready) — otherwise both
    end in a kernel that neither prints nor reboots, and the ring is never read.
-4. `work/out/p2-variants/Mu-gauguin-stock-{none,gzip}.img` — two stock-shaped
-   builds, one per surviving candidate (uncompressed vs gzip kernel).
+5. `work/out/p2-variants/Mu-gauguin-stock-{none,gzip}.img` — two stock-shaped
+   builds, one per surviving candidate (uncompressed vs gzip kernel). Each pairs
+   with a P1 variant on the compression property, which is what makes the pair —
+   and not the individual attempt — the thing to read: see step 4b/4c in the
+   runbook.
 
 ### Standing decisions, with one amendment
 

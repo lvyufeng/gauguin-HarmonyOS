@@ -15,14 +15,15 @@ outcome means, and where to go next.
 
 ## Before touching the phone
 
-Nothing here writes to the device except step 5, which writes `boot` — and only
-after step 4 has established that the phone is healthy. Confirm the pieces are
+Nothing here writes to the device except step 4, which writes `boot` — and only
+after step 3 has established that the phone is healthy. Confirm the pieces are
 present first, because a missing file mid-session costs a whole cycle:
 
 ```sh
 ls -la work/out/boot-pstore-*.img                     # P1's kernel, five shapes
 ls -la work/out/p2-variants/Mu-gauguin-stock-*.img   # the two P2 variants
 tools/restore-stock-boot.sh --check                  # must print "ok"
+tools/flash-boot.sh                                  # usage line, exits 1 - it is executable
 ```
 
 If `--check` fails, stop. Every write in this runbook depends on that file being
@@ -146,7 +147,27 @@ tools/restore-stock-boot.sh --twrp      # push + dd, from the TWRP-visible path
 
 Then reboot and establish that Android comes back (that is the A/B control from
 step 3, and it is worth having before any more payloads), and only then return to
-step 4.
+step 4 — where the write is `tools/flash-boot.sh --twrp <image>`, the same single
+command as the fastboot route. Step 4a names it; the `--twrp` flag exists so that
+step 4 is still runnable when this step is the one that got the phone back.
+
+**TWRP is also the only route that can answer the bootloader-side question.**
+`fastboot-capture.sh` cannot read `misc` through ABL — it can only ask ABL what
+ABL thinks, and a missing answer is exactly the condition being investigated.
+From TWRP, with ABL out of the path entirely:
+
+```sh
+adb shell 'dd if=/dev/block/by-name/misc bs=4096 count=1' | od -c | head
+```
+
+`misc` was all zeros before the P2 write. A bootloader command block appearing in
+it means **ABL marked the boot unbootable after a failed attempt** — there are no
+A/B slots here, so this is the non-multislot flag `fastboot-capture.sh` reports as
+`Non Multi-slot: Unbootable`, and it means the fastboot is a *consequence* of our
+image being tried, not a refusal of it. That is a materially different verdict
+from "the image was rejected", and it is the one reading that would say P2 was
+reached. Worth doing on the same trip in, since getting here costs a power-button
+sequence and the pstore log is the thing that does not survive it.
 
 One cost to know about, because it is easy to lose the thing you came for:
 reaching TWRP this way is a power-button path, and a pstore log does not survive
@@ -299,23 +320,53 @@ The other evidence, in the order it costs you something:
    survives a boot that died before `simpledrm` bound.
 
 ```sh
-fastboot flash boot work/out/boot-pstore-raw-noefi.img    # or the next one down
+tools/flash-boot.sh work/out/boot-pstore-raw-noefi.img    # or the next one down
 ```
 
-(or, from TWRP, `adb push` + `dd`, which is what `restore-stock-boot.sh --twrp`
-does and which does not depend on ABL's fastboot answering at all — use that if
-the fastboot route has just stranded itself.)
+Not `fastboot flash boot` directly, for two reasons that both cost a session
+when they bite. It **reads the partition back and compares it** to the file, so
+"the write landed" is established rather than assumed — `fastboot flash` verifies
+its own transfer, but a wrong file or a partial write after a USB drop is
+indistinguishable from success at the prompt. And it takes the TWRP route
+(`--twrp`) as easily as the fastboot one, which matters because TWRP does not go
+through ABL's fastboot at all. If step 1b was reached — the image in `boot`
+wedging ABL, so every reset reproduces it — then TWRP is not the fallback, it is
+the only route, and a runbook whose step 4 says `fastboot flash` has no way to run.
+
+There is a counter-intuitive consequence of the port dropping its link roughly
+once a minute, worth stating because the usual advice is the opposite: **for a
+large payload, prefer TWRP.** `fastboot flash` has no cancel — killing it
+mid-download strands the bootloader until a physical reset, which is how the first
+wedge happened. A link drop during `adb push` fails the push and nothing else, and
+the push can simply be retried.
 
 **4b/4c. The two UEFI variants** — `Mu-gauguin-stock-gzip.img` (stock-shaped,
 compressed kernel, dummy ramdisk) and `Mu-gauguin-stock-none.img` (the same but
-uncompressed). These test whether P2's silence is the same problem as P1's
-refusal: if 4a changes nothing at all — same `fbreason`, same screen — then the
-two builds fail for different reasons, and the UEFI side needs its own
-investigation rather than more payload variants.
+uncompressed). Their value is that each pairs with a P1 variant on the one
+property that is easy to blame: `-gzip` against 4/5, `-none` against 1/2/3. Read
+the pair, not the attempt.
 
-After each: if `oem fbreason` changes to `LoadImageAndAuth Fail`, the payload is
-being reached and the difference between this attempt and the last one is the
-variable that matters.
+The interpretation that is tempting and wrong is "4b/4c changed nothing, so UEFI
+fails for a different reason than the kernel". The reverse is what the evidence
+says. Seven images that share a **v2 header, our DTB in the declared DTB slot, and
+ABL's load-and-authenticate path**, and differ in the kernel inside them, all
+producing the *same* result, is an argument that the variable is in the part they
+share — the packaging and the bootloader path — not in any kernel property. A
+shared outcome across everything we build points at ABL, and at that point more
+payload variants are the wrong next step; the questions become `oem fbreason`,
+the auth result, and whether ABL's DTB slot is really used as-is.
+
+The pairwise comparison is what separates the two:
+
+| what 4b/4c do relative to 4a | what it means |
+|---|---|
+| `-gzip` matches 4/5 and `-none` matches 1/2/3 | the property that differs *between* those groups is the live variable; the UEFI code is not implicated yet |
+| `-gzip` and `-none` agree with each other but **not** with their P1 partners | compression is not the variable; what differs is the payload, so P2 has its own problem and the UEFI side needs its own investigation |
+| 4b/4c differ from each other, and follow their P1 partners | compression is the variable, and it acts on ABL's path rather than on the kernel — the `Decompress kernel size` check above is the candidate |
+
+After each attempt, the rule is the same as 4a: a change in `oem fbreason` is the
+signal, and the difference between this attempt and the one it is paired with is
+the variable that matters.
 
 ## Step 4.5 — Read the log back, before touching the power button
 

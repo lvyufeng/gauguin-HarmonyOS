@@ -109,7 +109,10 @@ twrp)
     ;;
 esac
 
-cat <<EOF
+# Quoted delimiter: the backticks in this block are markdown, not substitution.
+# Unquoted, this line runs tools/fastboot-capture.sh as a command the moment the
+# block renders - at the end of a restore, unasked, while the phone is rebooting.
+cat <<'EOF'
 
 Done. Now reboot and watch: the phone should boot Android normally.
 
