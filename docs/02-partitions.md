@@ -203,20 +203,37 @@ GPT header's own `MyLBA` field — necessary because a 4096-byte-sector LUN has 
 at byte 4096, which is also LBA 8 of a 512-byte-sector disk, and only one of those readings
 checks out.
 
-74 partitions carved from `sde` and `sdf`, all with their signatures verified:
+74 partitions are carved in total — the 62 in `sde` plus the 5 in `sdf`, plus
+the 7 across `sdb`/`sdc`/`sdd`. All with their signatures verified where a
+signature is known:
 
 | | |
 |---|---|
 | `boot` | 128 MB, `ANDROID!` — the stock boot image |
-| `abl`, `ablbak` | XBL itself 
+| `abl`, `ablbak` | XBL itself (ELF32 ARM) |
 | `xbl`, `xblbak`, `xbl_config`, `xbl_configbak` | bootloader and its config |
 | `tz`, `tzbak` | TrustZone |
 | `vbmeta`, `vbmeta_system`, `vbmeta_product`, `vbmeta_vendor`, `vbmeta_odm` | all five AVB tables |
 | `modem`, `dsp`, `bluetooth`, `aop`, `hyp`, `cmnlib*`, `keymaster*`, `uefisecapp*` | the rest of the firmware |
 
-`abl` is the one that matters most: it is XBL, the thing that runs `fastboot` and decides
+`abl` is the one that matters most: it is the thing that runs `fastboot` and decides
 whether the phone boots at all. Before this it was reachable only through the whole-LUN
 image.
+
+Two of the entries in the signature table were wrong when it was first written, and the
+carve is what caught them:
+
+- `dtbo` was checked for the bare DTB magic `\xd0\x0d\xfe\xed`. An Android **DTBO
+  image** is not a bare DTB: it has its own 32-byte header, magic `\xd7\xb7\xab\x1e`,
+  and the DTBs it carries start at offset 0x280. The real magic is now checked.
+- `logo` was checked for PNG magic. On this device it is zeros. The entry is gone
+  rather than left to fail — a signature that can never match trains you to ignore
+  the warning.
+
+Also, `vbmeta_product`, `vbmeta_vendor` and `vbmeta_odm` are **all zeros** — they are
+allocated partitions with nothing in them. Only `vbmeta` and `vbmeta_system` are real
+AVB images, which fits the picture in `docs/07`: this ROM's build fingerprint is
+`userdebug/test-keys` and `vbmeta` sets `VERIFICATION_DISABLED`.
 
 ### Note on `sde`'s partition count
 

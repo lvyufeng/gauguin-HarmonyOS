@@ -29,10 +29,13 @@ import sys
 SIGNATURES = {
     "boot":      (b"ANDROID!", 0),
     "recovery":  (b"ANDROID!", 0),
-    "dtbo":      (b"\xd0\x0d\xfe\xed", 0),   # DTB magic, big-endian
+    # An Android DTBO image is not a bare DTB - it has its own 32-byte header
+    # with the magic 0xd7b7ab1e, and the DTBs it carries start further in.
+    "dtbo":      (b"\xd7\xb7\xab\x1e", 0),
     "vbmeta":    (b"AVB0", 0),
     "vbmeta_system": (b"AVB0", 0),
-    "logo":      (b"\x89PNG", 0),
+    # `logo` is zeros on this device, not a PNG. Left out rather than asserted
+    # wrongly: a signature that never matches is worse than no signature.
     # `abl` is an ELF32 ARM executable (entry 0x9fa00000) with no section
     # headers, so there is nothing to check but the ELF magic. The EFI volume
     # inside it is an LZMA stream at offset 0x3078 - not gzip, and not at the

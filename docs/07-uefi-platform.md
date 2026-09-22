@@ -388,6 +388,92 @@ Read back from the device and hashed against the host file:
 Identical. And the whole part changes hash (`50ef59be…` → `6915a6ac…`), so the
 write landed where it was aimed rather than being silently dropped.
 
+### Before blaming the payload: what is ruled out
+
+A silent failure invites guessing at the payload, so the first thing done after
+the observation was to check the things that would make *any* image fail, and
+to check the payload against its own claims rather than against memory.
+
+**AVB does not gate `boot` on this device.** `part-vbmeta.img` parses as a
+well-formed AVB image whose header carries `flags = 0x2`, which is
+`AVB_VBMETA_IMAGE_FLAGS_VERIFICATION_DISABLED`. The two halves of that:
+
+```
+vbmeta         libavb 1.0  alg=SHA256_RSA4096  flags=0x2  release=avbtool 1.1.0
+vbmeta_system  libavb 1.0  alg=SHA256_RSA2048  flags=0x0
+fingerprint    Redmi/edgeration_gauguin/gauguin:11/RQ2A.210505.003/…:userdebug/test-keys
+```
+
+`userdebug` + `test-keys` + verification disabled is a device that does not
+authenticate `boot`. (`vbmeta_product`, `vbmeta_vendor` and `vbmeta_odm` are
+allocated but entirely zero.) So a modified `boot` is not being refused by
+verified boot — and the previously-considered "ABL reported
+`Failed to load/authenticate boot image`" reading is not supported either: that
+string exists in ABL, but nothing here is asking it to authenticate.
+
+**The appended DTB is the right board's.** Decompiling the DTB out of our image
+gives `qcom,msm-id = <0x1b2 0x10000 0x1cb 0x10000>` and
+`qcom,board-id = <0x23 0x00>`. Parsing the stock `dtbo` (19 entries) shows
+entry **13** is
+
+```
+13  249086 bytes  msm=<0x1b2 0x10000 0x1cb 0x10000>  board=<0x23 0x00>
+    "Qualcomm Technologies, Inc. Gauguin"
+```
+
+The only board-id `0x23` in the whole table, and it is gauguin's. This is a
+claim that had been recorded earlier from a summary; it is now checked against
+the partition rather than trusted.
+
+**The boot image is laid out the way the framework intends.** Parsed field by
+field, ours and the reference `Mu-surya.img` are byte-for-byte the same shape:
+
+| field | ours | surya | stock |
+|---|---|---|---|
+| `header_version` | 1 | 1 | 2 |
+| `page_size` | 0x800 | 0x800 | 0x1000 |
+| `kernel_addr` | 0x10008000 | 0x10008000 | 0x8000 |
+| `ramdisk_addr` | 0x11000000 | 0x11000000 | 0x1000000 |
+| `tags_addr` | 0x10000100 | 0x10000100 | 0x100 |
+| `ramdisk_size` | 5 (`"dummy"`) | 5 (`"dummy"`) | 0xe8624 |
+| `os_version` | 0 | 0 | 0x16000155 |
+
+Being identical to a working reference is the point: whatever ABL objects to,
+it would object to on surya as well. And the regions are where the header says
+they are — `kernel` at 0x800 holds the gzip stream, and the 71,737-byte DTB is
+appended **inside** `kernel_size`, which is what ABL's
+`DTB offset is incorrect, kernel image does not have appended DTB` is checking
+for.
+
+**BootShim decompresses and checks out.** The kernel region is
+`gzip(BootShim.bin + SILICIUM_UEFI.fd) + DTB`. Decompressing it gives exactly
+`0x300070` bytes = 112 + 0x300000, and the first 112 bytes are BootShim:
+
+```
+0x00  81 03 00 10 0f 00 00 14   adr x1, _Payload ; b _Start
+0x08  00 00 c0 9f 00 00 00 00   _StackBase = 0x9fc00000   == FD_BASE
+0x10  00 00 30 00 00 00 00 00   _StackSize = 0x300000     == FD_SIZE
+0x38  41 52 4d 64               "ARMd" - the ARM64 header magic, 0x644d5241
+```
+
+(The magic is the u32 `0x644d5241`, whose little-endian bytes are `ARMd`. The
+source's `.ascii "ARM\x64"` produces exactly those four bytes — `\x64` is a hex
+escape for `d`, not three characters. Reading the doc's phrasing as
+`ARM` + backslash + `x` + `64` would send you looking for a bug that is not
+there; and the offset is right, because 8 bytes of instructions plus six
+`.quad`s is 0x38.)
+
+The FD that follows starts with `0e 2a 00 14`, the branch to the PEI core
+entry, and its firmware volume header carries
+`EFI_FIRMWARE_FILE_SYSTEM3_GUID` with `FvLength = 0x300000` — matching
+`FD_SIZE` and the `UEFI FD` region `0x9FC00000/0x00300000` in this board's own
+`uefiplat.cfg`.
+
+So: format right, addresses right, board right, verification off. **Nothing in
+the image is known to be wrong, and it still does not run.** That is a much
+more useful position than "the payload might be broken", and it moves the
+question to ABL's decision rather than the file's contents.
+
 ### `fastboot getvar kernel` returns `uefi`, and it means nothing
 
 After rebooting, the device came up in **fastboot**, and `getvar all` reported:
