@@ -16,3 +16,7 @@ workspace/
 __pycache__/
 *.pyc
 .venv/
+
+# UEFI platform package output — regenerated from device/dxe by
+# tools/make_xbl_binaries.py, which is why the blobs are not duplicated here.
+uefi/Binaries/

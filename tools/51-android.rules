@@ -1,0 +1,31 @@
+# udev rules for Android devices over USB.
+#
+# This machine had none, which is why `adb devices` can show a device as
+# "no permissions" (or fail silently) even when the kernel has enumerated it
+# fine: the USB device node is root-only by default and adb runs as the
+# desktop user.
+#
+# 0666 is used rather than GROUP="plugdev" because being in a group is an
+# extra thing to get wrong and this is a single-user workstation. Tighten to
+# 0660 + GROUP if that ever matters.
+
+# Google / Android - adb and fastboot both present these.
+SUBSYSTEM=="usb", ATTR{idVendor}=="18d1", MODE="0666"
+
+# Xiaomi.
+SUBSYSTEM=="usb", ATTR{idVendor}=="2717", MODE="0666"
+
+# Qualcomm - EDL (9008), diagnostics, and the raw bootloader states.
+SUBSYSTEM=="usb", ATTR{idVendor}=="05c6", MODE="0666"
+
+# The rest, so a borrowed test device is not a surprise.
+SUBSYSTEM=="usb", ATTR{idVendor}=="0bb4", MODE="0666"   # HTC
+SUBSYSTEM=="usb", ATTR{idVendor}=="0e8d", MODE="0666"   # MediaTek
+SUBSYSTEM=="usb", ATTR{idVendor}=="04e8", MODE="0666"   # Samsung
+SUBSYSTEM=="usb", ATTR{idVendor}=="1004", MODE="0666"   # LG
+SUBSYSTEM=="usb", ATTR{idVendor}=="12d1", MODE="0666"   # Huawei
+SUBSYSTEM=="usb", ATTR{idVendor}=="22b8", MODE="0666"   # Motorola
+SUBSYSTEM=="usb", ATTR{idVendor}=="2a70", MODE="0666"   # OnePlus
+SUBSYSTEM=="usb", ATTR{idVendor}=="2e04", MODE="0666"   # Nothing
+SUBSYSTEM=="usb", ATTR{idVendor}=="0fce", MODE="0666"   # Sony
+SUBSYSTEM=="usb", ATTR{idVendor}=="2916", MODE="0666"   # Yota

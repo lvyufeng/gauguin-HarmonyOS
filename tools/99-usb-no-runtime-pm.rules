@@ -1,10 +1,26 @@
-# Keep the Thunderbolt 3 USB controller (Intel JHL6340, Alpine Ridge) out of
-# runtime suspend.
+# Keep this machine's USB controllers out of runtime suspend.
 #
-# This machine has a JHL6340 Thunderbolt controller whose USB ports go to
-# D3cold when idle. On this box that makes it reset roughly once a minute
-# ("Host not accessible, reset failed" then a re-register), which drops any
-# attached device - an attached phone disappears from adb/fastboot within
-# seconds of enumerating. Verified: with runtime PM disabled the resets stop.
+# Originally written for the Thunderbolt 3 controller alone (Intel JHL6340,
+# Alpine Ridge, 8086:15db), whose ports drop to D3cold when idle. On this box
+# that made it reset roughly once a minute - "Host not accessible, reset
+# failed" then a re-register - which dropped any attached device, so a phone
+# vanished from adb/fastboot within seconds of enumerating.
+#
+# Broadened to every xHCI controller on the machine, because the chipset
+# controller (8086:9ded, Cannon Point-LP) ships with `power/control=auto` too,
+# and it is the port that should be used for flashing work: a device that
+# suspends mid-transfer looks exactly like a broken phone or a broken cable.
+# `d3cold_allowed=0` stops the controller being powered down; `power/control=on`
+# stops runtime suspend being entered at all.
+#
+# Verify with:
+#   cat /sys/bus/pci/devices/0000:6c:00.0/power/runtime_status   # -> active
+#   sudo journalctl -f | grep -E 'xhci|Host not accessible'      # -> silence
+
+# Thunderbolt 3 JHL6340 - the flaky one.
 ACTION=="add", SUBSYSTEM=="pci", ATTR{vendor}=="0x8086", ATTR{device}=="0x15db", \
+    ATTR{power/control}="on", ATTR{d3cold_allowed}="0"
+
+# Cannon Point-LP chipset xHCI - the port to prefer.
+ACTION=="add", SUBSYSTEM=="pci", ATTR{vendor}=="0x8086", ATTR{device}=="0x9ded", \
     ATTR{power/control}="on", ATTR{d3cold_allowed}="0"

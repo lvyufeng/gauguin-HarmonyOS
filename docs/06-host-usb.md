@@ -66,6 +66,106 @@ ACTION=="add", SUBSYSTEM=="pci", ATTR{vendor}=="0x8086", ATTR{device}=="0x15db",
     ATTR{power/control}="on", ATTR{d3cold_allowed}="0"
 ```
 
+## There is a second, deeper cause — found later
+
+The runtime-PM fix above **was not sufficient**. A later session with the device
+disconnected showed the controller still flapping, and this time there was no
+device on it to blame:
+
+```
+19:52:31 xhci_hcd 0000:6c:00.0: xHCI host controller not responding
+19:52:31 xhci_hcd 0000:6c:00.0: USB bus 4 deregistered
+19:52:38 usb usb3: New USB device found, idVendor=1d6b, idProduct=0002   <- root hub, back again
+19:52:42 xhci_hcd 0000:6c:00.0: xHCI host controller not responding      <- 4s later
+19:52:42 xhci_hcd 0000:6c:00.0: USB bus 3 deregistered
+```
+
+with `power/control=on`, `d3cold_allowed=0` and `usbcore.autosuspend=-1` **all
+already in effect**. So runtime PM is not the whole story. What the log shows is
+the *PCIe link itself* going down, one layer below USB:
+
+```
+pcieport 0000:00:1c.4: pciehp: Slot(8): Link Down
+pcieport 0000:00:1c.4: pciehp: Slot(8): Card not present
+pcieport 0000:00:1c.4: pciehp: Slot(8): Card present
+pcieport 0000:00:1c.4: pciehp: Slot(8): Link Up
+```
+
+Measured rate: **two link-downs in 100 seconds**, versus the chipset controller
+(`0000:00:14.0`, bus 1) which has never once dropped the mouse attached to it.
+
+The correlating detail: the downstream Thunderbolt ports (`03:02.0` and
+`6c:00.0`) have **`LnkCtl: ASPM L0s L1 Enabled`**, while the upstream links
+(`00:1c.4`, `02:00.0`) are `ASPM Disabled`. The switch is left in an
+aggressive-L1 state on a link whose partner is a flapping Thunderbolt bridge.
+The registered policy is already `performance`; the per-link setting is what
+disagrees, and `pcie_aspm=off` on the kernel command line is the way to force it
+(the sysfs policy file is read-only on this build).
+
+### What this means in practice
+
+**Use a non-Thunderbolt port.** The chipset controller's ports are stable and
+should be the only ones used for flashing work. On this machine that means the
+USB-A ports, not the Type-C one — the Type-C is wired to the JHL6340.
+
+## Distinguishing "phone is off" from "host ate the phone"
+
+These look identical from `adb devices`. The kernel log separates them, and the
+distinction matters because only one of them is fixable in software:
+
+- **No `New USB device found` line at all** — the phone never reached the host.
+  Cable, port, or the phone is off. No driver work will fix this.
+- **`New USB device found` followed by a disconnect** — the host enumerated it
+  and dropped it. That is the controller problem above.
+
+`tools/watch-usb.sh` prints this live, labels each event, and names recognised
+vendors, so the two cases are distinguishable while the cable is still in hand.
+
+### The definitive test: xHCI port registers
+
+The kernel exposes the raw port state, which settles the question without
+guessing:
+
+```sh
+sudo ls /sys/kernel/debug/usb/xhci/0000:6c:00.0/ports/
+sudo head -1 /sys/kernel/debug/usb/xhci/0000:6c:00.0/ports/port01/portsc
+```
+
+`Powered Not-connected Disabled Link:RxDetect` means the host is looking for a
+receiver and finding none — **nothing is electrically presenting itself on that
+port**. `Connected` means there is a device there, whatever adb thinks.
+
+Checked across all 22 ports of both controllers (chipset 18, Thunderbolt 4):
+the mouse's port reads `Connected Enabled Link:U0`, every other port reads
+`Not-connected Link:RxDetect`.
+
+That is the answer to "the phone is plugged in but nothing sees it": **a phone
+whose USB device controller is not pulling up D+ is indistinguishable from an
+empty port.** A powered-off phone does that. So does a phone sitting in a hung
+kernel that has reset the DWC3 controller without binding a gadget driver —
+which is exactly the state the last `fastboot boot` of an unsupported mainline
+kernel is expected to leave it in.
+
+This is why the required action is physical: **hold Power for 20 seconds** (or
+Power + Volume Down for 15) to force a hard reset, then let it boot.
+
+### Corroborating timeline
+
+The phone last presented on `usb 3-1` at 18:54:45 and vanished at 18:55:01,
+during the `fastboot boot` of the P1 image. Over the next hour the Thunderbolt
+controller re-registered its buses **twelve** times, and port 3-1 never once
+re-detected a device. A plugged-in, powered-on phone with a live USB PHY would
+have re-enumerated on at least one of those. It did not.
+
+## Missing Android udev rules
+
+This machine had **no** Android udev rules at all, which is a third way a
+working connection looks broken: the USB device node is root-only by default and
+`adb` runs as the desktop user, so `adb devices` can report `no permissions` or
+show nothing even though the kernel enumerated the phone cleanly.
+
+Added as `/etc/udev/rules.d/51-android.rules` (13 vendor IDs, `MODE="0666"`).
+
 ## If a device still will not appear
 
 1. **Prefer a non-Thunderbolt port.** On this machine the JHL6340 is the flaky
