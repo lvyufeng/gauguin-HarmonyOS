@@ -48,6 +48,19 @@ READ_LOCK_STATUS   = TRUE
   INF MdeModulePkg/Universal/SmbiosDxe/SmbiosDxe.inf
   INF SiliciumPkg/Drivers/SmBiosTableDxe/SmBiosTableDxe.inf
 
+  #
+  # NOTE: BootManagerMenuApp is NOT listed here, and must not be.
+  #
+  # It already reaches the firmware volume through the DSC chain, and listing it
+  # again fails the build with the 111th and 117th files sharing GUID
+  # EEC25BDC-67F2-4D95-B1D5-F81B2039D11D. Which is the useful part: it means
+  # BdsDxe's PcdBootManagerMenuFile fallback does resolve, so a device with no
+  # OS installed has something it can put on the screen - SiliciumPkg's boot
+  # manager draws "[Volume Up] Boot Manager" on the console during its timeout,
+  # and this is the menu that message promises. On a phone with no UART that is
+  # the difference between a working firmware and a dead one.
+  #
+
   # ACPI
   INF MdeModulePkg/Universal/Acpi/AcpiTableDxe/AcpiTableDxe.inf
   INF MdeModulePkg/Universal/Acpi/AcpiPlatformDxe/AcpiPlatformDxe.inf

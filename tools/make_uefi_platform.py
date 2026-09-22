@@ -269,7 +269,25 @@ GAUGUIN_DSC = """##
   BUILD_TARGETS                  = RELEASE|DEBUG
   SKUID_IDENTIFIER               = DEFAULT
   FLASH_DEFINITION               = gauguinPkg/gauguin.fdf
-  USE_CUSTOM_DISPLAY_DRIVER      = 1
+  #
+  # Display driver.
+  #
+  #   1 = Qualcomm's DisplayDxe, which knows this panel and re-initialises it
+  #       from the panel XML. This is the goal, but it is also the least
+  #       forgiving failure mode: a wrong timing or panel ID gives a black
+  #       screen and no information at all.
+  #
+  #   0 = SiliciumPkg's SimpleFbDxe, which draws a text console onto the
+  #       framebuffer the bootloader already set up (it locates the "Display
+  #       Reserved" region - which this board's own uefiplat.cfg defines at
+  #       0xA0000000). Because the bootloader has just painted the boot logo
+  #       there, text lands on a live framebuffer without any panel work.
+  #
+  # Both lists are already in DXE.inc/APRIORI.inc behind
+  # `!if $(USE_CUSTOM_DISPLAY_DRIVER) == 1`, so this one value switches the
+  # whole thing. See docs/07 for why the first flash test used 0.
+  #
+  USE_CUSTOM_DISPLAY_DRIVER      = {display}
 
   #
   # 0 = SM7225 (Snapdragon 750G)
@@ -372,6 +390,19 @@ READ_LOCK_STATUS   = TRUE
   # SmBios
   INF MdeModulePkg/Universal/SmbiosDxe/SmbiosDxe.inf
   INF SiliciumPkg/Drivers/SmBiosTableDxe/SmBiosTableDxe.inf
+
+  #
+  # NOTE: BootManagerMenuApp is NOT listed here, and must not be.
+  #
+  # It already reaches the firmware volume through the DSC chain, and listing it
+  # again fails the build with the 111th and 117th files sharing GUID
+  # EEC25BDC-67F2-4D95-B1D5-F81B2039D11D. Which is the useful part: it means
+  # BdsDxe's PcdBootManagerMenuFile fallback does resolve, so a device with no
+  # OS installed has something it can put on the screen - SiliciumPkg's boot
+  # manager draws "[Volume Up] Boot Manager" on the console during its timeout,
+  # and this is the menu that message promises. On a phone with no UART that is
+  # the difference between a working firmware and a dead one.
+  #
 
   # ACPI
   INF MdeModulePkg/Universal/Acpi/AcpiTableDxe/AcpiTableDxe.inf
@@ -934,6 +965,10 @@ def main():
                     help="extracted DXE drivers (default: <repo>/device/dxe)")
     ap.add_argument("--mu", default=None,
                     help="Mu-Silicium checkout (default: <repo>/work/uefi/Mu-Silicium)")
+    ap.add_argument("--display", choices=("qcom", "simple"), default="qcom",
+                    help="qcom = Qualcomm DisplayDxe (the goal); "
+                         "simple = SiliciumPkg SimpleFbDxe (diagnostic, needs no "
+                         "panel bring-up). Default: qcom")
     args = ap.parse_args()
 
     cfg = os.path.join(args.repo, "device/config/uefiplat.cfg")
@@ -1001,7 +1036,9 @@ def main():
 
     guid_table = load_guid_table(mu_root)
     model["raw_inc"] = emit_raw_inc(dxe_dir, guid_table, "gauguin")
-    model["dsc"] = GAUGUIN_DSC
+    model["dsc"] = GAUGUIN_DSC.format(display=1 if args.display == "qcom" else 0)
+    print(f"display driver: "
+          f"{'Qualcomm DisplayDxe' if args.display == 'qcom' else 'SimpleFbDxe'}")
     model["devicebuild"], ndev = emit_devicebuild(ref_dir, "gauguin", "gauguinPkg")
     print(f"wrote DXE.inc / APRIORI.inc ({len(have)} drivers), "
           f"RAW.inc ({len(glob.glob(os.path.join(dxe_dir, '*.raw')))} files, "

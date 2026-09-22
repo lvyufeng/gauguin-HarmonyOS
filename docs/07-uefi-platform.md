@@ -366,3 +366,95 @@ Two lessons:
 
 `boot` was never at risk in either incident: `fastboot boot` writes nothing, and
 the wedge was in ABL's download state machine, not in the partition.
+
+## The image is written to `boot`, and the first real boot attempt
+
+With the user's authorization, `Mu-gauguin.img` was written to the `boot`
+partition — the first write to device storage in this project. It was done from
+TWRP with `dd`, not with `fastboot flash`, so TWRP stayed available throughout:
+
+```
+dd if=/tmp/mu-gauguin.img of=/dev/block/by-name/boot bs=4096 conv=notrunc
+274+0 records in / 274+0 records out / 1122304 bytes copied
+```
+
+Read back from the device and hashed against the host file:
+
+| | SHA-256 |
+|---|---|
+| device, first 1,122,304 bytes of `boot` | `374555a5…bdbdde` |
+| `head -c 1122304 work/uefi/Mu-Silicium/Mu-gauguin.img` | `374555a5…bdbdde` |
+
+Identical. And the whole part changes hash (`50ef59be…` → `6915a6ac…`), so the
+write landed where it was aimed rather than being silently dropped.
+
+### `fastboot getvar kernel` returns `uefi`, and it means nothing
+
+After rebooting, the device came up in **fastboot**, and `getvar all` reported:
+
+```
+(bootloader) product:gauguinpro
+(bootloader) is-userspace:no
+(bootloader) kernel:uefi
+```
+
+That last line is tempting to read as "ABL examined our image and recognised a
+UEFI kernel". It is not. Decompressing ABL's own EFI volume (an LZMA stream at
+offset `0x3078` of `part-abl.img`, props `0x5D`, yielding 917,704 bytes) shows
+`kernel` and `uefi` as **adjacent entries in ABL's hardcoded fastboot variable
+table**:
+
+```
+...  getvar:  download:  kernel  uefi  max-download-size  is-userspace ...
+```
+
+It is `fastboot_publish("kernel", "uefi")` — a constant of this build, present
+whatever is in `boot`. `version-bootloader:` and `version-baseband:` are empty
+in the same table, which is the same story: this ABL is a stripped release
+build. **No fastboot variable on this device reports anything about the boot
+attempt.**
+
+### What ABL can tell us about why it entered fastboot
+
+The same volume gives the list of ways in. ABL's fastboot entry points are:
+
+- a BCB command in `misc` (`reboot-fastboot`, `boot-fastboot`) — `misc` was
+  checked immediately before the reboot and was **all zeros**;
+- a key combination held at power-on;
+- `HandleActiveSlotUnbootable` — which **reboots** rather than serving fastboot;
+- the `oem edl` / `oem poweroff` commands.
+
+There is no "boot failed, so enter fastboot" path in the string table. ABL's
+banner is `FastBoot Mode`, and the failures on the boot path (`Failed to
+load/authenticate boot image: %r`, and the ten validation messages above) are
+reported to the UART this phone does not have.
+
+The observation itself, from the host side:
+
+```
+21:54:43  adb reboot
+21:54:49  usb 3-1: new high-speed USB device number 2
+21:54:49  ENUMERATED  18d1:d00d   (iProduct "Android", iInterface "fastboot")
+```
+
+Six seconds, then ABL's fastboot descriptor. **No further USB event followed** —
+no disconnect, no re-enumeration. So ABL did not hand control to anything and
+then reset back; it enumerated as fastboot once and stayed there. Whether it
+attempted the boot at all is not established by this, and is the open question.
+
+### The transfer-abort hazard, again — and it is worth a rule
+
+`fastboot getvar all` was piped into `head -45`. `head` exits once it has its
+lines, fastboot is killed with `SIGPIPE` partway through reading the response,
+and ABL is left mid-reply. Every fastboot command after that hung until the
+device was reset, while `fastboot devices` still worked — because that only
+reads the USB descriptor and never talks to ABL at all, which is exactly what
+makes it a misleading "the device is fine" signal.
+
+This is the second time an aborted transfer has stranded ABL. The rule is
+narrower than "do not abort a transfer" and worth stating precisely:
+
+> **Never put a `fastboot` command in a pipeline that can close early.** Redirect
+> to a file and read the file. `fastboot devices` succeeding says nothing about
+> whether ABL is responsive.
+

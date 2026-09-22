@@ -33,7 +33,11 @@ SIGNATURES = {
     "vbmeta":    (b"AVB0", 0),
     "vbmeta_system": (b"AVB0", 0),
     "logo":      (b"\x89PNG", 0),
-    "abl":       (b"\x1f\x8b", 0),           # gzip-compressed FV
+    # `abl` is an ELF32 ARM executable (entry 0x9fa00000) with no section
+    # headers, so there is nothing to check but the ELF magic. The EFI volume
+    # inside it is an LZMA stream at offset 0x3078 - not gzip, and not at the
+    # start of the partition, so neither is usable as a signature.
+    "abl":       (b"\x7fELF", 0),
 }
 
 GPT_SIG = b"EFI PART"

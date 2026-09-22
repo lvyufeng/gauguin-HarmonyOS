@@ -17,7 +17,25 @@
   BUILD_TARGETS                  = RELEASE|DEBUG
   SKUID_IDENTIFIER               = DEFAULT
   FLASH_DEFINITION               = gauguinPkg/gauguin.fdf
-  USE_CUSTOM_DISPLAY_DRIVER      = 1
+  #
+  # Display driver.
+  #
+  #   1 = Qualcomm's DisplayDxe, which knows this panel and re-initialises it
+  #       from the panel XML. This is the goal, but it is also the least
+  #       forgiving failure mode: a wrong timing or panel ID gives a black
+  #       screen and no information at all.
+  #
+  #   0 = SiliciumPkg's SimpleFbDxe, which draws a text console onto the
+  #       framebuffer the bootloader already set up (it locates the "Display
+  #       Reserved" region - which this board's own uefiplat.cfg defines at
+  #       0xA0000000). Because the bootloader has just painted the boot logo
+  #       there, text lands on a live framebuffer without any panel work.
+  #
+  # Both lists are already in DXE.inc/APRIORI.inc behind
+  # `!if $(USE_CUSTOM_DISPLAY_DRIVER) == 1`, so this one value switches the
+  # whole thing. See docs/07 for why the first flash test used 0.
+  #
+  USE_CUSTOM_DISPLAY_DRIVER      = 0
 
   #
   # 0 = SM7225 (Snapdragon 750G)
