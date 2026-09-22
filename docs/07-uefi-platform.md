@@ -327,7 +327,6 @@ transition, or takes it with the same entry conventions a chain-loaded payload
 needs, is not known.
 
 ### Why the supported path is probably `fastboot flash boot`
-
 `Mu-gauguin.img` is not an arbitrary payload. It is an Android boot image, and
 BootShim is built with `REQUIRES_KERNEL_HEADER=1`, which places the literal
 `ARM\x64` magic at **offset 0x38 of the payload** — the ARM64 kernel image
@@ -364,6 +363,76 @@ Failed to load/authenticate boot image: %r
 with `%r` printing as `Load Error` — which is exactly the string P1's
 `fastboot boot` of the mainline kernel produced. So ABL *does* report failures on
 this path; it is not mute.
+
+### P1's image was stock-shaped, and ABL refused it anyway
+
+This is the correction that matters most, and it came from measuring rather than
+reasoning. P1's `work/out/boot.img` — the mainline kernel — was parsed field by
+field against the phone's own `boot` partition:
+
+| field | P1's boot.img | the phone's own boot | |
+|---|---|---|---|
+| `header_version` | 2 | 2 | same |
+| `page_size` | 0x1000 | 0x1000 | same |
+| `header_size` | 1660 | 1660 | same |
+| `kernel_addr` | 0x8000 | 0x8000 | same |
+| `ramdisk_addr` | 0x1000000 | 0x1000000 | same |
+| `tags_addr` | 0x100 | 0x100 | same |
+| `dtb_addr` | 0x01F00000 | 0x01F00000 | same |
+| `dtb_size` | 0x11839 | 0x1D8CDD | different file, same convention |
+| DTB file offset | 0x0E79000 | 0x02BFC000 | both = `page*(1+nk+nr)` |
+| DTB magic there | `d0 0d fe ed` | `d0 0d fe ed` | same |
+
+So P1 was not a malformed image. It used this device's own header parameters,
+declared its DTB the way this device does, and put the DTB at exactly the offset
+this device's layout implies. **ABL rejected it with
+`Failed to load/authenticate boot image`.**
+
+That kills the comfortable hypothesis. It is not true that our images merely had
+the wrong header and would work once the header matched — a stock-shaped image
+was tried, and it failed. Header shape is at best necessary and demonstrably not
+sufficient, and the earlier framing in this document (that the stock/ours header
+difference was a leading explanation) was wrong to lean on it.
+
+**What is common to P1 and P2, and absent from the image that boots:**
+
+| | P1 (refused, "Load Error") | P2 (silent) | stock (boots) |
+|---|---|---|---|
+| header | stock-shaped v2 | v1 / page 0x800 | stock-shaped v2 |
+| kernel | gzip | gzip | **raw** (`00 00 86 14`) |
+| ramdisk | real (279,090 B) | 5-byte `dummy` | real (951,844 B) |
+| AVB footer | absent | absent | **absent too** |
+
+Two candidates survive: **compressed kernels**, and the **`dummy` ramdisk**. The
+third — AVB — is ruled out by the fourth column, since the image that boots has
+no AVB footer either. That is the state of the diagnosis: narrowing, not solved.
+
+### Two stock-shaped variants, built and validated offline
+
+For the next device attempt, `tools/make_boot_image.py` builds the image itself
+rather than letting Mu-Silicium's builder do it, because that builder never
+passes `--pagesize` and so every image it makes is page 2048 / header v1. The
+two profiles are byte-comparable:
+
+- `silicon` reproduces `Mu-gauguin.img` exactly in shape — same 1,122,304 bytes,
+  same header fields, same region offsets. That is the regression check that
+  says the wrapper is right.
+- `stock` matches the phone's own `boot` field for field, including
+  `dtb_addr = 0x01F00000`, `header_size = 1660`, and the DTB placed after the
+  ramdisk at `page*(1+nk+nr)` rather than glued into `kernel_size`.
+
+Both stock variants are built and pass a 9-point structural check (magic, v2
+constants, addresses, DTB magic at the declared offset, file size equals the
+declared regions, BootShim's `adr`/`b` prologue, `ARMd` at 0x38, `_StackBase`
+and `_StackSize` equal to `FD_BASE`/`FD_SIZE`):
+
+```
+work/out/p2-variants/Mu-gauguin-stock-none.img   3,231,744  kernel=raw   9/9
+work/out/p2-variants/Mu-gauguin-stock-gzip.img   1,130,496  kernel=gzip  9/9
+```
+
+The pair exists because the two surviving candidates are exactly "compressed vs
+raw kernel", so one device session can separate them.
 
 **The failure we hit is therefore after the `OKAY`, and that is the problem.**
 `fastboot boot` is answered with `OKAY` as soon as the command is parsed, and the
