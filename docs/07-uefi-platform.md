@@ -227,10 +227,66 @@ needs, is not known.
 ### Why the supported path is probably `fastboot flash boot`
 
 `Mu-gauguin.img` is not an arbitrary payload. It is an Android boot image, and
-BootShim is built with `REQUIRES_KERNEL_HEADER=1`, which makes it carry the
-literal `ARM\x64` kernel magic. Those are the two things a bootloader's
-**normal** boot path checks when it loads the `boot` partition. The image is
-shaped to be accepted from `boot`, not to be chain-loaded from RAM.
+BootShim is built with `REQUIRES_KERNEL_HEADER=1`, which places the literal
+`ARM\x64` magic at **offset 0x38 of the payload** — the ARM64 kernel image
+header convention, and the thing a bootloader checks to recognise a kernel. The
+image is shaped to be accepted from `boot`, not to be chain-loaded from RAM.
+
+*(Verified against the source rather than assumed: BootShim.S's `_Head` is two
+4-byte instructions, then four `.quad`s, putting `.ascii "ARM\x64"` at byte 56
+= 0x38. That is exactly right.)*
+
+### What ABL actually does, read out of ABL itself
+
+The `abl` partition decompresses — the GUIDed section payload is an LZMA stream
+(`props = 0x5D`, dict size `0x01000000`) yielding a 917,704-byte EFI volume.
+Reading its strings answers the question that the silent failure left open.
+
+**`fastboot boot` is implemented.** ABL contains:
+
+```
+Fastboot boot command is not available in locked device
+Boot Command is not allowed in Lock State
+CmdBoot: ClearUnbootable failed
+```
+
+This device reports `unlocked:yes`, so the command is not being refused for lock
+state. It ran.
+
+**And the P1 error came from here:**
+
+```
+Failed to load/authenticate boot image: %r
+```
+
+with `%r` printing as `Load Error` — which is exactly the string P1's
+`fastboot boot` of the mainline kernel produced. So ABL *does* report failures on
+this path; it is not mute.
+
+**The failure we hit is therefore after the `OKAY`, and that is the problem.**
+`fastboot boot` is answered with `OKAY` as soon as the command is parsed, and the
+boot itself happens afterwards. Everything past that point is validated by a
+large set of checks and reported **only to a UART this phone does not have**:
+
+```
+Invalid boot image header / Invalid boot image header: %d
+Image Header version     : 0x%x
+Device Magic does not match
+BootImage is Incomplete
+Decompressing kernel image failed!!!
+Decompress kernel size is smaller than image header size
+DTB offset is incorrect, kernel image does not have appended DTB
+Error: Ramdisk size is over the limit
+Failed Kernel Size   : 0x%x
+```
+
+Ten distinct ways to fail, one silent outcome. **Diagnosing this by guessing at
+the payload is not a plan** — there is no feedback channel on the chain-load
+path at all.
+
+That asymmetry is itself the argument for `fastboot flash boot`: the *normal*
+boot path is the one ABL is built and tested around, and the one whose failures
+it reports. The chain-load path is a side door with no dashboard.
 
 The reference build agrees: `Mu-surya.img` and `Mu-gauguin.img` have identical
 header layout (`header_version = 1`, `page_size = 0x800`,
