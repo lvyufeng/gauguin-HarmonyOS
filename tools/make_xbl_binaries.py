@@ -151,6 +151,69 @@ def present_drivers(dxe_dir):
             if os.path.isfile(os.path.join(dxe_dir, src + ".efi"))}
 
 
+def fix_bmp_offset(data):
+    """Return (bytes, note) with bfOffBits corrected, or (data, None) if fine.
+
+    Seven of the bitmaps in XBL - the battery and thermal indicator images -
+    declare a `bfOffBits` that is exactly 2 bytes short of where their pixel
+    data actually begins. Everything else about them is a standard BMP: the
+    file size, the dimensions and a 4-byte-aligned row stride all agree with
+    each other, and there is a 4-entry palette (biClrUsed = 4) starting at 54
+    that ends at 70, leaving 2 bytes of padding before the data.
+
+    Mu-Silicium's build-time BMP check catches this, and EDK2's decoder would
+    read 2 bytes early and shear every row. Rewriting the one field is safe
+    because the offset it should hold is not a guess - it is `filesize -
+    height * stride`, which the rest of the header already agrees on. The
+    extracted originals in device/dxe/ are left untouched; this only affects
+    what gets packaged.
+    """
+    import struct
+    if len(data) < 54 or data[:2] != b"BM":
+        return data, None
+
+    off, = struct.unpack("<I", data[10:14])
+    width, = struct.unpack("<i", data[18:22])
+    height, = struct.unpack("<i", data[22:26])
+    bpp, = struct.unpack("<H", data[28:30])
+    if width <= 0 or height <= 0 or bpp == 0:
+        return data, None
+
+    stride = ((width * bpp + 31) >> 3) & ~0x3
+    correct = len(data) - abs(height) * stride
+    if off == correct:
+        return data, None
+    if not (0 < correct < len(data)):
+        return data, f"unfixable: computed offset {correct} out of range"
+
+    return data[:10] + struct.pack("<I", correct) + data[14:], \
+        f"bfOffBits {off} -> {correct}"
+
+
+def copy_raw_files(src_dir, dst_dir):
+    """Copy the extracted config/panel/bitmap files, fixing BMP offsets."""
+    os.makedirs(dst_dir, exist_ok=True)
+    copied = fixed = 0
+    for f in sorted(os.listdir(src_dir)):
+        if not f.endswith(".raw"):
+            continue
+        name = f[:-4]
+        path = os.path.join(src_dir, f)
+        if name.endswith(".bmp"):
+            with open(path, "rb") as fh:
+                data = fh.read()
+            data, note = fix_bmp_offset(data)
+            if note:
+                print(f"   {name}: {note}")
+                fixed += 1
+            with open(os.path.join(dst_dir, name), "wb") as fh:
+                fh.write(data)
+        else:
+            shutil.copyfile(path, os.path.join(dst_dir, name))
+        copied += 1
+    return copied, fixed
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("dxe_dir")
@@ -195,15 +258,9 @@ def main():
 
     print(f"wrote {written} driver packages to {out}/QcomPkg/Drivers")
     if args.copy_raw:
-        raw_src = args.dxe_dir
-        raw_dst = os.path.join(out, "RawFiles")
-        os.makedirs(raw_dst, exist_ok=True)
-        n = 0
-        for f in os.listdir(raw_src):
-            if f.endswith(".raw"):
-                shutil.copyfile(os.path.join(raw_src, f), os.path.join(raw_dst, f[:-4]))
-                n += 1
-        print(f"copied {n} raw files to {raw_dst}")
+        n, fixed = copy_raw_files(args.dxe_dir, os.path.join(out, "RawFiles"))
+        print(f"copied {n} raw files to {out}/RawFiles"
+              + (f" ({fixed} BMP offsets corrected)" if fixed else ""))
 
 
 if __name__ == "__main__":

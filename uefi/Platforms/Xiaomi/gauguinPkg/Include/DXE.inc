@@ -4,6 +4,21 @@
 #
 #  Rewritten to Binaries/gauguin/ and filtered to the drivers this
 #  project actually extracted from the device's own XBL.
+#
+#  Packaged under Binaries/gauguin/ but NOT in this file, so not in
+#  the firmware volume. The reference has no line for them. Add an
+#  INF line if any turns out to be needed:
+#    QcomPkg/Drivers/ADSPDxe/ADSPDxe.inf
+#    QcomPkg/Drivers/MinidumpTADxe/MinidumpTADxe.inf
+#    QcomPkg/Drivers/PILDxe/PILDxe.inf
+#    QcomPkg/Drivers/PILProxyDxe/PILProxyDxe.inf
+#    QcomPkg/Drivers/QcomBds/QcomBds.inf
+#    QcomPkg/Drivers/QcomChargerApp/QcomChargerApp.inf
+#    QcomPkg/Drivers/QcomMpmTimerDxe/QcomMpmTimerDxe.inf
+#    QcomPkg/Drivers/QcomWDogDxe/QcomWDogDxe.inf
+#    QcomPkg/Drivers/SecRSADxe/SecRSADxe.inf
+#    QcomPkg/Drivers/VerifiedBootDxe/VerifiedBootDxe.inf
+#    QcomPkg/Drivers/VibratorDxe/VibratorDxe.inf
 ##
   INF MdeModulePkg/Core/Dxe/DxeMain.inf
   INF MdeModulePkg/Universal/PCD/Dxe/Pcd.inf
