@@ -7,9 +7,48 @@ cellular and cameras are permanently out of reach, Wi-Fi/audio/GPU are hard but 
 Each phase ends with a commit. A phase is only "done" when its gate has actually been
 observed on hardware, not when the code compiles.
 
+## Where things actually stand (2026-09-22)
+
+Nothing below is "done" except P0, and no gate has been observed on hardware
+except P0's. This table is the honest state; the sections under it are the plan.
+
+| phase | gate | state |
+|---|---|---|
+| **P0** survey + backup | partitions dumped and verified; no existing port | **done** — 74 partitions carved and signature-checked, `boot`/`abl`/`recovery` hashes match the device, 86 XBL drivers recovered, and `git ls-files Silicon/Qualcomm` confirms no SM7225 package upstream |
+| **P1** mainline kernel | device boots mainline and prints something | **not done** — `Image.gz` + DTB built (`work/out/boot.img`, stock-shaped v2) and `fastboot boot` was refused with `Failed to load/authenticate boot image`; never re-tried |
+| **P2** UEFI skeleton | UEFI reaches a shell on the phone | **gate open** — platform package built, image written to `boot` and verified byte-for-byte, **never observed to execute an instruction** |
+| **P3** ACPI | Windows installer boots and sees UFS | not started — `AcpiTableUpdate` is a deliberate no-op |
+| **P4** Windows | desktop appears | not started — destroys `userdata` |
+| **P5** peripherals | touch, Wi-Fi, GPU, audio | not started |
+
+The commits so far are checkpoints inside P2, not a completed phase. Read the
+phase state from this table, not from the commit titles.
+
+### The one thing blocking progress
+
+The phone needs a **physical reset** — hold the power button ~20s, then a normal
+power-on with no keys held. Everything else is written and waiting:
+
+1. `tools/fastboot-capture.sh` — reads ABL's own `oem uefilog` / `lkmsg` /
+   `lpmsg`, plus `slot-unbootable` / `slot-retry-count`. This is what answers
+   "did ABL try to boot at all".
+2. `tools/restore-stock-boot.sh` — the A/B control: put the stock `boot` back
+   and see whether Android returns.
+3. `work/out/p2-variants/Mu-gauguin-stock-{none,gzip}.img` — two stock-shaped
+   builds, one per surviving candidate (uncompressed vs gzip kernel).
+
+### Standing decisions, with one amendment
+
+The original rule was "**Never write to the device's storage until P4**". That was
+relaxed once, with the user's explicit authorization, to write the `boot`
+partition for the P2 test — and `boot` was backed up and verified beforehand
+precisely so that relaxation would be safe. The rule stands for everything else:
+`userdata`, the partition table, and the firmware LUNs are still off limits
+until P4.
+
 ---
 
-## P0 — Survey, backup, firmware inventory ← **current**
+## P0 — Survey, backup, firmware inventory
 
 **Why first:** the installed ROM is a `user/dev-keys` Smartisan port with no public image.
 Anything that re-partitions storage before a backup exists risks an unrecoverable device.
