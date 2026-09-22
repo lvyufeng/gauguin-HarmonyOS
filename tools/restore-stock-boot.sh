@@ -88,9 +88,23 @@ twrp)
     adb shell 'dd if=/tmp/part-boot.img of=/dev/block/by-name/boot bs=4096 conv=notrunc' \
         || die "dd failed"
     adb shell 'rm -f /tmp/part-boot.img'
-    log "== reading back"
-    dev=$(adb shell "head -c $(stat -c%s "$BACKUP") /dev/block/by-name/boot | sha256sum" | awk '{print $1}')
-    [ "$dev" = "$EXPECT" ] || die "read-back mismatch: device says $dev"
+
+    # Read back with dd, not `head -c`. `head -c` is not reliably present in
+    # the toybox that ships in a recovery image, and this is the one place in
+    # the project where a missing coreutil would be discovered at the worst
+    # possible moment - phone in recovery, partition just overwritten. dd is
+    # in every recovery build. The block count is derived from the file size
+    # rather than hardcoded, so a re-cut backup still verifies.
+    size=$(stat -c%s "$BACKUP")
+    [ $((size % 4096)) -eq 0 ] || die "backup size $size is not a multiple of 4096"
+    blocks=$((size / 4096))
+    log "== reading back ($blocks x 4096 bytes)"
+    dev=$(adb shell "dd if=/dev/block/by-name/boot bs=4096 count=$blocks 2>/dev/null | sha256sum" \
+          | awk '{print $1}')
+    [ "$dev" = "$EXPECT" ] || die "read-back mismatch:
+     device: $dev
+     wanted: $EXPECT
+   The write did not land. Do NOT reboot into the firmware - re-run this."
     log "   ok  device boot partition matches the backup"
     ;;
 esac
