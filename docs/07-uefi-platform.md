@@ -528,6 +528,44 @@ no disconnect, no re-enumeration. So ABL did not hand control to anything and
 then reset back; it enumerated as fastboot once and stayed there. Whether it
 attempted the boot at all is not established by this, and is the open question.
 
+### The next attempt is scripted, because device time is the scarce resource
+
+Answering that question costs one physical reset per attempt — a stranded
+fastboot needs the power button, and the phone has no UART to log to. So the
+next round is a single script rather than a sequence of questions:
+
+```
+tools/fastboot-capture.sh
+```
+
+It probes ABL first and stops with a clear message if ABL is not answering,
+then spends the responsive window on the three log-dump commands ABL carries
+for boards like this one — `oem uefilog`, `oem lkmsg`, `oem lpmsg` — plus
+`oem device-info` and `getvar all`, every one of them redirected to a file.
+
+The reading is unambiguous either way:
+
+- `BootStats: ID-n: Kernel Load Start` with no matching `Kernel Load Done`
+  means ABL began loading `boot` and stopped. The failure is in the image, and
+  the next line in its log names the check it failed.
+- No `BootStats` at all means ABL never reached its boot path, and the payload
+  is not implicated — something before it (a BCB, a key, a slot decision)
+  routed to fastboot.
+
+`is-userspace:no` in the same capture confirms it is ABL's own fastboot rather
+than `fastbootd`; the `flash:`/`erase:`/`oem unlock` command table found in
+`abl`'s volume says the same thing, so this is a check and not a hope.
+
+### The way back is confirmed to work, not just intended to
+
+The A/B control — flash the stock `boot` back and see whether the phone boots
+Android — is only a control if the file is good, so it was verified rather than
+assumed. `~/backup/gauguin/images/part-boot.img` still hashes to
+`50ef59be…8ef3`, the value read off the device before the write, and the carve
+pass does not overwrite an existing `part-boot.img`. So the restore is one
+128 MB write of a file that is byte-identical to what this phone booted with
+two hours earlier.
+
 ### The transfer-abort hazard, again — and it is worth a rule
 
 `fastboot getvar all` was piped into `head -45`. `head` exits once it has its
