@@ -883,6 +883,43 @@ entered at all, is separately recorded and separately readable, and it was
 available from the first session. `tools/fastboot-capture.sh` now asks for it
 first, before anything else.
 
+The five strings are not chosen by a chain of `if`s. Disassembling the handler
+shows one 64-bit pointer table at **VA 0xc01b0**, indexed by a small integer:
+
+```
+code 0 -> 0x0bf375  "Reason:Down Key Press"
+code 1 -> 0x0bf38b  "Reason:Reboot Bootloader"
+code 2 -> 0x0bf3a4  "Reason:LoadImageAndAuth Fail"
+code 3 -> 0x0bf3c1  "Reason:BootLinux Fail"
+code >3 -> 0x0bf3d7 "Reason:Unknown"
+```
+
+and the value being indexed is a **global at VA 0xc3000** whose initial contents
+are `4`. Three things follow, and the third is the one that matters:
+
+- The reason is stored in ordinary ABL memory, not in the partition or in the
+  UART. It is written when ABL decides to enter fastboot and is still there when
+  the command is served in that same session, which is why asking after the fact
+  works at all.
+- The complete set of answers is those five. There is no sixth.
+- **`Reason:Unknown` is not "we could not tell".** It is the *default* — the
+  value is 4 when nothing has touched it. So an answer of `Unknown` means no
+  fastboot-reason path was taken, which is itself informative rather than a
+  dead end.
+
+Searching the image for writers of that global by ADRP+store finds exactly one:
+a store of `0` (`Down Key Press`) guarded by the power-on reason being 2 or 8.
+So **`Down Key Press` is worth distrusting as evidence** — it is set from the
+power-on reason, and a reset done by holding the power button could produce it
+regardless of what our firmware did. That is the argument for powering on
+normally, with no keys held, before asking: otherwise the answer may be an
+artefact of how the phone was restarted.
+
+Codes 1–3 are set somewhere this search did not reach (a narrower store width,
+or through a pointer), so their exact trigger conditions are not pinned down.
+That does not affect the reading — the table above is the complete answer set,
+and `LoadImageAndAuth Fail` or `BootLinux Fail` mean what they say.
+
 ### The way back is confirmed to work, not just intended to
 
 The A/B control — flash the stock `boot` back and see whether the phone boots

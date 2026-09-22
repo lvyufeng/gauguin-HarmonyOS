@@ -65,14 +65,17 @@ run() {  # run <filename> <fastboot args...>
 # of five strings plus a raw code, and they discriminate exactly the cases that
 # have been indistinguishable so far:
 #
-#   Reason:Down Key Press            a button was held - nothing to do with us
-#   Reason:Reboot Bootloader         something asked for fastboot
-#   Reason:LoadImageAndAuth Fail     ABL TRIED to load `boot` and could not
-#   Reason:BootLinux Fail            it loaded, and failed after that
-#   Reason:Unknown / Powerup Reason: %x
+# The handler indexes a pointer table at VA 0xc01b0 with a small integer from a
+# global at VA 0xc3000, whose default is 4 - so the full answer set is:
 #
-# "LoadImageAndAuth Fail" is the one that would confirm ABL attempted our image.
-# Asking this first, and only once, costs one round trip.
+#   code 0   Reason:Down Key Press          (see the caveat in the EOF notes)
+#   code 1   Reason:Reboot Bootloader
+#   code 2   Reason:LoadImageAndAuth Fail   ABL TRIED to load `boot`
+#   code 3   Reason:BootLinux Fail          loaded, then failed
+#   code >3  Reason:Unknown                 the default, i.e. nothing set it
+#
+# Code 2 or 3 would confirm the payload was reached, which is the thing that has
+# been unknown since the first attempt. Asking this first costs one round trip.
 log "== why did it enter fastboot? (oem fbreason)"
 run 05-fbreason.txt oem fbreason
 sed 's/^/    /' "$OUT/05-fbreason.txt"
@@ -121,14 +124,22 @@ How to read the result:
   * `oem fbreason` (step 2, the first thing asked) is the closest thing to a
     direct answer. Read it against ABL's own five possible replies:
 
-      Reason:Down Key Press           a button was held. Nothing to do with us.
+      Reason:Down Key Press           a button was held - BUT see the caveat
       Reason:Reboot Bootloader        something asked for fastboot.
       Reason:LoadImageAndAuth Fail    ABL TRIED to load `boot` and could not.
       Reason:BootLinux Fail           it loaded, and failed after that.
-      Reason:Unknown / Powerup Reason: 0x...   inconclusive.
+      Reason:Unknown                  nothing set it (it is the default).
 
     "LoadImageAndAuth Fail" or "BootLinux Fail" both mean the payload was
     reached, which is the thing that has been unknown since the first attempt.
+
+    Caveat on "Down Key Press": the only writer of that variable found in ABL
+    stores 0 when the POWER-ON reason is 2 or 8, so this value can be produced
+    by how the phone was restarted rather than by anything our firmware did.
+    Power on with no keys held before trusting it.
+
+    "Unknown" is the default value (4), not a failure to determine anything -
+    it means no fastboot-reason path was taken.
 
   * "BootStats: ID-n: Kernel Load Start" with no matching "Kernel Load Done"
     means ABL began loading `boot` and stopped - the failure is in the image,
