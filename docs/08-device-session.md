@@ -20,7 +20,7 @@ after step 3 has established that the phone is healthy. Confirm the pieces are
 present first, because a missing file mid-session costs a whole cycle:
 
 ```sh
-ls -la work/out/boot-pstore-*.img                     # P1's kernel, five shapes
+ls -la work/out/boot-pstore-*.img                     # P1's kernel, six shapes
 ls -la work/out/p2-variants/Mu-gauguin-stock-*.img   # the two P2 variants
 tools/restore-stock-boot.sh --check                  # must print "ok"
 tools/flash-boot.sh                                  # usage line, exits 1 - it is executable
@@ -47,9 +47,13 @@ printf 'font %-4s %s\n' "$fn" "$( { strings -a work/out/Image-noefi
                                  } | grep -cx "$fn")"
 ```
 
-Expect `1080`, `2400`, `4320`, `a8r8g8b8`, exactly one `ramoops@bff00000`, and
+Expect `1080`, `2400`, `4320`, `a8r8g8b8`, exactly one `ramoops@d0000000`, and
 `font TER16x32 2`. Stride `4320` is 1080x4: a different stride draws diagonal
-text, and a missing node leaves the panel dark with nothing to say why. The font
+text, and a missing node leaves the panel dark with nothing to say why. The
+ramoops address is ours to place rather than the phone's, and the build script
+checks it against the phone's DRAM map and its `no-map` carveouts
+(`tools/abl-boot-check.py`) — but a tree that lost the node entirely still boots
+and still leaves no log, which is what this line catches. The font
 count catches the other silent half — `fbcon=font:X` for a font the kernel does
 not carry makes fbcon fall back to 8x16 without printing anything, which on a
 1080-wide panel is 135 unreadable columns and a photograph nobody can read.
@@ -226,18 +230,19 @@ Order matters — cheapest and most informative first:
 
 **4a. P1's mainline kernel — the closest match to what the phone boots today**
 
-Five builds of the same kernel, differing only in the properties that
+Six builds of the same kernel, differing only in the properties that
 distinguish our images from the one that boots (see the table in `docs/07`).
 Each one removes exactly one difference, so the *change* between attempts is the
 signal.
 
 | # | image | kernel | arm64 header | `text_offset` | `image_size` | size |
 |---|---|---|---|---|---|---|
-| 1 | `boot-pstore-raw-noefi.img` | raw | **no EFI stub** | 0x80000 | 0x2c50000 | 46,075,904 |
-| 2 | `boot-pstore-raw-txt.img` | raw | EFI stub | 0x80000 | 0x2d90000 | 47,255,552 |
-| 3 | `boot-pstore-raw.img` | raw | EFI stub | 0 | 0x2d90000 | 47,255,552 |
-| 4 | `boot-pstore-gz-fixedsz.img` | gzip | EFI stub | 0 | **0x2cb8200** | 15,265,792 |
-| 5 | `boot-pstore.img` | gzip | EFI stub | 0 | 0x2d90000 | 15,261,696 |
+| 1 | `boot-pstore-raw-noefi.img` | raw | **no EFI stub** | 0x80000 | 0x2c50000 | 46,092,288 |
+| 2 | `boot-pstore-gz-noefi.img` | **gzip** | no EFI stub | 0x80000 | 0x2c50000 | 14,766,080 |
+| 3 | `boot-pstore-raw-txt.img` | raw | EFI stub | 0x80000 | 0x2d90000 | 47,271,936 |
+| 4 | `boot-pstore-raw.img` | raw | EFI stub | 0 | 0x2d90000 | 47,271,936 |
+| 5 | `boot-pstore-gz-fixedsz.img` | gzip | EFI stub | 0 | **0x2cb8200** | 15,282,176 |
+| 6 | `boot-pstore.img` | gzip | EFI stub | 0 | 0x2d90000 | 15,278,080 |
 
 The size column is the one that drifts: every rebuild moves it a little, and a
 size that no longer matches reads as "I flashed the wrong file" when the file is
@@ -245,41 +250,78 @@ right. `tools/check-payload.py`, which the step below requires before flashing
 anything, is the authority on all six columns; the sizes are here to be glanced at,
 not compared.
 
+**1 against 2 is the experiment.** Same kernel, built the same way, packaged with
+the same `text_offset` and the same declared `image_size` — the only difference
+between them is that 2's kernel is a gzip stream. Compression is the last
+property that can be blamed for the pattern actually observed (every compressed
+image refused, every raw one booting), and this pair changes nothing else, so the
+difference between the two attempts has one explanation instead of three.
+**Flash 1, then 2**, and read the pair rather than either one.
+
+The rest of the table is context, and two of its columns are now known to be
+**dead**:
+
+- `text_offset` is bootloader metadata that the kernel never reads back. Rows 1
+  and 3 set 0x80000 only to match the phone's own image on a field that has no
+  behaviour behind it, and 4 does not; the 1-vs-4 difference is therefore not a
+  candidate.
+- `image_size` is read by exactly one ABL check, which the headroom has never
+  come close to failing — 131,305,472 bytes under this device's memory map
+  against a largest declared `image_size` of 47,775,744, and the other check in
+  the same function compares the decompressed length against the size of a
+  pointer (`docs/07`). Row 5's lowered `image_size` was built to test a check that
+  does not exist.
+
+So 3, 4 and 6 exist to keep the older comparisons intact; 5 is kept because it is
+built, not because it is a candidate. The one thing worth trying after 1 and 2 is
+4b/4c below, which is the same experiment one layer up.
+
 all under `work/out/`. Every one is stock-shaped v2 with our own DTB in the
-declared DTB slot — our tree carries gauguin's exact `msm-id`/`board-id`, which
-is the one case where ABL uses it as-is instead of overlaying the vendor's on
-top — and all five carry the same cmdline (`docs/p1-cmdline.txt`), whose pstore
-parameters are the phone's own geometry so that step 4.5's log is readable
-(`docs/07`).
+declared DTB slot. It is *not* true that ABL uses that tree as-is: our tree
+carries gauguin's exact `msm-id` and `board-id`, but `CheckAllBitsSet` also wants
+`qcom,pmic-id`, `qcom,softsku-id`, `qcom,platform-subtype` and `qcom,foundry-id`,
+and a tree that declares none of them leaves `DtboNeed` TRUE (`docs/07`). ABL
+therefore applies the Gauguin overlay to our tree on every boot, which is why
+the built tree carries a `/__symbols__` naming the 158 fixup symbols that
+overlay asks for, and why `tools/build-p1-payloads.sh` refuses to ship a tree
+without it. All six carry the same cmdline (`docs/p1-cmdline.txt`), whose pstore
+parameters place the log at an address **we choose** — the phone declares no
+ramoops region of its own, and the address is checked against the phone's DRAM
+partitions and its `no-map` carveouts rather than against another tree's opinion
+(`docs/07`, `tools/abl-boot-check.py`).
 
-Start at the top of the table. **1 is the one most likely to work**: it is the
-only build that matches the phone's own kernel on the raw property, the
-EFI-stub property *and* `text_offset` at the same time.
+Start at the top of the table, and treat the first two rows as one step.
+**1 is the one most likely to work**: it is the only build that matches the
+phone's own kernel on the raw property, the EFI-stub property *and* `text_offset`
+at the same time. **2 is 1 with its kernel gzipped and nothing else changed**, so
+the pair answers the one question that is still open.
 
-4 is worth understanding rather than skipping. ABL contains
-
-```
-Decompress kernel size is smaller than image header size
-```
-
-and BootShim's image is written so that it *passes* — `image_size` 0x300000,
-decompressed length 0x300070. A Linux `Image.gz` fails it, because `image_size`
-covers BSS and is therefore larger than anything the gzip stream can contain.
-4 declares the real decompressed length instead. That check is the closest thing
-found so far to an explanation of why every compressed image has been refused
-while every raw one boots, so 4 is the attempt that tests it — but it costs a
-cycle, so it goes after 1.
+**5 is now known to be testing nothing**: the ABL message it was built for,
+`Decompress kernel size is smaller than image header size`, compares the
+*decompressed length* against `sizeof(struct kernel64_hdr *)` — the size of a
+pointer. A 46 MB kernel cannot fail it, and BootShim's image was passing it by
+accident of arithmetic rather than by construction. The other size check in the
+same function reads `ImageSize` out of the kernel and compares it against the
+headroom between the kernel's load address and the device tree's, which is 125 MB
+here against a largest declared `image_size` of 47,775,744 — so lowering
+`image_size` changes nothing either. 5 stays in the table because it is built,
+not because it is a candidate. `docs/07` has the source.
 
 Before flashing anything, run
 
 ```sh
-tools/check-payload.py --stock ~/backup/gauguin/images/part-boot.img work/out/boot-pstore-*.img
+tools/check-payload.py work/out/boot-pstore-*.img
 ```
 
-which prints these properties next to the phone's own image and fails loudly on
-a bad magic, a DTB not at its declared offset, or an AVB footer. The variants
+which prints each image's own properties and fails loudly on a bad magic, a DTB
+not at its declared offset, declared regions that do not add up to the file size,
+an AVB footer, or a ramoops node that the cmdline contradicts. The variants
 differ only in things `ls -la` cannot show, and mixing two up mid-session reads
-as "that variable does not matter" when the wrong file was flashed.
+as "that variable does not matter" when the wrong file was flashed. It is also
+run for you: `tools/build-p1-payloads.sh` ends by checking every image it built
+with this and then replaying ABL's own decision path over them with
+`tools/abl-boot-check.py`, so a structurally wrong or unbootable payload fails
+the build rather than costing a device cycle.
 
 Worth noting before spending the cycle: `fastboot boot` — the RAM chain-load path
 — was what refused the earlier gzip image, and that is **not the same code path
@@ -343,26 +385,30 @@ the push can simply be retried.
 **4b/4c. The two UEFI variants** — `Mu-gauguin-stock-gzip.img` (stock-shaped,
 compressed kernel, dummy ramdisk) and `Mu-gauguin-stock-none.img` (the same but
 uncompressed). Their value is that each pairs with a P1 variant on the one
-property that is easy to blame: `-gzip` against 4/5, `-none` against 1/2/3. Read
-the pair, not the attempt.
+property that is easy to blame: `-gzip` against 2/5/6, `-none` against 1/3/4. Read
+the pair, not the attempt. With 1 and 2 already run, this pair is the same
+experiment one layer up: it asks whether compression acts on the kernel or on
+ABL's path to it, and only the pair can say.
 
 The interpretation that is tempting and wrong is "4b/4c changed nothing, so UEFI
 fails for a different reason than the kernel". The reverse is what the evidence
-says. Seven images that share a **v2 header, our DTB in the declared DTB slot, and
+says. Eight images that share a **v2 header, our DTB in the declared DTB slot, and
 ABL's load-and-authenticate path**, and differ in the kernel inside them, all
 producing the *same* result, is an argument that the variable is in the part they
 share — the packaging and the bootloader path — not in any kernel property. A
 shared outcome across everything we build points at ABL, and at that point more
 payload variants are the wrong next step; the questions become `oem fbreason`,
-the auth result, and whether ABL's DTB slot is really used as-is.
+the auth result, and where in ABL's path the refusal happens. (The third of those
+— "whether ABL's DTB slot is really used as-is" — is now answered: it is not, and
+the overlay applies to our tree on every boot. See the note under the 4a table.)
 
 The pairwise comparison is what separates the two:
 
 | what 4b/4c do relative to 4a | what it means |
 |---|---|
-| `-gzip` matches 4/5 and `-none` matches 1/2/3 | the property that differs *between* those groups is the live variable; the UEFI code is not implicated yet |
+| `-gzip` matches 2/5/6 and `-none` matches 1/3/4 | the property that differs *between* those groups is the live variable; the UEFI code is not implicated yet |
 | `-gzip` and `-none` agree with each other but **not** with their P1 partners | compression is not the variable; what differs is the payload, so P2 has its own problem and the UEFI side needs its own investigation |
-| 4b/4c differ from each other, and follow their P1 partners | compression is the variable, and it acts on ABL's path rather than on the kernel — the `Decompress kernel size` check above is the candidate |
+| 4b/4c differ from each other, and follow their P1 partners | compression is the variable, and it acts on ABL's path rather than on the kernel — which is a statement about *where* to look, not about which check: the `Decompress kernel size` message that used to be the candidate here compares the decompressed length against the size of a pointer and cannot fire (`docs/07`) |
 
 After each attempt, the rule is the same as 4a: a change in `oem fbreason` is the
 signal, and the difference between this attempt and the one it is paired with is
@@ -397,30 +443,40 @@ and an empty pstore together mean "it never got far enough to say" — but they 
 not distinguish the two causes, and "no log, so it never ran" is one reading too
 many.
 
-From Android (root) or from TWRP:
+The primary reader is **our own initramfs**, and it needs no host at all: on every
+boot it lists `/sys/fs/pstore` and prints the tail of `console-ramoops-0` on the
+panel, above the hardware report. So the designed shape is `panic=10` fires → the
+phone warm-reboots by itself → ABL boots our payload again → the panel shows the
+*previous* boot's log. Photograph it. `docs/07` has the sequence; the point here
+is that a payload which dies can report why without anyone touching the phone.
+
+If the payload instead comes up and stays up, the same text is on the screen from
+that first report, and a host read is only a convenience:
 
 ```sh
 adb shell 'ls -la /sys/fs/pstore/'
 adb shell 'cat /sys/fs/pstore/console-ramoops-0' | tail -200
 ```
 
-Our kernel writes the same geometry the vendor kernel reads (`docs/07`), so
-`console-ramoops-0` is the file to read, and `dmesg-ramoops-0` … `-5` hold the
-dmesg ring.
+Either route reads `console-ramoops-0` (the printk stream) and `dmesg-ramoops-0`
+(the older ring the same stream spills into).
 
-**Check whose log it is before reading anything into it.** Android also writes
-this region on every ordinary boot, so a file that exists is not evidence ours
-ran. The first line settles it:
+**Whose log it is is not a question on this device.** Android cannot have written
+it: the vendor kernel has no `/sys/fs/pstore` at all, and logs its panics through
+`mtdoops` onto `/dev/block/sda15` instead (`docs/07`). So a file in the region is
+ours — mainline — whenever it was written by a payload boot rather than by
+Android. A `head -1` is still worth a glance for the version string, since our
+own previous boot is the one thing that can also be in there:
 
 ```sh
 adb shell 'head -1 /sys/fs/pstore/console-ramoops-0'
 ```
 
-`Linux version 6.6…` is ours — mainline. The vendor kernel is `4.19`, so a
-`4.19` first line means you are reading Android's own previous boot and our
-payload left nothing. Then read for `UFS`, `ufshcd`, `geni`,
-`simple-framebuffer`, `ramoops`, and the last line before it stops. That output
-is what P1's gate is actually asking for, and it is also the input to P2.
+`Linux version 6.6…` is mainline; anything `4.19` means the region holds an older
+build of ours from an earlier attempt, not this one. Then read for `UFS`,
+`ufshcd`, `geni`, `simple-framebuffer`, `ramoops`, and the last line before it
+stops. That output is what P1's gate is actually asking for, and it is also the
+input to P2.
 
 ## Step 5 — Leave it bootable
 

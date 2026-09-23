@@ -2,7 +2,7 @@
 #
 # Build every P1 payload variant from the kernel tree, in one go.
 #
-# Why a script: the runbook names four images, and they differ only in the two
+# Why a script: the runbook names six images, and they differ only in the two
 # properties that separate our kernels from the one this phone actually boots
 # (see the table in docs/07) — compression, and whether the arm64 image header
 # is in its EFI/PE form. Rebuilding them by hand is where a wrong `gzip` or a
@@ -17,9 +17,9 @@
 # first thing to try on the device.
 #
 # The device tree is built here too, not taken from the tree: the ramoops
-# carveout in it (0xbff00000, the vendor's own address and record geometry) is
-# what makes the log readable from Android afterwards, so it is part of the
-# payload, not an input.
+# carveout in it (0xd0000000, our address - this phone declares none, see
+# docs/07) and the /chosen simple-framebuffer are the payload's two log
+# channels, so they are part of the payload rather than an input to it.
 #
 # The no-EFI kernel needs a second full build (`./scripts/config --disable EFI`
 # changes code generation, so it cannot be patched into an existing Image). That
@@ -39,9 +39,16 @@ DTB="$OUT/$DTB_NAME.dtb"
 RAMDISK="$OUT/initramfs.cpio.gz"
 MK="$ROOT/tools/make_boot_image.py"
 
+# The phone's own dtbo partition, dumped by tools/device-dump-helper.sh. It is an
+# input to the build, not a reference: the symbols the tree has to declare, and
+# therefore whether ABL accepts the payload at all, are read out of it. Override
+# with DTBO=... .
+DTBO_IMG="${DTBO:-$HOME/backup/gauguin/images/part-dtbo.img}"
+
 # The command line is a file so the same string is used everywhere, including
-# in docs/07. It is what gives a payload with no UART and no screen driver a
-# place to leave its log (pstore at the phone's own region, out of its base tree).
+# in docs/07. It is what gives a payload with no UART and no working display
+# driver a place to leave its log: the ramoops region it names, and the console
+# that goes to the panel.
 CMDLINE="$(cat "$ROOT/docs/p1-cmdline.txt")"
 
 log() { printf '\033[1m%s\033[0m\n' "$*"; }
@@ -51,6 +58,10 @@ REBUILD_NOEFI=0
 
 [ -f "$RAMDISK" ] || { echo "missing $RAMDISK" >&2; exit 1; }
 [ -f "$ROOT/docs/p1-cmdline.txt" ] || { echo "missing docs/p1-cmdline.txt" >&2; exit 1; }
+[ -f "$DTBO_IMG" ] || { echo "missing the dtbo dump at $DTBO_IMG (set DTBO=...)." \
+    "The device tree needs /__symbols__ for exactly the symbols that partition" \
+    "names, so a payload built without it is one ABL refuses with" \
+    "\"ApplyOverlay: ufdt apply overlay failed\" and no output." >&2; exit 1; }
 
 # The command line asks fbcon for a font by name; fbcon looks that name up with
 # find_font() and, when it is not there, falls back to the default **without
@@ -90,18 +101,45 @@ log "== device tree ($DTB_NAME.dtb)"
 # tree is not versioned here. Refresh it, so this build cannot run against a
 # stale copy of the file the ramoops check below is about - the two drifting
 # apart is exactly how the log ends up somewhere Android does not read.
-cp "$ROOT/dts/$DTB_NAME.dts" "arch/arm64/boot/dts/qcom/$DTB_NAME.dts"
+#
+# What is copied is the tracked file *plus* a generated fragment, and the
+# fragment is the difference between a boot and ABL's refusal. The tree ABL hands
+# the kernel is not the one we write: the phone's dtbo validates, so ABL takes the
+# overlay path, picks the Gauguin overlay out of it, and hands both to libufdt -
+# which resolves the overlay's 158 `__fixups__` against our tree's `/__symbols__`
+# and returns -1 if one is missing, printing "ApplyOverlay: ufdt apply overlay
+# failed" and returning EFI_NOT_FOUND before the kernel's first instruction. Ours
+# is not built with `-@` (scripts/Makefile.dtbs only adds it to base-dtb-y), so it
+# carries no symbols at all and every payload built without the fragment is
+# refused. tools/make_dtbo_sinks.py generates one empty node per symbol the dtbo
+# asks for and a `/__symbols__` naming them, so the overlay applies cleanly and
+# lands inside a subtree nothing binds to. docs/07 has the measurements.
+SINKS="$OUT/gauguin-dtbo-sinks.dtsi"
+python3 "$ROOT/tools/make_dtbo_sinks.py" --dtbo "$DTBO_IMG" -o "$SINKS"
+cat "$ROOT/dts/$DTB_NAME.dts" "$SINKS" > "arch/arm64/boot/dts/qcom/$DTB_NAME.dts"
 # And make a missing Makefile entry an error rather than a stale .dtb.
 rm -f "arch/arm64/boot/dts/qcom/$DTB_NAME.dtb"
 make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- -j"$(nproc)" dtbs
 cp "arch/arm64/boot/dts/qcom/$DTB_NAME.dtb" "$DTB"
+# The sinks are only a fix if they survived into the built blob; a tree that
+# silently lost them is one ABL refuses, and it looks exactly like the ones that
+# were refused before the fix. Checked as a symbol count rather than trusted.
+nsym=$(fdtget -p "$DTB" /__symbols__ 2>/dev/null | wc -l) || true
+[ "${nsym:-0}" -ge 200 ] \
+    || { echo "$DTB carries ${nsym:-0} symbols in /__symbols__, expected the ~217" \
+              "tools/make_dtbo_sinks.py generates - ABL would refuse the overlay" >&2
+         exit 1; }
+printf '   /__symbols__ %s entries\n' "$nsym"
 # A tree that still carries the inherited 0xffc00000 ramoops, or a second
-# ramoops node, would silently move the log somewhere Android does not read.
+# ramoops node, would silently move the log - ramoops holds "only a single
+# ramoops area allowed at a time" and fails extra probes, so which of two nodes
+# wins comes down to node order.
 n=$(dtc -I dtb -O dts -o - "$DTB" 2>/dev/null | grep -c 'ramoops@')
 [ "$n" = 1 ] || { echo "expected exactly 1 ramoops node in $DTB, found $n" >&2; exit 1; }
-dtc -I dtb -O dts -o - "$DTB" 2>/dev/null | grep -q 'ramoops@bff00000' \
-    || { echo "$DTB has no ramoops@bff00000 - the log would go somewhere Android" \
-              "cannot read" >&2; exit 1; }
+dtc -I dtb -O dts -o - "$DTB" 2>/dev/null | grep -q 'ramoops@d0000000' \
+    || { echo "$DTB has no ramoops@d0000000 - the address is derived from"
+              "docs/p1-cmdline.txt and the board dts, and the two have to agree" >&2
+         exit 1; }
 
 # The other channel, and the one that needs no reboot to read: /chosen's
 # simple-framebuffer is what simpledrm binds to and fbcon draws on, so the
@@ -144,12 +182,22 @@ python3 "$MK" --kernel "$OUT/Image-pstore.gz" --ramdisk "$RAMDISK" --dtb "$DTB" 
     --profile stock --cmdline "$CMDLINE" \
     -o "$OUT/boot-pstore.img"
 
-# ABL has a check whose text is "Decompress kernel size is smaller than image
-# header size", and BootShim's image is written so that it passes (0x300000
-# declared, 0x300070 decompressed). A Linux Image.gz fails it, because
-# image_size covers BSS and so is larger than anything the gzip stream
-# contains. This variant lowers image_size to the real decompressed length,
-# which is the only cheap way to test whether that check is the one refusing us.
+# ABL compares a size out of the decompressed kernel, and this is the field it
+# reads: after inflating, GZipPkgCheck tests
+#
+#     Kptr->ImageSize > (DeviceTreeLoadAddr - KernelLoadAddr)
+#
+# and refuses with "DTB header can get corrupted due to runtime kernel size". It
+# is a memory check, not an image one - a Linux Image.gz declares an image_size
+# that covers BSS (0x2d90000, 47 MB) against 125 MB of headroom between where the
+# kernel is copied and where the tree goes, so it passes without being asked.
+# Lowering it to the real decompressed length removes the difference anyway,
+# which costs nothing and leaves the variant comparable.
+#
+# (The other decompress check is a red herring that this script used to build
+# this variant for: `OutLen <= sizeof(struct kernel64_hdr *)` compares the
+# *decompressed length* against the size of a pointer. A 46 MB kernel cannot
+# fail it. docs/07.)
 #
 # Printed as hex, because --image-size takes hex: the first version of this
 # script passed the decimal length and produced image_size 0x46891520, which is
@@ -192,5 +240,30 @@ python3 "$MK" --kernel "$OUT/Image-noefi" --ramdisk "$RAMDISK" --dtb "$DTB" \
     --profile stock --cmdline "$CMDLINE" --text-offset 0x80000 \
     -o "$OUT/boot-pstore-raw-noefi.img"
 
+# The same kernel compressed, and it is the variant that makes the compression
+# question answerable. The pair below differs in exactly one property - whether
+# the kernel is a gzip stream - because everything else is held at the stock
+# value on both sides. Comparing `raw-noefi` against `gz-fixedsz` instead, which
+# is what the earlier set did, changes three things at once (compression,
+# text_offset and image_size), and a difference then has three explanations. Both
+# of those other two are now known to be dead fields (docs/07), so the
+# three-way comparison was never going to be readable anyway - but a pair that
+# isolates the one live variable is strictly better than a pair that does not.
+log "== gz-noefi variant, the other half of the compression pair"
+gzip -9 -c "$OUT/Image-noefi" > "$OUT/Image-noefi.gz"
+check_font "$OUT/Image-noefi.gz"
+python3 "$MK" --kernel "$OUT/Image-noefi.gz" --ramdisk "$RAMDISK" --dtb "$DTB" \
+    --profile stock --cmdline "$CMDLINE" --text-offset 0x80000 \
+    -o "$OUT/boot-pstore-gz-noefi.img"
+
 log "== done"
 ls -la "$OUT"/boot-pstore*.img
+
+# Every payload gets replayed against ABL's own decision path before anyone is
+# asked to flash one. A failing image is not worth a device cycle - the phone
+# needs a physical reset to recover from a bad one, and ABL refuses the image
+# before any of our code runs, so the screen shows nothing either way. The
+# checker exits nonzero if any image fails, which is what makes this a gate
+# rather than a printout.
+log "== ABL's checks, replayed offline"
+python3 "$ROOT/tools/abl-boot-check.py" --dtbo "$DTBO_IMG" "$OUT"/boot-pstore*.img

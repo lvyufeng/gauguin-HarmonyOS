@@ -497,6 +497,57 @@ was tried, and it failed. Header shape is at best necessary and demonstrably not
 sufficient, and the earlier framing in this document (that the stock/ours header
 difference was a leading explanation) was wrong to lean on it.
 
+**Two of the rows above are not header fields at all.** `dtb_addr` and
+`tags_addr`, and the `kernel_addr`/`ramdisk_addr` pair, are never read by ABL —
+not "read and checked", not read. It computes where the DTB goes from the region
+sizes and ignores the declared address entirely:
+
+```c
+BootParamlistPtr->DtbOffset = BootParamlistPtr->PageSize *
+                 (NumHeaderPages + NumKernelPages + NumRamdiskPages +
+                  NumSecondPages + NumRecoveryDtboPages);    /* BootLinux.c:478 */
+ImageSize = BootImgHdrV2->dtb_size + BootParamlistPtr->DtbOffset;
+```
+
+and then requires a valid fdt *at that computed offset* whose `totalsize` fits
+inside `ImageSize`. So the table's last three rows are not evidence of anything
+being honoured: the DTB offset is the same in both images because the same
+arithmetic gives the same answer for the same sizes, and the magic is there
+because both writers put it there. What the rows do show — that P1's image is
+laid out the way this device's images are laid out — stands.
+
+### Corrected: what ABL reads, from Qualcomm's own source
+
+Everything above was reconstructed from strings and byte offsets in the
+extracted PE. The source is public now
+(`Daniel224455/mu_qcommodulepkg`, vendored under `work/ref/`), and its
+`QcomModulePkg/Library/BootLib/BootLinux.c` matches the extracted binary
+string for string — including the original build path baked into the error
+messages, `/home/work/gauguin-r-stable-build-normal/bootable/bootloader/edk2/`,
+which is this device's own build. So the decision path below is read rather
+than inferred, and `tools/abl-boot-check.py` replays it offline.
+
+| what the payload declares | does ABL read it? |
+|---|---|
+| `kernel_size`, `ramdisk_size`, `second_size`, `page_size`, `header_version` | **yes** — `CheckImageHeader`, and the sizes drive everything |
+| `recovery_dtbo_size`, `dtb_size` | **yes** — they are part of the computed DTB offset |
+| `kernel_addr`, `ramdisk_addr`, `tags_addr` | no — addresses come from the platform memory map |
+| `dtb_addr` | no — the offset is computed, then checked |
+| `text_offset` | no — the field does not appear in any function |
+| the kernel's `image_size` | only as a runtime headroom guard, never as a pre-jump check |
+| `res5` / the EFI-stub `code0` | no — the bytes are copied and jumped to |
+| raw vs gzip | **yes, and it changes the code path** (`UpdateKernelModeAndPkg`) |
+| the DTB's `msm-id` / `board-id` | **yes** — `GetSocDtb` will not select a tree without them |
+
+Replaying the whole chain over the six P1 payloads **and** the stock image
+gives the same verdict for all seven: every check that runs before the jump
+passes, the computed DTB offset lands exactly on the appended tree
+(`totalsize 0x1562a`), each gzip payload inflates to its kernel's size
+(46,891,520 for the EFI-stub one, 45,711,368 for the no-EFI one), and the
+headroom is 125 MB against a largest `image_size` of 47,775,744. **A refusal is
+not one of these checks.** That reframes both P1 and P2: whatever is happening
+happens at or after the handover, or in a stage this tool does not model.
+
 **What is common to P1 and P2, and absent from the image that boots:**
 
 | | P1 (refused, "Load Error") | P2 (silent) | stock (boots) |
@@ -551,16 +602,28 @@ session's payload list is worth spending a cycle on:
    with EFI off `res5` stays `0`. The comment above the `nop` is the part worth
    keeping: *"Bootloaders may inspect the opcode at the start of the kernel image
    to decide if the kernel is capable of booting via UEFI. So put an ordinary NOP
-   here."* Some bootloader, at some point, has inspected that opcode. That is a
-   reason to have a `CONFIG_EFI=n` build in the set, which is what
-   `boot-pstore-raw-noefi.img` is — it is the only one of the five whose `code0`
-   is not `MZ`, and it is first in the table for that reason.
+   here."* Some bootloader, at some point, has inspected that opcode.
+
+   **It is not this one, and the row is a control rather than a candidate.** In
+   both forms the first word is followed by the same `b primary_entry`, so a
+   kernel that is *jumped to* rather than PE-loaded behaves identically either
+   way: the `ccmp` writes flags and falls through, and the branch after it does
+   not read them. `QcomModulePkg` never looks at `code0` — it copies
+   `KernelSize` bytes from `ImageBuffer + PageSize` to `KernelLoadAddr` and
+   jumps there (`BootLinux.c:702`, and the gzip branch decompresses first, then
+   does the same). `boot-pstore-raw-noefi.img` exists to make that checkable on
+   the device rather than arguable: if it and `boot-pstore-raw-txt.img` behave
+   differently, the difference is somewhere that has not been modelled yet.
 
 3. **`text_offset`.** Stock declares `0x80000`, ours `0x0`. 0 is correct for
    Linux 6.12 — `TEXT_OFFSET` was removed from arm64 in 6.6, and the field is
-   bootloader metadata the kernel never reads back. ABL is from 2020 and predates
-   that, so a bootloader that validates or uses this field would see a value it
-   has never seen from this device. It is a safe field to set.
+   bootloader metadata the kernel never reads back. And ABL does not read it
+   either: `TextOffset` appears in `QcomModulePkg` only in the struct definition
+   in `BootImage.h`, and nowhere in any function. So this field is not a lever
+   at all — `boot-pstore-raw.img` and `boot-pstore-raw-txt.img` are the same
+   payload as far as the bootloader can tell, and they too are a control. That
+   is worth knowing before spending a device cycle on the pair, and worth
+   knowing afterwards: a difference between them is not the field.
 
 ### ABL decompresses the kernel, and says so
 
@@ -578,48 +641,68 @@ Kernel Load Address: 0x%x             Kernel Size Actual: 0x%x
 Ramdisk Load Address: 0x%x            Device Tree Load Address: 0x%x
 ```
 
-So there is a decompression step in ABL's kernel path and a size comparison
-after it. Which two "sizes" are compared is not established by strings alone —
-"Kernel Size 1/2" could be the boot header's declared size against the actual
-file size, but there is a reading worth taking seriously:
+**Which two sizes those are is now settled, and the earlier reading here was
+wrong.** `GZipPkgCheck` in the vendor's own source (below) does this after the
+decompressor returns:
 
-| image | `image_size` declared | decompressed | passes "decompressed >= declared"? |
-|---|---|---|---|
-| BootShim (Mu-Silicium) | 0x300000 | 0x300070 | **yes** |
-| stock `boot` (not decompressed) | 0x3598000 | 45,158,412 | n/a — raw, no decompression |
-| our `Image.gz` | 0x2d90000 | 46,891,520 | **no** (declared is 884 KB larger) |
+```c
+if (OutLen <= sizeof (struct kernel64_hdr *)) {           /* BootLinux.c:664 */
+  DEBUG ((EFI_D_ERROR,
+          "Decompress kernel size is smaller than image header size\n"));
+```
 
-A Linux kernel's `image_size` covers BSS, so it is *larger* than anything the
-compressed stream contains — the check cannot pass for a compressed Image,
-whatever the bootloader does with it. BootShim's image is written the other way
-round, and it is the only compressed payload this project has that was ever
-loaded. That is a real candidate for the difference between the compressed
-images that are refused and the raw one that boots, and it is cheap to test:
-`--image-size` patches the field without touching anything else.
+`OutLen` is how many bytes came out, and the thing it is compared against is the
+**size of a pointer** — 8. "image header size" in the message means the arm64
+image header, and the test is only that something longer than one header came
+out of the decompressor. A 46 MB `Image.gz` passes it without trying; so does
+anything else that inflates. It was never a candidate, and `gz-fixedsz`'s lowered
+`image_size` was built to test a check that does not exist.
 
-It is not proof. The check might apply only to the `vendor_boot` path, or the
-two sizes might be something else entirely, and this stays labelled as a
-candidate until a device attempt distinguishes it.
+The same function's other size check is the one that reads a size out of the
+kernel, and it is a memory check rather than an image one:
 
-### Five raw and compressed variants, built
+```c
+if (Kptr->ImageSize > (DeviceTreeLoadAddr - KernelLoadAddr))   /* BootLinux.c:710 */
+      DEBUG ((EFI_D_ERROR,
+            "DTB header can get corrupted due to runtime kernel size\n"));
+```
+
+That is the headroom between where the kernel is copied and where the device tree
+goes: **131,305,472 bytes (125 MB)** under the region this device's memory map
+carves out, 83 MB under ABL's PCD fallback. The largest `image_size` anywhere in
+this project's payloads is 47,775,744. Neither check has ever been close to
+firing, which is what `tools/abl-boot-check.py` prints rather than argues —
+the wrong table that used to be in this section compared two numbers the
+bootloader never compares.
+
+### Six raw and compressed variants, built
 
 `--kernel` takes an uncompressed `Image` straight through; `--text-offset` and
 `--image-size` rewrite the two header fields that differ. Reproduce all of them
 with `tools/build-p1-payloads.sh`, and check them with
-`tools/check-payload.py --stock <stock boot> <images>` before flashing:
+`tools/check-payload.py <images>` before flashing:
 
 ```
-boot-pstore-raw-noefi.img  46,075,904  raw,  no EFI stub,  text 0x80000, size 0x2c50000
-boot-pstore-raw-txt.img    47,255,552  raw,  EFI stub,     text 0x80000, size 0x2d90000
-boot-pstore-raw.img        47,255,552  raw,  EFI stub,     text 0,       size 0x2d90000
-boot-pstore-gz-fixedsz.img 15,257,600  gzip, EFI stub,    text 0,       size 0x2cb8200
-boot-pstore.img            15,257,600  gzip, EFI stub,    text 0,       size 0x2d90000
+boot-pstore-raw-noefi.img  46,092,288  raw,  no EFI stub,  text 0x80000, size 0x2c50000
+boot-pstore-gz-noefi.img   14,766,080  gzip, no EFI stub,  text 0x80000, size 0x2c50000
+boot-pstore-raw-txt.img    47,271,936  raw,  EFI stub,     text 0x80000, size 0x2d90000
+boot-pstore-raw.img        47,271,936  raw,  EFI stub,     text 0,       size 0x2d90000
+boot-pstore-gz-fixedsz.img 15,282,176  gzip, EFI stub,    text 0,       size 0x2cb8200
+boot-pstore.img            15,278,080  gzip, EFI stub,    text 0,       size 0x2d90000
 ```
 
 `raw-noefi` is the closest match to what the phone's own `boot` carries and
-therefore the most likely to work; `gz-fixedsz` is the one that tests the
-decompression-size candidate. Both were built from scratch here rather than
-described, and both pass the structural check.
+therefore the most likely to work. **`raw-noefi` and `gz-noefi` are one
+experiment in two halves**: they are the same kernel, built the same way, with
+the same `text_offset` and the same declared `image_size`, and differ only in
+whether that kernel is a gzip stream. That is the one property left that can be
+blamed for the pattern actually observed — every compressed image refused, every
+raw one booting — and the pair changes nothing else, so the *difference* between
+flashing them is attributable to one variable rather than to three. The earlier
+set tested compression by comparing `raw-noefi` against `gz-fixedsz`, which also
+moves `text_offset` and `image_size`; those two are now known to be fields ABL
+never reads (above), so that comparison was never going to be readable.
+`gz-fixedsz` is kept because it is built, not because it is a candidate.
 
 ### Two stock-shaped variants, built and validated offline
 
@@ -841,13 +924,48 @@ tree, and Android boots with it *plus* the entry-13 overlay applied on top.
 
 Two consequences that matter:
 
-1. **The boot image's DTB region is a DTB slot, not a vestigial field.** Our own
-   tree put there becomes the base.
-2. **`ramoops@bff00000`, 1 MB, is this device's pstore region** — it is in the
-   phone's own boot image, and it is inside usable RAM at the top of the first
-   DRAM bank (it ends exactly at `0xc0000000`, where bank 1 begins). That is the
-   address to give a payload that wants a log channel, and it is also where
-   Android's own `/sys/fs/pstore` reads from.
+1. **The boot image's DTB region is a DTB slot, not a vestigial field.** It is not
+   one tree but **twelve, concatenated**, and `GetSocDtb` walks them in order and
+   picks one by `qcom,msm-id`:
+
+   ```
+    0  59,279  Qualcomm Technologies, Inc. APQ 8016 SBC      no msm-id  (the ramoops node above)
+    1           Qualcomm Technologies, Inc. DB820c
+    2           Qualcomm Technologies, Inc. IPQ8074-HK01
+    3           Qualcomm Technologies, Inc. MSM 8916 MTP
+    4           LG Nexus 5X
+    5           Huawei Nexus 6P
+    6           Qualcomm Technologies, Inc. MSM 8996 MTP
+    7           Qualcomm Technologies, Inc. SDM845 MTP
+    8 418,772  Qualcomm Technologies, Inc. Lagoon SoC      <-- msm-id 434/459
+    9          Qualcomm Technologies, Inc. Lito v2 SoC
+   10          Qualcomm Technologies, Inc. Lito SoC
+   11          Qualcomm Technologies, Inc. Orchid SoC
+   ```
+
+   Tree 0 is the "APQ 8016 SBC" one, and it is not selectable: no `qcom,msm-id`,
+   so `GetPlatformMatchDtb` leaves `DtMatchVal` at `NONE_MATCH` and tree 8 wins.
+   The running phone confirms it from the other end —
+   `/proc/device-tree/chosen/bootargs` carries `androidboot.dtb_idx=8` and
+   `androidboot.dtbo_idx=13`, i.e. ABL wrote down which two trees it used. **Our
+   own tree put in this slot becomes the base**, and tree 0 becomes irrelevant:
+   nothing selects it, which is why its `ramoops` was never this device's.
+
+2. **`ramoops@bff00000` is in tree 0, and it is not in this phone's RAM anyway.**
+   Two independent reasons not to copy it, and the second is the one that would
+   have cost a device cycle: ABL writes the RAM partition table into `/memory`
+   before the jump, and per the running phone that is
+
+   ```
+   0x80000000 + 0x3bb00000   ends 0xbbb00000     (bank 0)
+   0xc0000000 + 0xc0000000                       (bank 1)
+   0x180000000 + 0x100000000                     (bank 2)
+   ```
+
+   so `0xbff00000` sits in the 69 MB hole between bank 0 and bank 1 — outside
+   every partition memblock is given. It is the top of *that board's* RAM, which
+   is the kind of thing that looks like a fact when it is copied and stops being
+   one when the board changes. See the log-channel section below.
 
 ### What ABL does with a device tree, from its own strings
 
@@ -867,17 +985,39 @@ Override DTB: GetBlkIOHandles failed loading user_dtbo!
 ```
 
 So the order is: take the base tree (appended inside the kernel image if there
-is one, otherwise the boot image's DTB region), and if its `msm-id`/`board-id`
-match this device **exactly**, stop — the DTBO partition is not searched and no
-overlay is applied. Only on a non-exact match does it pick the "best match DTB
-tags" out of `dtbo` and overlay it. There is also an override through a
+is one, otherwise the boot image's DTB region), and if its match value has every
+bit of `ALL_BITS_SET` set, stop — the DTBO partition is not searched and no
+overlay is applied (`DtboNeed = FALSE`). Only otherwise does it pick the "best
+match DTB tags" out of `dtbo` and overlay it. There is also an override through a
 `user_dtbo` partition.
 
-Our tree carries `qcom,msm-id = <0x1b2 0x10000 0x1cb 0x10000>` and
-`qcom,board-id = <0x23 0x00>`, which is exactly what entry 13 carries. **So a
-payload whose DTB slot holds our tree is the one case where ABL uses it
-untouched** — no vendor overlay merging itself into our mainline nodes. That is
-the scheme to use, and it is the stock shape, not the appended one.
+**"Exact" is much stricter than `msm-id` and `board-id`, and our tree does not
+meet it.** `ALL_BITS_SET` is a six-field set, from `LocateDeviceTree.h:142`:
+
+| field | where it comes from | our tree |
+|---|---|---|
+| `SOC_MATCH` | `qcom,msm-id` | `<434 0x10000>, <459 0x10000>` — set |
+| `VARIANT_MATCH` | `qcom,board-id` cell 0 vs. the CDT | `<0x23 0>` — set |
+| `SUBTYPE_EXACT_MATCH` | `qcom,platform-subtype` | **declares neither** this nor the next two |
+| `FOUNDRYID_EXACT_MATCH` | `qcom,foundry-id` | — |
+| `PMIC_MATCH_EXACT_MODEL_IDX0…F` | `qcom,pmic-id`, all **sixteen** entries matched against the PMICs' model *and* revision | — |
+| `SOFTSKU_EXACT_MATCH` | `qcom,softsku-id` | — |
+
+The two set rows were checked against the built DTB rather than assumed: its root
+node carries exactly `model`, `compatible`, `chassis-type`, `interrupt-parent`,
+`#address-cells`, `#size-cells`, `qcom,msm-id` and `qcom,board-id`, and nothing
+else. An earlier version of this file read `Exact DTB match found. DTBO search is
+not required` as being about `msm-id`/`board-id` alone. It is not: it wants the
+PMIC list too, and `CheckAllBitsSet()` cannot pass for a tree that declares no
+`qcom,pmic-id` at all. **So the overlay is applied to our tree every time** —
+`CheckAllBitsSet` is the *only* thing that can clear `DtboNeed`, and
+`BootLinux.c:556` reads it back as `DtboCheckNeeded`.
+
+That is the fact the `__symbols__` work above follows from: a payload whose DTB
+slot holds our tree is *not* the case where ABL uses it untouched, and a tree of
+ours built without `/__symbols__` is one ABL refuses outright, before the kernel's
+first instruction. The overlay does get appended, and where it lands depends on
+what our symbols say (see the `/__sink__` section).
 
 ### BootShim preserves `x0`, so it does not choose the device tree
 
@@ -945,13 +1085,19 @@ will not register a second one; `simpledrm` then binds by its own
 `of_device_id` match. sysfb is the x86/UEFI path.
 
 If the screen stays black while `oem fbreason` says the boot was attempted, the
-fallback address to try is `0xac000000`: that is gauguin's own
-`disp_rdump_region@ac000000` (16 MB), and it is in the **overlay** (dtbo entry
-13), not the base tree — so it is only in the tree ABL assembles when it does
-*not* take ours as-is. It is a debug dump region rather than a scanout buffer, so
-it is the weaker candidate of the two, and the mismatch is itself informative:
-if `0xac000000` is what works, the overlay was applied and our tree was not used
-at all. Changing it is a one-line edit to the DTS.
+first thing to check is not another address but whether the panel is still being
+scanned out at all — the framebuffer above is the bootloader's, and this payload
+never re-initialises DSI (`&mdss` is `disabled`, and `msm` is a module). The
+address itself is settled: `/proc/device-tree/reserved-memory` on the running
+phone has both `cont_splash_region` and `disp_rdump_region@0xa0000000` at
+`0xa0000000+0x2300000`, the bootloader's logo is in it, and `0x9e3400` bytes of
+1080x2400 fit with room to spare.
+
+An earlier version of this section proposed `0xac000000` as a fallback and
+argued that if it worked then "the overlay was applied and our tree was not used
+at all". That test does not exist: the overlay is applied every time (see
+"Exact" above), and `disp_rdump_region@ac000000` is a debug dump region the
+overlay *creates*, not a scanout buffer anyone has ever drawn to.
 
 **A log channel that needs no cable at all.** The kernel is now built with:
 
@@ -962,36 +1108,61 @@ CONFIG_PSTORE=y  CONFIG_PSTORE_RAM=y  CONFIG_PSTORE_CONSOLE=y
 and P1's command line carries
 
 ```
-ramoops.mem_address=0xbff00000 ramoops.mem_size=0x100000
-ramoops.record_size=0x20000 ramoops.console_size=0x20000 ramoops.ftrace_size=0x20000
+ramoops.mem_address=0xd0000000 ramoops.mem_size=0x100000
+ramoops.record_size=0x20000 ramoops.console_size=0x80000 ramoops.ftrace_size=0x20000
 ```
 
-which is the pstore region out of the phone's own base tree (above), **with that
-tree's exact record geometry**. The geometry is not decoration. Android is the
-reader, and the vendor kernel parses the region **by position**:
+**The address is the part that has been wrong twice, and both times the same
+way.** A DT region has to be in DRAM *and* it has to be free, and neither check
+is one ABL makes:
 
-| the phone's base tree | a first draft of ours | consequence |
+| address | inside a RAM partition? | free? |
 |---|---|---|
-| `record-size 0x20000` | 0x20000 | same |
-| `console-size 0x20000` | **0x80000** | Android looks for its console record at 0xbffc0000 and finds our *dmesg* records there instead |
-| `ftrace-size 0x20000` | absent | shifts everything after the dmesg ring by 128 KB |
-| `pmsg-size` absent | absent | same |
-| `ecc-size` absent | absent | same |
+| `0xbff00000` (copied from tree 0, "APQ 8016 SBC") | **no** — in the 69 MB hole between bank 0 (`0x80000000+0x3bb00000`, ends `0xbbb00000`) and bank 1 (`0xc0000000`) | — |
+| `0xc4000000` (our first fix) | yes, `0xc0000000+0xc0000000` | **no** — inside `removed_region@c0000000`, `0xc0000000+0x7b00000`, `compatible = "removed-dma-pool"`, `no-map` |
+| `0xd0000000` (this) | yes, `0x1500000` past that removed region and 2.75 GB inside bank 1 | yes |
 
-The console record is found by walking the region: `dmesg` records first
-(`mem_size - console - ftrace - pmsg`, divided into `record_size` chunks), then
-`console`, then `pmsg`, then `ftrace`. Change any one size and every record
-after it moves, so the 4-byte `persistent_ram` signature Android is looking for
-is not where it is looking. **Getting this wrong costs a device cycle and
-produces nothing at all** — which is the failure mode this whole log channel
-exists to avoid, so it is worth being slow and exact here.
+Both faults land in the same place: `ramoops_init` is a `postcore_initcall` and
+`ramoops.mem_address=` on the command line is the copy that wins over the DT
+node, so the first `ioremap()` and the first ring-buffer write happen before
+there is any console to print a fault on — indistinguishable from a payload that
+never ran, at the price of a device cycle. The second row is the one that is easy
+to argue for: it *is* in DRAM, and the reason it is also in memory that belongs
+to someone else is that the mainline tree (`sm6350.dtsi`) and the phone's own
+tree disagree about how much of bank 1 the bootloader gives away — `0x3900000`
+against `0x7b00000`. `removed-dma-pool` is the name Qualcomm uses for DRAM the
+bootloader has handed to a subsystem, and on this phone that subsystem is the
+modem, the ADSP and the CDSP.
 
-The same values are now in the device tree as a reserved-memory carveout,
-`ramoops@bff00000` with `no-map`, replacing the `ramoops@ffc00000` inherited
-from `sm6350.dtsi` (Fairphone's, different address *and* different geometry).
-The DTS version carries a comment saying why; the build checks for it
+`tools/gauguin.py` now carries both halves as measurements — `DRAM` and
+`PHONE_RESERVED`, the latter read out of the running phone's
+`/proc/device-tree/reserved-memory` — and `tools/abl-boot-check.py` fails any
+payload whose log region is outside the first or inside the second. Against the
+two old payloads it prints exactly the two reasons above.
+
+**The geometry, on the other hand, is ours to choose**, and an earlier version of
+this file got that wrong in the opposite direction by treating the vendor tree's
+`record_size`/`console_size`/`ftrace_size` as a contract with Android. There is
+no such contract on this device: the vendor kernel has no `/sys/fs/pstore`, and
+its own panic log goes through `mtdoops` to a raw partition (`block2mtd` in its
+cmdline points at `/dev/block/sda15` with `mtdoops.record_size=2097152`). The
+only reader is our own kernel, so `console_size` is set to `0x80000` because a
+long console record is what an initramfs bring-up wants, and the region is
+written the same way by both the DT node and the cmdline.
+
+That reader is now real rather than hypothetical: the initramfs prints the tail
+of `/sys/fs/pstore/console-ramoops-0` and `dmesg-ramoops-0` in its report
+(`tools/initramfs/init.c`, `report_pstore()`). So a payload that dies comes back
+up — `panic=10` resets the phone, and `reboot=panic_warm` makes that reset warm,
+which keeps DRAM — and the second boot prints the first boot's last 3 KB on the
+panel. Before that function existed the carveout was write-only.
+
+The same values are in the device tree as a reserved-memory carveout,
+`ramoops@d0000000` with `no-map`, replacing the `ramoops@ffc00000` inherited from
+`sm6350.dtsi` (Fairphone's, different address *and* different geometry). The DTS
+version carries a comment saying why; the build checks for it
 (`tools/build-p1-payloads.sh` refuses to build a DTB that has anything other than
-exactly one `ramoops@bff00000`).
+exactly one `ramoops@d0000000`).
 
 Having both a DT node and cmdline parameters is deliberate, and it does not
 matter which of them wins, because they now say the same thing. It is worth
@@ -1005,9 +1176,8 @@ DT nodes are not populated until `of_platform_default_populate_init` at
 documented cmdline method working as designed, not a bug.
 
 `no-map` means the kernel never hands the region to the page allocator. That
-matters more than it sounds: the base tree's node has no `no-map`, but the base
-tree also *reserves* the range, and a payload that only set `ramoops.mem_address`
-would be pointing pstore at 1 MB of ordinary System RAM. On arm64
+matters more than it sounds: a payload that only set `ramoops.mem_address` would
+be pointing pstore at 1 MB of ordinary System RAM. On arm64
 `request_standard_resources()` never runs, so System RAM is not claimed in
 `iomem_resource` and `ramoops`'s `request_mem_region` **succeeds anyway** — the
 region would look fine and be allocatable, and the log would be corrupted by
@@ -1025,51 +1195,61 @@ With all of that, `PSTORE_CONSOLE` writes every `printk` into the region as it
 is produced — `pstore_console_write` calls the backend directly per chunk and
 registers with `CON_PRINTBUFFER`, so the pre-ramoops boot log is replayed into it
 too; no crash is needed to flush. The sequence "boot our payload → it dies or
-panics (`panic=10`) → the phone reboots itself warm → Android comes up → read
-`/sys/fs/pstore`" therefore produces the kernel log of a payload that had no
-UART, no screen driver, and nothing else to say. Warm reboots keep RAM; a power
-cycle does not, so read the log before pulling the battery on the phone.
+panics (`panic=10`) → the phone reboots itself warm → our payload boots again →
+the initramfs prints the previous boot's tail on the panel" therefore produces
+the kernel log of a payload that had no UART, no screen driver, and nothing else
+to say. Warm reboots keep RAM; a power cycle does not, so read the log before
+pulling the battery or holding the power button on the phone.
 
 Both are reproducible, and reproducible as one command rather than as a recipe
 to retype:
 
 ```sh
-tools/build-p1-payloads.sh              # all five variants
-tools/check-payload.py --stock ~/backup/gauguin/images/part-boot.img \
-    work/out/boot-pstore-*.img          # and refuse any structurally wrong one
+tools/build-initramfs.sh                # the report + heartbeat init
+tools/build-p1-payloads.sh              # all six variants
+tools/check-payload.py work/out/boot-pstore-*.img   # refuse a structurally wrong one
 ```
 
 The script builds the DTB as well as the kernels — the tree is an **input we
 edit** now, so leaving it out of the reproducible path is how the ramoops
 carveout would quietly go missing. It refuses to proceed unless the built tree
-has exactly one `ramoops` node and that node is `ramoops@bff00000`. Its one
-expensive step, the second full kernel build with `CONFIG_EFI=n`, is reused from
-`work/out/Image-noefi` when it already exists; `--rebuild-noefi` forces it after
-a kernel-source or config change. The config it toggles is restored on every exit
-path, so a failed run cannot leave `CONFIG_EFI=n` behind for the next build.
+has exactly one `ramoops` node and that node is `ramoops@d0000000`, and it ends
+by running `tools/abl-boot-check.py` over every image it built, which is the gate
+that now covers the two address faults above. Its one expensive step, the second
+full kernel build with `CONFIG_EFI=n`, is reused from `work/out/Image-noefi` when
+it already exists; `--rebuild-noefi` forces it after a kernel-source or config
+change. The config it toggles is restored on every exit path, so a failed run
+cannot leave `CONFIG_EFI=n` behind for the next build.
 
-`check-payload.py` enforces the layout, and it does so against the phone's own
-image rather than a number written into the checker: it parses the DTB slot of
-the stock `boot` that `--stock` points at, reads the ramoops node out of the
-vendor base tree, and fails the payload if the cmdline, or the payload's own
-tree, disagrees with it on address or on any of the five record sizes. That check
-was written by feeding it the payload built *before* the geometry above was
-corrected, and it named the bug on the first run:
-
-```
-!! the cmdline's ramoops console-size is 0x80000, the phone's own is 0x20000 -
-   Android parses this region by position, so the log would be unreadable
-```
+`check-payload.py` enforces the image *layout* against the constants the phone's
+own image fixes — header version 2, page size 0x1000, the kernel/ramdisk/DTB
+geometry, the DTB magic at the offset the header declares — and against the
+image itself, since declared regions that do not add up to the file size, or an
+AVB footer, are faults no external reference is needed to see. It used to take
+the stock image as a `--stock` reference as well, and no longer does: the only
+thing that reference bought was the ramoops comparison below, and it was the one
+part of the check whose premise was wrong. Its ramoops-geometry check —
+comparing our address and record sizes against the vendor base tree's — has been
+**removed**: the premise was that Android reads the region, and it does not
+(there is no `/sys/fs/pstore` in the vendor kernel; its panic log goes to
+`mtdoops` on a raw partition), and the node it was compared against is in a tree
+nothing selects. A check against a reader that does not exist can only produce
+false failures. What survives there is the part that is self-contained: one
+ramoops node, and a device tree and a command line that name the same region.
+Where the region has to *be* is checked against the *device* instead, by
+`abl-boot-check.py`, which is the check that can actually be right or wrong.
 
 The tree itself is versioned, because the kernel tree is not: the board file
-lives in `dts/sm7225-xiaomi-gauguin.dts`, is regenerated from the Fairphone 4
-file by `tools/make_gauguin_dts.py`, and is copied into the build tree by
-`tools/build-kernel.sh`. The carveout is in all three — the generator emits the
-node and the `delete-node` that removes the inherited one — so regenerating the
-board file cannot silently drop it. `build-p1-payloads.sh` re-copies the tracked
-file in before building the DTB and deletes the stale `.dtb` first, which is the
-same guard from the other side: a build tree whose copy has drifted now fails
-instead of producing a payload whose log goes to 0xffc00000.
+lives in `dts/sm7225-xiaomi-gauguin.dts` and is copied into the build tree by
+`tools/build-p1-payloads.sh`. It was first produced from the Fairphone 4 file by
+a one-shot generator (`tools/make_gauguin_dts.py`), which has since been deleted:
+it rewrote the whole board file from hard-coded blocks, so re-running it would
+have put the old `0xbff00000` carveout back, and its output — the tracked file —
+is now hand-edited far past what it emits. Git history has it.
+`build-p1-payloads.sh` re-copies the tracked file in before building the DTB and
+deletes the stale `.dtb` first, which is the guard from the other side: a build
+tree whose copy has drifted now fails instead of producing a payload whose log
+goes to 0xffc00000.
 
 One consequence worth knowing before it looks like a mystery: the P2 UEFI image
 already written to `boot` was built from an earlier DTB, so a rebuild now differs

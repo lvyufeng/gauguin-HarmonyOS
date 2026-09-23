@@ -13,17 +13,17 @@ anything structurally wrong (bad magic, a DTB that is not at the offset the
 header declares, declared regions that do not add up to the file size, an AVB
 footer).
 
-It also checks the one thing about a payload that is judged *after* the fact:
-where its log will land. The pstore region is parsed by Android by position, so
-a payload can be structurally perfect and still leave a log nobody can read. The
-reference for that check is not a constant in this file — it is read out of the
-device's own `boot` image, whose DTB slot carries the vendor base tree, which is
-the tree whose layout the vendor kernel will apply when it reads the region
-back. See docs/07.
+It also checks the log region a payload declares, but only against the payload
+itself: one ramoops node, and a device tree and a command line that agree on the
+region. It used to compare our address and record geometry against the stock
+image's DTB slot, on the premise that Android reads the region back and parses it
+by position — a premise that is false on this device, since the vendor kernel has
+no /sys/fs/pstore and its panic log goes through mtdoops to a raw partition. The
+node it was compared against is in a tree nothing selects. Placement is checked
+against the *device*, by tools/abl-boot-check.py. See docs/07.
 
 Usage:
     tools/check-payload.py work/out/boot-pstore*.img
-    tools/check-payload.py --stock ~/backup/gauguin/images/part-boot.img img...
 """
 import argparse
 import gzip
@@ -98,15 +98,11 @@ def arm64_header(blob):
 
 # --- device tree, minimally ------------------------------------------------
 #
-# The pstore region is the one thing about a payload that is judged *after* the
-# fact, by Android, out of a region it parses by position. A payload can be
-# structurally perfect and still leave a log nobody can read, so the shape of
-# that region is checked here rather than trusted.
-#
-# The reference is not a constant in this file: it is read out of the phone's
-# own boot image, which carries the vendor's base tree in its DTB slot. That is
-# the tree whose layout the vendor kernel will apply when it reads the region
-# back, so it is the only honest thing to compare against.
+# Enough of a parser to read the ramoops node's address and record geometry out
+# of the DTB a payload carries. There is no external reference to compare it
+# against, and there should not be: the region is ours to place, and what makes
+# an address wrong is a property of the phone's memory map rather than of some
+# other tree's opinion. tools/abl-boot-check.py checks it against the device.
 
 def fdt_nodes(blob):
     """(path, properties) for every node in an FDT. Properties are bytes."""
@@ -220,7 +216,7 @@ def format_spec(s):
             f"pmsg {s.get('pmsg_size', 0):#x} ecc {s.get('ecc_size', 0):#x}")
 
 
-def describe(f, ref=None):
+def describe(f):
     hdr = arm64_header(f["kernel"])
     comp = "gzip" if f["kernel"][:2] == b"\x1f\x8b" else "raw"
     lines = [
@@ -253,12 +249,10 @@ def describe(f, ref=None):
         lines.append(f"   dtb ramoops:    {format_spec(tree)}")
         lines.append(f"   cmdline pstore: {format_spec(cmd)}"
                      + ("   (the cmdline wins - see docs/07)" if cmd else ""))
-        if ref is not None:
-            lines.append(f"   the phone's own:{format_spec(ref)}")
     return "\n".join(lines)
 
 
-def problems(f, ref=None):
+def problems(f):
     """Structural faults that would waste the device cycle outright."""
     out = []
     if f["header_version"] != 2:
@@ -286,16 +280,33 @@ def problems(f, ref=None):
     if hdr is None or not hdr.get("magic"):
         out.append("the kernel carries no arm64 image header (no ARMd at 0x38) "
                    "- ABL's kernel-mode check reads exactly that")
-    out += ramoops_problems(f, ref)
+    out += ramoops_problems(f)
     return out
 
 
-def ramoops_problems(f, ref):
-    """The log region has to be somewhere Android will look, laid out its way.
+def ramoops_problems(f, ref=None):
+    """Whether the log region this image declares is one a boot could use.
 
-    A payload that boots and dies with its log written to the wrong address, or
-    with a different record layout at the right address, is indistinguishable
-    from one that never ran - which is the whole reason the log channel exists.
+    What is checked here is only what this image says about itself: there is one
+    ramoops node (two would make which one wins a question of node order), and
+    its device tree and its command line agree on the region. The command line is
+    the copy that wins - `ramoops_init` is a `postcore_initcall` and registers the
+    cmdline's dummy platform device before `platform_driver_register`, while the
+    DT nodes are not populated until `arch_initcall_sync`, one initcall level
+    later, and `ramoops_probe` refuses any probe after the first - so a
+    disagreement is a tree that lies about where the log is.
+
+    Where the region has to *be* is a different question and is not asked here.
+    This function used to compare our address and record geometry against the
+    ramoops node in the vendor base tree out of the stock image, on the premise
+    that Android reads the region back and parses it by position. That premise is
+    false on this device: the vendor kernel has no /sys/fs/pstore, its panic log
+    goes through mtdoops to a raw partition instead, and the node it was compared
+    against is in a tree nothing ever selects. A comparison against a reader that
+    does not exist can only produce false failures. Placement is checked against
+    the *device* by `tools/abl-boot-check.py` (DRAM partitions and the phone's own
+    no-map carveouts, from tools/gauguin.py), which runs as part of
+    tools/build-p1-payloads.sh.
     """
     if not f["dtb_size"] or f["dtb"][:4] != DTB_MAGIC:
         return []
@@ -312,27 +323,10 @@ def ramoops_problems(f, ref):
     if tree["count"] != 1:
         out.append(f"{tree['count']} ramoops nodes in the device tree; only one "
                    "area is allowed and which one wins is not obvious")
-    if ref is None:
-        return out
 
-    # The cmdline shadows the tree, so it is the one that has to be right.
+    # The cmdline shadows the tree, so the two have to say the same thing.
     cmd = cmdline_ramoops(f["cmdline"])
     effective = cmd if cmd is not None else tree
-    where = "cmdline" if cmd is not None else "device tree"
-    for key, label in (("address", "address"), ("size", "size"),
-                       ("record_size", "record-size"),
-                       ("console_size", "console-size"),
-                       ("ftrace_size", "ftrace-size"),
-                       ("pmsg_size", "pmsg-size"),
-                       ("ecc_size", "ecc-size")):
-        if effective.get(key) != ref.get(key):
-            out.append(
-                f"the {where}'s ramoops {label} is "
-                f"{effective.get(key, 0):#x}, the phone's own is "
-                f"{ref.get(key, 0):#x} - Android parses this region by position, "
-                f"so the log would be unreadable (docs/07)")
-    # And the tree must agree with it, because "which of the two wins" should
-    # never be the reason a log is missing.
     for key in ("address", "record_size", "console_size", "ftrace_size"):
         if tree.get(key) != effective.get(key):
             out.append(f"this image's device tree and its cmdline disagree on "
@@ -344,38 +338,17 @@ def ramoops_problems(f, ref):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("images", nargs="+")
-    ap.add_argument("--stock", default=None,
-                    help="the device's own boot image, to print alongside and to "
-                         "take the pstore region's address and record geometry "
-                         "from (its DTB slot carries the vendor base tree)")
     args = ap.parse_args()
 
-    bad, ref = 0, None
-    if args.stock:
-        s = read_image(args.stock)
-        if s is None:
-            sys.exit(f"{args.stock}: not an Android boot image")
-        print(describe(s))
-        print("   (the reference: this is the image the phone boots today)")
-        if s["dtb_size"] and s["dtb"][:4] == DTB_MAGIC:
-            try:
-                ref = ramoops_spec(s["dtb"])
-            except ValueError as e:
-                print(f"   ** its device tree does not parse: {e} **")
-        if ref is None:
-            print("   ** and it declares no ramoops region, so there is nothing "
-                  "to check the payloads' log layout against **")
-        print()
-        # The reference image is old and is not what we flash; do not report its
-        # own header as a fault.
+    bad = 0
     for p in args.images:
         f = read_image(p)
         if f is None:
             print(f"== {p}\n   ** not an Android boot image **\n")
             bad += 1
             continue
-        print(describe(f, ref))
-        probs = problems(f, ref)
+        print(describe(f))
+        probs = problems(f)
         if probs:
             for x in probs:
                 print(f"   !! {x}")

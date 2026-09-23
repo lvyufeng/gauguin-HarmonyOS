@@ -224,18 +224,20 @@ def patch_image_header(kernel, text_offset, image_size):
             struct.pack_into("<Q", blob, off, want)
             print(f"  {field} patched {got:#x} -> {want:#x}")
 
-        # ABL contains "Decompress kernel size is smaller than image header
-        # size", and this is the value that check would compare against. Say
-        # whether the image now passes it, because that is the whole point of
-        # touching image_size — and because a decimal/hex slip is otherwise
-        # silent: `--image-size 46891520` sets 0x46891520, which is larger than
-        # the kernel and would fail the check while looking like a number.
+        # ABL reads this back in exactly one place, after the decompressor has
+        # run: it refuses the boot when Kptr->ImageSize exceeds the headroom
+        # between the kernel load address and the device tree load address
+        # ("DTB header can get corrupted due to runtime kernel size"). Both of
+        # those addresses come from the device's memory map, not from this file,
+        # so the verdict is not computable here - tools/abl-boot-check.py works
+        # it out from the map and prints it. What is worth saying here is only
+        # that a decimal/hex slip is silent otherwise: `--image-size 46891520`
+        # sets 0x46891520, which looks like a number and is 1 GB.
         if image_size is not None:
             declared, = struct.unpack_from("<Q", blob, 16)
-            n = len(blob)
-            verdict = "passes" if n >= declared else "FAILS"
-            print(f"  decompressed {n:,} vs declared {declared:,} -> {verdict} "
-                  f"a 'decompressed >= declared' check")
+            print(f"  image_size now {declared:#x} ({declared:,}); ABL compares it "
+                  f"against the kernel-to-DTB headroom, which abl-boot-check.py "
+                  f"computes")
         return bytes(blob)
 
     if kernel[:2] == b"\x1f\x8b":
@@ -265,13 +267,14 @@ def main():
                          "declares is a safe way to remove a difference")
     ap.add_argument("--image-size", default=None, metavar="HEX",
                     help="patch image_size at offset 16 of a raw arm64 Image "
-                         "header. ABL has a check that reads "
-                         "'Decompress kernel size is smaller than image header "
-                         "size', and BootShim's is written so it passes "
-                         "(0x300000 declared, 0x300070 decompressed) while a "
-                         "Linux Image.gz fails it (image_size covers BSS and so "
-                         "exceeds the file). Lowering this to at most the real "
-                         "size is the experiment")
+                         "header. This is the one header field ABL does read "
+                         "back: after decompressing it refuses the boot when "
+                         "ImageSize exceeds the headroom between where the "
+                         "kernel is copied and where the device tree goes "
+                         "('DTB header can get corrupted due to runtime kernel "
+                         "size'). Whether that fires is a property of the "
+                         "device's memory map, so tools/abl-boot-check.py is "
+                         "what gives the verdict")
     ap.add_argument("--compression", choices=("gzip", "none"), default="gzip")
     ap.add_argument("--profile", choices=sorted(PROFILES), default="stock")
     ap.add_argument("--compare", metavar="IMG",

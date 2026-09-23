@@ -49,24 +49,28 @@ outcome means and which payload to try next, is
    and TWRP is then not a fallback but the only way in; it also reads the
    partition back and compares the hash, so "the write landed" is established
    rather than assumed.
-4. `work/out/boot-pstore.img` and its four siblings `-raw`, `-raw-txt`,
-   `-raw-noefi`, `-gz-fixedsz` — P1's mainline kernel in the five shapes that
-   differ on the properties separating our images
-   from the one the phone boots (raw vs compressed, EFI-stub form of the arm64
+4. `work/out/boot-pstore.img` and its five siblings `-raw`, `-raw-txt`,
+   `-raw-noefi`, `-gz-noefi`, `-gz-fixedsz` — P1's mainline kernel in the six
+   shapes that differ on the properties separating our images from the one the
+   phone boots (raw vs compressed, EFI-stub form of the arm64
    header, `text_offset`), each with `CONFIG_PSTORE_CONSOLE`/`PSTORE_RAM` and a
-   cmdline that puts the kernel log in the phone's own pstore region
-   (`0xbff00000`), **using that region's own record geometry** so Android can
-   parse it afterwards. The device tree reserves the same range
-   (`ramoops@bff00000`, `no-map`) and the cmdline carries `reboot=panic_warm`, so
-   a payload with no UART and no screen driver can still be read back at
+   cmdline that puts the kernel log in a pstore region **we choose**
+   (`0xd0000000`, `ramoops@d0000000`, `no-map`). The phone declares no ramoops
+   region of its own — its panic log goes through `mtdoops` to a raw partition —
+   so there is nothing to match and the address is checked against the phone's
+   DRAM partitions *and* its `no-map` carveouts (`tools/abl-boot-check.py`); the
+   two earlier addresses were wrong in exactly those two ways, one outside every
+   RAM partition and one inside the bootloader's `removed-dma-pool` for the modem
+   and DSPs. The cmdline carries `reboot=panic_warm`, so a payload with no UART
+   and no screen driver can still be read back at
    `/sys/fs/pstore/console-ramoops-0` after the phone reboots itself (step 4.5 in
    the runbook; the reasoning is in `docs/07`). `tools/build-p1-payloads.sh`
    builds the DTB and all of the images in one pass and refuses to ship a tree
-   whose ramoops node is not where Android looks **or whose `/chosen` has no
-   `simple-framebuffer`**, because both channels are in that one file and a
-   payload missing either is indistinguishable from one that works;
-   `tools/check-payload.py` prints them against the stock image and refuses to
-   let a structurally wrong one reach the device. The screen half is the one that
+   that is missing either log channel — one `ramoops` node at the address above,
+   **or a `/chosen` with no `simple-framebuffer`** — because both are in that one
+   file and a payload missing either is indistinguishable from one that works;
+   `tools/check-payload.py` refuses to let a structurally wrong one reach the
+   device. The screen half is the one that
    needs no round trip: the logo being replaced by the kernel log, and then by
    init's `alive: N s uptime` heartbeat, is P1's gate observed directly. The log
    half needs the phone to restart itself, so the kernel is also built to panic on
@@ -78,6 +82,38 @@ outcome means and which payload to try next, is
    with a P1 variant on the compression property, which is what makes the pair —
    and not the individual attempt — the thing to read: see step 4b/4c in the
    runbook.
+
+Those pieces are backed by four offline tools, which exist because a device cycle
+is expensive and a bad image costs a physical reset. Every defect this project has
+found in a payload was found by one of them rather than by the phone:
+
+- `tools/abl-boot-check.py` — replays ABL's decision path over a built image and
+  says whether *this phone* would take it: the arm64 header check, the
+  `msm-id`/`board-id` selection, the overlay's fixups against our `/__symbols__`,
+  and the two placement questions (inside a DRAM partition, outside every `no-map`
+  carveout) for the ramoops region and the framebuffer. Run by
+  `tools/build-p1-payloads.sh` at the end, so a payload that fails it never
+  reaches anyone.
+- `tools/gauguin.py` — this phone's memory model in one place: the DRAM
+  partitions and the `no-map` carveouts, both measured from the running phone's
+  `/proc/device-tree` rather than read out of a tree's source.
+- `tools/fdt.py` — just enough flattened-device-tree parsing to ask questions
+  about a blob: the header, the node walk, `/__symbols__`, the overlay's
+  `__fixups__`/`__overlay__` fragments, and the `qcom,msm-id`/`qcom,board-id`
+  cells the selection turns on.
+- `tools/make_dtbo_sinks.py` — generates the `/__symbols__` and the empty sink
+  nodes the vendor overlay's 158 fixups resolve against. An input to the build
+  rather than a check: without it ABL refuses every payload with
+  `ApplyOverlay: ufdt apply overlay failed`, and with it the overlay lands in a
+  subtree nothing binds to.
+
+The reference for all of these is Qualcomm's own `QcomModulePkg` (the ABL
+source), vendored at `work/ref/mu_qcommodulepkg` from
+`Daniel224455/mu_qcommodulepkg` and validated byte-for-byte against the PE
+extracted from this phone. It is gitignored — a large copy of someone else's
+tree — and used as the authority for what ABL does, which is why `docs/07`'s
+claims about `CheckAllBitsSet`, `GZipPkgCheck` and the ramoops address can be
+read against `file:line` instead of inferred from behaviour.
 
 ### Standing decisions, with one amendment
 
@@ -129,9 +165,15 @@ Work:
 2. Write `arch/arm64/boot/dts/qcom/sm7225-xiaomi-gauguin.dts` — clone the Fairphone 4
    board file, change panel, touch controller, regulators, and the `qcom,board-id`
 3. Build `Image` + `dtb`, wrap into an Android boot image — with our tree in the
-   boot image's DTB slot, because ABL uses it as-is when the `msm-id`/`board-id`
-   match exactly, instead of overlaying the vendor tree on top (`docs/07`). Add
-   the pstore cmdline so the boot leaves a readable log.
+   boot image's DTB slot. That does **not** make ABL use it as-is: matching
+   `msm-id`/`board-id` gets two of the six bits `CheckAllBitsSet` needs, and the
+   tree declares no `pmic-id`, `softsku-id`, `platform-subtype` or `foundry-id`,
+   so the vendor overlay is applied to our tree on every boot. The tree therefore
+   carries the `/__symbols__` the overlay's fixups resolve against
+   (`tools/make_dtbo_sinks.py`), and a payload built without it is refused before
+   the kernel runs (`docs/07`). Add the pstore cmdline so the boot leaves a
+   readable log at an address we choose, checked against the phone's own DRAM map
+   and carveouts.
 4. `fastboot boot boot.img` — nothing written to the device
 5. Use `extract_dtb` / `/proc/device-tree` output as the hardware reference
 

@@ -47,6 +47,16 @@
 
 		stdout-path = "serial0:115200n8";
 
+		/*
+		 * The address is the phone's, not ours: the running tree - which
+		 * ABL has already patched - reserves 0xa0000000 for 0x2300000 as
+		 * both cont_splash_region and disp_rdump_region@0xa0000000, and
+		 * the bootloader's logo is in it. That is the point: the DPU is
+		 * still scanning that memory out when the kernel starts, so a
+		 * framebuffer here is on screen without driving any display
+		 * hardware, which is what makes the first bring-up visible at all.
+		 * Our 1080x2400x4 = 0x9e3400 bytes fit inside it.
+		 */
 		framebuffer0: framebuffer@a0000000 {
 			compatible = "simple-framebuffer";
 			reg = <0 0xa0000000 0 (2400 * 1080 * 4)>;
@@ -92,12 +102,67 @@
 			qcom,vmid = <QCOM_SCM_VMID_MSS_MSA>;
 		};
 
-		/* See the delete-node note at the bottom of this file. */
-		ramoops@bff00000 {
+		/*
+		 * Our log region - not the phone's, because this phone has none.
+		 * The 0xbff00000 node this used to copy is in tree 0 of the boot
+		 * image, "Qualcomm Technologies, Inc. APQ 8016 SBC", which has no
+		 * qcom,msm-id and is never selectable; the tree ABL does hand over
+		 * (Lagoon SoC) has no ramoops at all, this device's dtbo overlay has
+		 * no ramoops, the boot image's command line has no ramoops
+		 * parameters, and ABL itself contains neither the string "ramoops"
+		 * nor "pstore". The device tree dumped from the running phone
+		 * (/proc/device-tree, which ABL has already patched) confirms it:
+		 * no ramoops node, and /sys/fs/pstore is not a channel this phone
+		 * has. See docs/07.
+		 *
+		 * That address is worse than merely unsupported - it is not DRAM.
+		 * ABL writes the RAM partition table into /memory, and on this
+		 * phone bank 0 ends at 0xbbb00000 while bank 1 starts at
+		 * 0xc0000000, so 0xbff00000 sits in the 69 MB gap between them:
+		 * outside every partition memblock is given. `no-map` on a range
+		 * outside memblock reserves nothing, and ramoops is a
+		 * postcore_initcall, so its ioremap() of that address and the first
+		 * touch of the ring buffer happen before there is any console to
+		 * print a fault on - which is indistinguishable from a payload that
+		 * never ran.
+		 *
+		 * 0xc4000000 was the next attempt and it is DRAM in bank 1 - but it
+		 * is DRAM the phone has already given away. The tree ABL actually
+		 * boots (Lagoon SoC, the one androidboot.dtb_idx=8 names) removes
+		 * the first 0x7b00000 of bank 1: removed_region@c0000000 is
+		 * 0xc0000000+0x7b00000, with compatible "removed-dma-pool" and
+		 * no-map. In mainline sm6350.dtsi the same node is 0xc0000000+
+		 * 0x3900000, and that is where the "ends at 0xc3900000" this comment
+		 * used to claim came from - a mainline guess read off our own tree
+		 * instead of off the phone. Against the phone's own number,
+		 * 0xc4000000 is inside the removed region, i.e. inside memory the
+		 * bootloader has handed to the modem and the DSPs. It is in DRAM and
+		 * not ours at the same time.
+		 *
+		 * 0xd0000000 is 0x1500000 past the end of that removed region, 2.75
+		 * GB into bank 1 (which the partition table gives as
+		 * 0xc0000000+0xc0000000) - so it is clear of the removed region by
+		 * more than the region itself is large, and clear of the end of the
+		 * bank by an order of magnitude more. Nothing in any of the three
+		 * trees involved - ours, the vendor base tree, or the Gauguin
+		 * overlay - reserves anything at or near it. It is reserved here
+		 * with no-map so the kernel never hands those pages out. The
+		 * geometry is ours to choose: with nothing on this device to match,
+		 * console-size is set large because an early boot log is the point.
+		 * docs/p1-cmdline.txt carries the same numbers, and that copy is the
+		 * one in force - ramoops_register_dummy() runs from the same
+		 * postcore_initcall that registers the driver, while the DT probe is
+		 * a later initcall, so "only a single ramoops area allowed at a
+		 * time" rejects the node below. They are kept in step anyway, so
+		 * that reading the tree does not mislead about what the log is, and
+		 * tools/abl-boot-check.py fails the payload if either copy lands
+		 * outside free DRAM.
+		 */
+		ramoops@d0000000 {
 			compatible = "ramoops";
-			reg = <0 0xbff00000 0 0x100000>;
+			reg = <0 0xd0000000 0 0x100000>;
 			record-size = <0x20000>;
-			console-size = <0x20000>;
+			console-size = <0x80000>;
 			ftrace-size = <0x20000>;
 			no-map;
 		};
@@ -1183,22 +1248,15 @@
 
 /*
  * The inherited node from sm6350.dtsi is Fairphone's and sits at 0xffc00000
- * with its own record geometry. This phone's own base tree - the one ABL hands
- * to the vendor kernel - puts ramoops at 0xbff00000 instead: 1 MiB at the top
- * of the first DRAM bank, ending exactly where bank 1 begins, with
- * record/console/ftrace all 0x20000 and no pmsg and no ECC.
- *
- * That address and geometry matter because Android is the reader: after a
- * failed bring-up the log is recovered by warm-rebooting into Android and
- * reading /sys/fs/pstore/console-ramoops-0, and the vendor kernel parses that
- * region by position. A different console_size puts our console record where
- * Android looks for a dmesg record, and an ECC size changes the record format
- * outright - either way the log becomes unreadable, which is the one thing a
- * payload with no screen output cannot afford. The build's cmdline carries the
- * same values, so it does not matter which of the two wins.
+ * with its own record geometry. Ours is at 0xd0000000 and is described where
+ * it is defined, at the top of this file - including why the address is this
+ * phone's own choice rather than a copy of anything the phone declares.
  *
  * The inherited node is deleted rather than overridden by label: overriding
  * would leave the old name on the new address, so the tree would read
- * "ramoops@ffc00000" at 0xbff00000 for anyone looking at it afterwards.
+ * "ramoops@ffc00000" at 0xd0000000 for anyone looking at it afterwards. And a
+ * second ramoops node anywhere in the tree is not cosmetic - ramoops holds
+ * "only a single ramoops area allowed at a time" and fails extra probes, so
+ * which of the two wins would come down to node order.
  */
 /delete-node/ &ramoops;
