@@ -348,9 +348,30 @@ def main():
           f"({cum * 0x1000 / (1024 * 1024):.2f} MiB)")
     print(f"  s: {cum_s} pages = {cum_s * 0x1000} B")
     print(f"  L: {cum_l} pages = {cum_l * 0x1000} B")
+    # The comparison below is only worth making if that region really is
+    # EfiConventionalMemory, and that is two tree facts rather than an
+    # assumption. Both were checked, and one of them is easy to get backwards:
+    #
+    #   1. MemoryMapLib.h's SYS_MEM_CAP is PRESENT|INITIALIZED|TESTED plus the
+    #      cacheability bits and the three *_PROTECTABLE bits. Every one of those
+    #      outside the first three is also outside Gcd.c's MEMORY_ATTRIBUTE_MASK,
+    #      so `attr & MASK` is exactly TESTED_MEMORY_ATTRIBUTES (0x7) and the
+    #      region is EfiGcdMemoryTypeSystemMemory, not Reserved. The mask holds
+    #      *_PROTECTED (EXECUTION_PROTECTED 0x200), not *_PROTECTABLE
+    #      (EXECUTION_PROTECTABLE 0x400000); reading one for the other makes this
+    #      look like a Reserved region and the comparison below look invalid.
+    #
+    #   2. MemoryInitPei.c builds a memory allocation HOB for each such region,
+    #      and CoreInitializeGcdServices hands that HOB's own MemoryType to
+    #      CoreAddMemoryDescriptor (Gcd.c:2776). For the Conv column that is
+    #      EfiConventionalMemory.
+    #
+    # The other three rows carrying Conv are MMAP_IO rather than SYS_MEM, so they
+    # are EfiGcdMemoryTypeMemoryMappedIo and never reach that call: the DXE Heap
+    # is the only row that is both SYS_MEM/SYS_MEM_CAP and Conv.
     print("against the DXE heap, which is the only EfiConventionalMemory region "
-          "on this\nplatform: {\"DXE Heap\", 0x9B800000, 0x02360000, Conv, "
-          "WRITE_BACK_XN} = 35.4 MiB")
+          "on this\nplatform: {\"DXE Heap\", 0x9B800000, 0x02360000, AddMem, "
+          "SYS_MEM, SYS_MEM_CAP, Conv,\nWRITE_BACK_XN} = 35.4 MiB")
 
 
 if __name__ == "__main__":
