@@ -2343,16 +2343,28 @@ Three lines were added, all from inside the same `P2BRINGUP` block, all printed 
   `SEQ` itself — see the phase split above; `WHY` is what distinguishes the 27
   load failures from each other.)
 
-### The reading, and it is now a steady state rather than a race
+### The reading, and the race was shortened rather than removed
 
 `P2Digest ()` is called **41 times**, with `CoreStall (300000)` between calls. The
-console wipes rather than scrolls, so after the first wipe the panel holds nothing
-but copies of the digest, and whatever is on the screen whenever someone looks is
-a valid reading. That is the whole purpose: it converts "photograph the right
-moment" into "photograph any moment". The loop is bounded and `CoreStall` returns
-`EFI_NOT_AVAILABLE_YET` quietly when `gMetronome` is NULL, so this cannot hang —
-control falls through into the `ASSERT` at `DxeMain.c(593)` exactly as before, and
-the reboot loop continues unchanged.
+console wipes rather than scrolls, so once the digest has been drawn the panel
+holds nothing but copies of it, and a reading can be taken from whatever frame is
+up — the intent was to convert "photograph the right moment" into "photograph any
+moment".
+
+It shortens the race rather than removing it, and this section as first written
+said otherwise: it claimed the 41 copies were free, because "`CoreStall` returns
+`EFI_NOT_AVAILABLE_YET` quietly when `gMetronome` is NULL". That is false on this
+platform, and step 4.9's own table is what refutes it — `MetronomeDxe` and
+`ArmTimerDxe` are both reported **present**, and the `s` at ap8 and ap9 in the SEQ
+line is the same fact from the other side. `gMetronome` is therefore not NULL,
+`CoreStall` waits, and the 41 copies are **40 × 300 ms = 12 seconds** of digest on
+the panel.
+
+Twelve seconds is a window, not a steady state, and it is bracketed on both sides
+by things this document does not control: before it the reset and the boot, after
+it the `ASSERT` at `DxeMain.c(593)` on `CoreAllEfiServicesAvailable`, whose output
+lands on the same panel. Step 4.14 lengthens the window and, more to the point,
+stops it depending on the drivers under test.
 
 ### The host-side prediction, so the comparison is a checkable pair
 
@@ -2497,11 +2509,112 @@ different faults.
 | flashed to | `boot` (`sde55`), via `tools/flash-boot.sh --twrp` |
 | read back | `ok the first 1142784 bytes of boot match` |
 | previous `boot` content | archived first, per "对照的那张必须在覆盖之前读" — `work/out/boot-pre-flash-0923c.bin`, sha256 `03ef39d1ea1cef463f77c8ee916ab46447e96b756011836388621a0d0788d574` |
+| this image is | the one on the phone as of this step, and the one step 4.14 replaces. Kept at `work/out/p2-silicon-gzip-preread-0923d.img` (same sha256) so the two can be told apart by more than a filename |
 
 Everything in the flashed image came from a tree that compiles with **zero
 `error:` lines**; the build's exit status is 1 from the declared `mkbootimg`
 `DTB image must not be empty.` nag and the artifact was checked directly, as
 `tools/build-p2-payloads.sh` does.
+
+## Step 4.14 — The pause is made independent of what it measures
+
+### What was wrong, and it was not the length
+
+Step 4.13's repeat loop stalls on `CoreStall` between the 41 copies of the digest.
+`CoreStall` waits by way of `gMetronome`, and `gMetronome` is installed by
+`MetronomeDxe` — one of the drivers in the volume under measurement. It happens to
+work out on this run, because `MetronomeDxe` is one of the nineteen that start
+(`s` at ap8 in the SEQ line), which is exactly why the pause is 12 seconds rather
+than nothing. But that makes the instrument's readability a function of its own
+reading: a run in which `MetronomeDxe` does not start prints the 41 copies back to
+back and loses the digest entirely, and the interesting run is the one where the
+set of drivers that start has changed. Twelve seconds is also short for reading
+twenty-odd lines off a panel that only exists between a reset and an assert.
+
+### The change, and it is one function
+
+`Dispatcher.c` gains `P2Hold ()` and a file-scope `volatile UINTN mP2Spin`, and
+the repeat loop's `CoreStall (300000)` becomes `P2Hold ()`:
+
+```c
+Hold = 2000000000ULL;
+for (Count = 0; Count < Hold; Count++) {
+  mP2Spin += Count;
+}
+```
+
+A cycle count and not a clock, because this platform has no clock to count with:
+`CNTFRQ_EL0` reads 0 — the same fact that makes the two timer libraries in this
+patch fall back to `PcdTimerFreqOverwrite` — so a duration in seconds is not
+something the dispatcher can compute. Each iteration is a read-modify-write on a
+volatile, so it cannot be folded away. Its cost is at least one cycle and more
+likely a handful, since it is a load-add-store with a store-to-load dependency,
+which puts a copy at roughly 1–6 seconds and the 40 copies at **44 seconds in the
+worse-than-possible case and three to four minutes realistically**. The excursion
+is upward only: a hold that is too long holds the screen longer. The loop stays
+bounded, so control still reaches `ASSERT_EFI_ERROR (Status)` at `DxeMain.c(593)`
+and the boot still ends — minutes later.
+
+### What proves it is in the image
+
+The hold has no string to grep for, so the check is the instructions themselves.
+`Hold = 2000000000ULL` compiles to a `movz`/`movk` pair, and `0x77359400` appears
+exactly once in the new `DxeCore` and not at all in the one the phone is
+carrying:
+
+```
+new (to flash)  DxeCore 170496 B   movk #0x7735, lsl #16  -> 1
+old (on phone)  DxeCore 170496 B   movk #0x7735, lsl #16  -> 0
+```
+
+and the loop around it is the shape above, not something the compiler folded:
+
+```
+3e04:  mov   w20, #0x800                  // the low half of 2e9
+3e08:  mov   x19, xzr                     // Index = 0
+3e0c:  movk  w20, #0x7735, lsl #16        // w20 = 0x77359400
+3e14:  cmp   x19, #0x28                   // Index < 40
+3e18:  b.eq  0x3e48
+3e20:  cmp   x8, x20                      // Count < Hold
+3e28:  ldr   x9, [x22, #2288]             // mP2Spin
+3e2c:  add   x9, x8, x9
+3e30:  add   x8, x8, #0x1                 // Count++
+3e34:  str   x9, [x22, #2288]             // mP2Spin += Count
+3e38:  b     0x3e20
+3e3c:  bl    0x114b0                      // P2Digest ()
+3e40:  add   x19, x19, #0x1
+3e44:  b     0x3e14
+```
+
+The load and the store are both present in the loop body, which is the thing being
+verified: a busy-wait that the optimiser had seen through would be a pause of
+zero, and the disassembly is what distinguishes the two.
+
+The build that produced it reports **zero `error:` lines** and `PROGRESS -
+Success` (exit status 1 is the declared `mkbootimg` nag), `tools/build-p2-payloads.sh`
+re-ran both gates over all three images, and the volume compares clean against
+`FVMAIN.Fv.txt` — "123 offsets and GUIDs, zero mismatches".
+
+### The image, and where it is now
+
+| | |
+|---|---|
+| image | `work/out/p2-variants/Mu-gauguin-silicon-gzip.img` |
+| size | 1,140,736 B |
+| sha256 | `725c33c18df17b69f6e0e95186f2bb63b941e55b4dc4890e25ab8339c534371e` |
+| supersedes | `8c565681d1093b76c1cf184a549099aa2a957127c8be5ded439d934164535842` (step 4.13, preserved at `work/out/p2-silicon-gzip-preread-0923d.img`) |
+| difference | one function and its call site in `DxeCore`; nothing else in the volume changed, and the 123 files are at the same offsets |
+| on the phone | **not yet** — the phone still carries the step-4.13 image |
+| to write it | `tools/flash-boot.sh --twrp work/out/p2-variants/Mu-gauguin-silicon-gzip.img`, from TWRP |
+
+### What to read, and it is the same list
+
+Nothing about the digest changed but the time it is on the screen, so step 4.13's
+reading table stands unchanged — `P2 APRI` (`bytes=1120 entries=70 sum=a998b263`
+is the host's value), `miss`, `P2 SEQ`, `P2 WHY`, `P2 STATS`, the five `P2 WALK`
+lines and `P2 FREE`. The difference is that a given frame now stays up for
+long enough to be written down rather than remembered, which is what the last
+four sessions were losing.
 
 ## Step 5 — Leave it bootable
 

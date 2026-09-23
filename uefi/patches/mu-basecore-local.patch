@@ -60,6 +60,19 @@
 #       still satisfy at the moment the assert fires. The first separates "the
 #       walk ended" from "the walk was cut off" by count, the second says whether
 #       what remained was memory. Both are things the host cannot compute.
+#
+#       It also replaces the digest's pause. The repeat loop stalled on
+#       CoreStall, which waits through the Metronome - and the Metronome is
+#       installed by `MetronomeDxe`, one of the drivers this volume is being
+#       measured on. It works today (that driver is one of the nineteen that
+#       start, so the 41 copies take twelve seconds) but it is a pause the
+#       measurement can change, and twelve seconds is the whole budget for
+#       reading a screen that only exists between a reset and the assert. The
+#       pause is now a bounded busy-wait on a volatile counter - a cycle count,
+#       not a clock: CNTFRQ_EL0 reads 0 here, which is the reason the timer
+#       libraries above carry PcdTimerFreqOverwrite - so it is a minute or more
+#       regardless of which drivers load. It exists so the digest can be
+#       photographed, and it goes away with the rest of the block.
 diff --git a/ArmPkg/Library/ArmGenericTimerPhyCounterLib/ArmGenericTimerPhyCounterLib.c b/ArmPkg/Library/ArmGenericTimerPhyCounterLib/ArmGenericTimerPhyCounterLib.c
 index fbbecdc5..9378c270 100644
 --- a/ArmPkg/Library/ArmGenericTimerPhyCounterLib/ArmGenericTimerPhyCounterLib.c
@@ -273,10 +286,10 @@ index 39668123..8405bc31 100644
  #define  USB_INTERFACE_SIGNATURE  SIGNATURE_32 ('U', 'S', 'B', 'I')
  #define  USB_BUS_SIGNATURE        SIGNATURE_32 ('U', 'S', 'B', 'B')
 diff --git a/MdeModulePkg/Core/Dxe/Dispatcher/Dispatcher.c b/MdeModulePkg/Core/Dxe/Dispatcher/Dispatcher.c
-index d7c7147e..dbc256f4 100644
+index d7c7147e..2776f9c1 100644
 --- a/MdeModulePkg/Core/Dxe/Dispatcher/Dispatcher.c
 +++ b/MdeModulePkg/Core/Dxe/Dispatcher/Dispatcher.c
-@@ -60,6 +60,215 @@ EFI_LOCK  mDispatcherLock = EFI_INITIALIZE_LOCK_VARIABLE (TPL_HIGH_LEVEL);
+@@ -60,6 +60,264 @@ EFI_LOCK  mDispatcherLock = EFI_INITIALIZE_LOCK_VARIABLE (TPL_HIGH_LEVEL);
  //
  BOOLEAN  gDispatcherRunning = FALSE;
  
@@ -411,6 +424,55 @@ index d7c7147e..dbc256f4 100644
 +  return 0;
 +}
 +
++//
++// P2BRINGUP: the digest is printed 41 times and the pause between the copies was
++// CoreStall's, which is a real stall here: `MetronomeDxe` and `ArmTimerDxe` are
++// both in the `s` set - the SEQ line says so - so gMetronome is non-NULL and
++// 40 x 300000 us is twelve seconds. (This was carried for a window as "CoreStall
++// returns without waiting", which step 4.9's own table refutes: Metronome and
++// Timer are both present, and the two drivers that make them present are two of
++// the nineteen that started.)
++//
++// Twelve seconds is the whole budget for reading a screen that is only reachable
++// between a reset and the assert that follows, which is why the digest has been
++// read in fragments across four sessions. Two things are wrong with that pause
++// and neither is only its length. It is a function of the drivers under test:
++// the instrument's readability depends on MetronomeDxe having started, so a run
++// in which it does not would print the 41 copies back to back and lose the
++// digest entirely. And it is 300 ms a copy regardless of what the panel costs to
++// read. A pause that the measurement can change is not part of the instrument.
++//
++// This is a plain busy-wait on a counter instead. A cycle count and not a clock:
++// CNTFRQ_EL0 reads 0 on this platform - the timer libraries carry
++// PcdTimerFreqOverwrite for exactly that - so a count of seconds is not
++// something this code can compute, and a hold that is too long only holds the
++// screen longer. The loop stays bounded, so control still reaches the assert
++// that follows and the boot still ends; it ends minutes later.
++//
++STATIC volatile UINTN  mP2Spin = 0;
++
++STATIC
++VOID
++P2Hold (
++  VOID
++  )
++{
++  UINTN  Count;
++  UINTN  Hold;
++
++  // Each iteration is a volatile read-modify-write, so it cannot be folded away
++  // and its cost is at least a cycle and more likely a handful - so this is a
++  // few seconds a copy, and the 40 copies are a minute or more. The bound is
++  // what matters rather than the figure: even at one cycle an iteration, which
++  // is faster than the loop can run, 40 copies still outlast the twelve seconds
++  // they replace.
++  Hold = 2000000000ULL;
++
++  for (Count = 0; Count < Hold; Count++) {
++    mP2Spin += Count;
++  }
++}
++
 +STATIC
 +CHAR8
 +P2WhyLetter (
@@ -492,7 +554,7 @@ index d7c7147e..dbc256f4 100644
  //
  // Module globals to manage the FwVol registration notification event
  //
-@@ -483,6 +692,8 @@ CoreDispatcher (
+@@ -483,6 +741,8 @@ CoreDispatcher (
              DriverEntry->Initialized = TRUE;
            }
  
@@ -501,7 +563,7 @@ index d7c7147e..dbc256f4 100644
            DriverEntry->Scheduled = FALSE;
            RemoveEntryList (&DriverEntry->ScheduledLink);
  
-@@ -519,6 +730,13 @@ CoreDispatcher (
+@@ -519,6 +779,13 @@ CoreDispatcher (
  
          Status = CoreStartImage (DriverEntry->ImageHandle, NULL, NULL);
  
@@ -515,7 +577,7 @@ index d7c7147e..dbc256f4 100644
          REPORT_STATUS_CODE_WITH_EXTENDED_DATA (
            EFI_PROGRESS_CODE,
            (EFI_SOFTWARE_DXE_CORE | EFI_SW_PC_INIT_END),
-@@ -896,6 +1114,8 @@ CoreAddToDriverList (
+@@ -896,6 +1163,8 @@ CoreAddToDriverList (
  
    CoreReleaseDispatcherLock ();
  
@@ -524,7 +586,7 @@ index d7c7147e..dbc256f4 100644
    return EFI_SUCCESS;
  }
  
-@@ -1309,6 +1529,16 @@ CoreFwVolEventProtocolNotify (
+@@ -1309,6 +1578,16 @@ CoreFwVolEventProtocolNotify (
                                    &Attributes,
                                    &Size
                                    );
@@ -541,7 +603,7 @@ index d7c7147e..dbc256f4 100644
          if (!EFI_ERROR (GetNextFileStatus)) {
            if (Type == EFI_FV_FILETYPE_DXE_CORE) {
              //
-@@ -1412,6 +1642,26 @@ CoreFwVolEventProtocolNotify (
+@@ -1412,6 +1691,26 @@ CoreFwVolEventProtocolNotify (
                          );
      if (!EFI_ERROR (Status)) {
        AprioriEntryCount = SizeOfBuffer / sizeof (EFI_GUID);
@@ -568,7 +630,7 @@ index d7c7147e..dbc256f4 100644
      } else {
        AprioriEntryCount = 0;
      }
-@@ -1433,11 +1683,43 @@ CoreFwVolEventProtocolNotify (
+@@ -1433,11 +1732,43 @@ CoreFwVolEventProtocolNotify (
            DriverEntry->Scheduled = TRUE;
            InsertTailList (&mScheduledQueue, &DriverEntry->ScheduledLink);
            CoreReleaseDispatcherLock ();
@@ -612,7 +674,7 @@ index d7c7147e..dbc256f4 100644
      }
  
      //
-@@ -1470,6 +1752,149 @@ CoreInitializeDispatcher (
+@@ -1470,6 +1801,149 @@ CoreInitializeDispatcher (
    PERF_FUNCTION_END ();
  }
  
@@ -762,7 +824,7 @@ index d7c7147e..dbc256f4 100644
  //
  // Function only used in debug builds
  //
-@@ -1486,11 +1911,71 @@ CoreDisplayDiscoveredNotDispatched (
+@@ -1486,11 +1960,73 @@ CoreDisplayDiscoveredNotDispatched (
  {
    LIST_ENTRY             *Link;
    EFI_CORE_DRIVER_ENTRY  *DriverEntry;
@@ -825,14 +887,16 @@ index d7c7147e..dbc256f4 100644
 +  // the reading.
 +  //
 +  // The loop is bounded, so this still falls through into the assert that
-+  // follows instead of becoming a hang, and the pause is CoreStall's, which
-+  // returns quietly when there is no Metronome. P2Digest only reads state, so
-+  // repeating it cannot change what it reports.
++  // follows instead of becoming a hang, and the pause is P2Hold's and not
++  // CoreStall's: CoreStall's lasts exactly as long as MetronomeDxe is started,
++  // and the thing being measured must not decide how long its own reading stays
++  // on the screen. P2Digest only reads state, so repeating it cannot change what
++  // it reports.
 +  //
 +  P2Digest ();
 +
 +  for (Index = 0; Index < 40; Index++) {
-+    CoreStall (300000);
++    P2Hold ();
 +    P2Digest ();
 +  }
  }

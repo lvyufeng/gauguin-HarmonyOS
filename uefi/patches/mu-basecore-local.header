@@ -60,3 +60,16 @@
 #       still satisfy at the moment the assert fires. The first separates "the
 #       walk ended" from "the walk was cut off" by count, the second says whether
 #       what remained was memory. Both are things the host cannot compute.
+#
+#       It also replaces the digest's pause. The repeat loop stalled on
+#       CoreStall, which waits through the Metronome - and the Metronome is
+#       installed by `MetronomeDxe`, one of the drivers this volume is being
+#       measured on. It works today (that driver is one of the nineteen that
+#       start, so the 41 copies take twelve seconds) but it is a pause the
+#       measurement can change, and twelve seconds is the whole budget for
+#       reading a screen that only exists between a reset and the assert. The
+#       pause is now a bounded busy-wait on a volatile counter - a cycle count,
+#       not a clock: CNTFRQ_EL0 reads 0 here, which is the reason the timer
+#       libraries above carry PcdTimerFreqOverwrite - so it is a minute or more
+#       regardless of which drivers load. It exists so the digest can be
+#       photographed, and it goes away with the rest of the block.
