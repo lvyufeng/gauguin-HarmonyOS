@@ -284,7 +284,10 @@ and a tree that declares none of them leaves `DtboNeed` TRUE (`docs/07`). ABL
 therefore applies the Gauguin overlay to our tree on every boot, which is why
 the built tree carries a `/__symbols__` naming the 158 fixup symbols that
 overlay asks for, and why `tools/build-p1-payloads.sh` refuses to ship a tree
-without it. All six carry the same cmdline (`docs/p1-cmdline.txt`), whose pstore
+without it — with the merge then performed for real by `fdtoverlay` and not just
+replayed in Python, because the two readers disagree on a tree whose symbols
+point at phandle-less nodes (`docs/07`). All six carry the same cmdline
+(`docs/p1-cmdline.txt`), whose pstore
 parameters place the log at an address **we choose** — the phone declares no
 ramoops region of its own, and the address is checked against the phone's DRAM
 partitions and its `no-map` carveouts rather than against another tree's opinion

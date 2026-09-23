@@ -190,6 +190,36 @@ def paths(blob, off, totalsize):
             yield path, k, v
 
 
+def node_paths(blob, off, totalsize):
+    """Every node's path, whether or not it has a property on it.
+
+    `paths()` above is per-*property*, so a node with nothing on it never appears
+    in it - and that is precisely the distinction a `__symbols__` fixup turns on.
+    libufdt resolves a symbol in three steps and the third has no error path:
+    `ufdt_get_node_by_path()` on the symbol's path (NULL is fatal), then
+    `ufdt_node_get_phandle()` on the node it found, which **returns 0** for a node
+    with no `phandle` property rather than failing. A fragment resolved to
+    phandle 0 is then skipped in silence, because `ufdt_overlay_apply_fragments()`
+    aborts on `OVERLAY_RESULT_MERGE_FAIL` alone and this is
+    `OVERLAY_RESULT_TARGET_INVALID`.
+
+    So a symbol naming a path with no node is a refusal, and a symbol naming a
+    node with no phandle is a boot with that fragment quietly missing. Both are
+    wrong; only one of them is loud.
+    """
+    stack, out = [], set()
+    for name, depth, p in scan(blob[:off + totalsize], off):
+        if name is None:
+            continue
+        if depth == 0:
+            stack = []
+        else:
+            del stack[depth - 1:]
+            stack.append(name)
+        out.add("/" + "/".join(stack))
+    return out
+
+
 def phandles(blob, off, totalsize):
     """{phandle: [node paths]} for the whole tree.
 
@@ -265,6 +295,9 @@ def dtbo_entries(d, entries):
         rp = root_props(blob, dtoff, dtsz)
         out.append(dict(
             index=i, ok=True, size=dtsz, offset=dtoff,
+            # The entry's own bytes, so a caller can hand the overlay to something
+            # that applies it for real (`fdtoverlay`) without re-parsing the table.
+            blob=d[dtoff:dtoff + dtsz],
             msm_id=idcells(rp.get("qcom,msm-id")),
             board_id=idcells(rp.get("qcom,board-id")),
             model=strval(rp.get("model", b"")),

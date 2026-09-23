@@ -89,9 +89,12 @@ found in a payload was found by one of them rather than by the phone:
 
 - `tools/abl-boot-check.py` — replays ABL's decision path over a built image and
   says whether *this phone* would take it: the arm64 header check, the
-  `msm-id`/`board-id` selection, the overlay's fixups against our `/__symbols__`,
-  and the two placement questions (inside a DRAM partition, outside every `no-map`
-  carveout) for the ramoops region and the framebuffer. Run by
+  `msm-id`/`board-id` selection, the overlay's fixups against our `/__symbols__`
+  (replayed in Python *and* merged for real by `fdtoverlay`, since libfdt and
+  libufdt disagree on a tree whose symbols point at phandle-less nodes — one
+  refuses, the other boots with the fragments silently dropped), and the two
+  placement questions (inside a DRAM partition, outside every `no-map` carveout)
+  for the ramoops region and the framebuffer. Run by
   `tools/build-p1-payloads.sh` at the end, so a payload that fails it never
   reaches anyone.
 - `tools/gauguin.py` — this phone's memory model in one place: the DRAM

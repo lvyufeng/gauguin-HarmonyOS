@@ -1013,11 +1013,104 @@ PMIC list too, and `CheckAllBitsSet()` cannot pass for a tree that declares no
 `CheckAllBitsSet` is the *only* thing that can clear `DtboNeed`, and
 `BootLinux.c:556` reads it back as `DtboCheckNeeded`.
 
-That is the fact the `__symbols__` work above follows from: a payload whose DTB
+That is the fact the `__symbols__` work below follows from: a payload whose DTB
 slot holds our tree is *not* the case where ABL uses it untouched, and a tree of
 ours built without `/__symbols__` is one ABL refuses outright, before the kernel's
 first instruction. The overlay does get appended, and where it lands depends on
-what our symbols say (see the `/__sink__` section).
+what our symbols say.
+
+### Every payload was being refused for a missing `/__symbols__`
+
+This is the defect that made the first payloads unreadable rather than wrong, and
+it is the reason ABL's silence was never evidence that our code had run.
+
+Entry 13 is a dtc `-@` overlay, which means its 79 fragments do not carry
+addresses: each one says `target = <0xffffffff>` and a `__fixups__` table maps
+that placeholder back to a *symbol name* — `tlmm`, `mdss_mdp`, `CPU0`,
+`thermal_zones`, and 154 more. Resolving one happens in
+`ufdt_overlay_do_fixups()` (`LibUfdt/ufdt_overlay.c:226`), which for each symbol
+does **three** things in a row, and only the first two have an error path:
+
+| step | code | if it fails |
+|---|---|---|
+| the base tree's `/__symbols__` must exist | `:231`, `:234` | `-1` — `"Bad main_symbols in ufdt_overlay_do_fixups"` |
+| the symbol name must be in it | `:256`, `:259` | `-1` — `"Couldn't find '%s' symbol in main dtb"` |
+| that value must resolve to a node | `:264`, `:267` | `-1` — `"Couldn't find '%s' path in main dtb"` |
+| that node's phandle is read | `:271` → `ufdt_node.c:145` | **nothing** — it returns `0` |
+
+Any of the three `-1`s reaches `ApplyOverlay()` as
+
+```
+ApplyOverlay: ufdt apply overlay failed
+```
+
+and returns `EFI_NOT_FOUND` (`BootLinux.c:385`), before the kernel's first
+instruction. Nothing on the screen, no `oem fbreason` that distinguishes it,
+nothing in pstore — the same shape as a payload that never ran.
+
+Our tree is built by `scripts/Makefile.dtbs`, which adds `-@` to `base-dtb-y`
+only, so a board file built on its own carries **no `/__symbols__` at all**, and
+every payload we had built was refused this way. That is the first row of the
+table, and it fires on the overlay's *first* symbol — the overlay's content never
+even matters.
+
+The fourth row is the one that does not announce itself. A symbol whose path
+resolves to a node that has no `phandle` on it (and no `linux,phandle` either)
+returns phandle `0`, which is not a valid phandle; `ufdt_apply_fragment()`
+(`:324`) then fails to find target 0, reports `OVERLAY_RESULT_TARGET_INVALID`
+(`:339`), and `ufdt_overlay_apply_fragments()` (`:377`) aborts on
+`OVERLAY_RESULT_MERGE_FAIL` **alone** (`:387`) — so the fragment is dropped and
+the boot continues. ABL succeeds with the vendor's content silently missing. Two
+silences on the same overlay path — `ufdt_overlay_apply()` calls both — and they
+mean opposite things.
+
+`tools/make_dtbo_sinks.py` reads the dtbo, takes the 158 symbol names entry 13's
+fixups ask for, and generates one empty node per name plus a `/__symbols__`
+pointing at them — 217 symbols, phandles `0x8000`–`0x80d7`, none shared with a
+node of ours. Two properties make that safe rather than a hack:
+
+- **Nothing binds to them.** `/__sink__` has no `compatible`, and
+  `of_platform_bus_create()` opens with `if (strict && !of_get_property(bus,
+  "compatible", NULL)) return 0;` (`drivers/of/platform.c`, and
+  `of_platform_populate()` passes `strict = true`) — it returns before
+  `of_device_alloc`, so the node's subtree is never even walked. The vendor
+  overlay's content is merged and then never populated as a device on the Linux
+  side. It is a place for 249 KB of overlay to land that is not a real node.
+- **The phandles are disjoint from every real node's.** `ufdt_overlay_apply_fragment()`
+  merges into the node *whose phandle the symbol resolved to*, looked up in a table
+  built from the whole tree, so a symbol that collided with a real node would send
+  the overlay somewhere else entirely. `tools/abl-boot-check.py` fails a tree with
+  any phandle that has two owners, and fails one whose symbols name paths with no
+  phandle at them — distinguishing the two rows of the table above, because
+  "ABL refused" and "ABL booted without the vendor tree" call for different next
+  steps.
+
+**The merge is now performed rather than replayed.** `abl-boot-check.py` checks
+the fixups in Python *and* hands the overlay and the selected tree to
+`fdtoverlay` — libfdt's implementation, where libufdt is Google's
+reimplementation of the same format — and requires the real merge to succeed. Two
+implementations agreeing is evidence in a way that one of them being careful is
+not, and it is the check that would have caught the payloads that shipped with no
+`/__symbols__` at all.
+
+They are not redundant, and the fourth row is where they part company: libfdt's
+`overlay_fixup_phandle()` treats a missing phandle as an error, so `fdtoverlay`
+*refuses* the phandle-less tree that libufdt would have accepted and booted with
+fragments missing. The stricter implementation is the merge; the Python replay is
+the only one that can say which of the two ABL behaviours a given tree gets.
+
+Measured on the built payloads: the overlay applies cleanly, the merged tree is
+296,928 bytes against our 87,594, and `/reserved-memory/ramoops@d0000000` and
+`/chosen/framebuffer@a0000000` are both still in it — which is checked in the
+merged tree rather than the input, because that is what the kernel is handed and
+an overlay that clobbered either node would leave a boot that runs and cannot be
+read. Three negatives were built and all three are refused, each with its own
+diagnosis: `/__symbols__` deleted ("this tree has no /__symbols__ at all, and the
+board overlay … arrives with 158 `__fixups__`"), the sink nodes deleted but the
+symbols left pointing at them ("158 of the overlay's symbols name paths this tree
+has no node at"), and the sink nodes kept but their phandles stripped ("113 of
+the overlay's symbols name nodes this tree has no phandle on … every one of those
+fragments is dropped in silence").
 
 ### BootShim preserves `x0`, so it does not choose the device tree
 

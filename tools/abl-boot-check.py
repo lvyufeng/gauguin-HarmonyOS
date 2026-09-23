@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Replay ABL's boot-image decision path over a payload, offline.
 
-Why this exists: the five P1 variants in work/out differ in a handful of header
+Why this exists: the six P1 variants in work/out differ in a handful of header
 properties, and docs/07 built a hypothesis on each of them being consulted by the
 bootloader. Reading Qualcomm's own `QcomModulePkg` says otherwise for most of
-them, and the cost of finding that out by flashing is five device sessions on a
+them, and the cost of finding that out by flashing is six device sessions on a
 device that needs a physical reset to recover from a bad one.
 
 So this walks the same code the bootloader runs, in the same order, and prints
@@ -38,6 +38,14 @@ with EFI_NOT_FOUND, before the kernel's first instruction. That refusal is
 indistinguishable from a payload that never ran, which is why it is measured here
 rather than by flashing.
 
+That one is measured twice, and the second time is not ours: `overlay_gate()`
+replays the fixup resolution in Python from the entry's `__fixups__` and the
+tree's `/__symbols__`, and then the merge is performed for real by `fdtoverlay`
+- libfdt's implementation, from device-tree-compiler, where libufdt is Google's
+reimplementation of the same format. Two implementations agreeing is worth more
+than one of them being careful, and the real one is what would have caught the
+payloads that shipped with no `/__symbols__` at all.
+
 The geometry is the part that is not in the image. ABL reads `KernelBaseAddr`
 and `KernelSize` as UEFI runtime variables, so it is set by the stage before it;
 the defaults below come from this device's own memory map, in
@@ -60,8 +68,11 @@ last step and no payload reaches a device without having been replayed first.
 import argparse
 import glob
 import os
+import shutil
 import struct
+import subprocess
 import sys
+import tempfile
 import zlib
 
 # tools/ - fdt.py is the shared reader for the two containers ABL consumes, and
@@ -309,11 +320,13 @@ def check_dtb_offset(d, r):
             break
         props = fdt.root_props(d, p, t)
         trees.append(dict(off=p, totalsize=t, props=props,
+                          blob=d[p:p + t],
                           msm_id=fdt.idcells(props.get("qcom,msm-id")),
                           board_id=fdt.idcells(props.get("qcom,board-id")),
                           model=fdt.strval(props.get("model", b"")),
                           symbols_node=bool(fdt.child_props(d, p, t, "__symbols__")),
                           symbols=fdt.symbols(d, p, t),
+                          paths=fdt.node_paths(d, p, t),
                           phandles=fdt.phandles(d, p, t)))
         p += t
     h["dtb_trees"] = trees
@@ -384,7 +397,17 @@ def check_overlay(d, r, dtbo_entries):
         if missing:
             r.note(f"overlay entry {entry['index']} resolves against this tree "
                    f"({len(missing)} of {len(entry['fixups'])} symbols absent)")
-        return sink_check(tree, entry, r)
+        # The Python replay goes first and short-circuits the real merge, because
+        # the two implementations do not agree on every tree: libfdt's
+        # overlay_fixup_phandle() treats a symbol node with no phandle as an error,
+        # where libufdt's ufdt_node_get_phandle() returns 0 and the fragment is
+        # then dropped without a word. On such a tree `fdtoverlay`'s complaint -
+        # "refuses the merge ABL would perform" - is the wrong diagnosis, because
+        # ABL would not refuse it. Reporter.fail() keeps only the last failure, so
+        # the order here is what decides which explanation reaches the reader.
+        if not sink_check(tree, entry, r):
+            return False
+        return real_overlay_merge(entry, r)
     r.header["overlay_missing"] = missing
     n, total = len(missing), len(entry.get("fixups") or {})
     have = "no /__symbols__ at all" if not tree["symbols_node"] else \
@@ -394,6 +417,83 @@ def check_overlay(d, r, dtbo_entries):
                   f"overlay (dtbo entry {entry['index']}, "
                   f"{entry['model'] or 'unnamed'}) arrives with "
                   f"{total} __fixups__ it has to resolve against them")
+
+
+def real_overlay_merge(entry, r):
+    """Merge the board overlay into the selected tree with libfdt, for real.
+
+    `overlay_gate()` above reimplements `ufdt_overlay_do_fixups()`: it reads the
+    entry's `__fixups__` and checks each symbol name against the tree's
+    `/__symbols__`. That is a reimplementation of the check ABL makes, and a
+    reimplementation can be wrong in the same direction as the thing it checks.
+    This one cannot: `fdtoverlay` is libfdt's, from device-tree-compiler, and
+    libufdt is Google's reimplementation of the same on-disk format, so the two
+    agreeing is evidence in a way that one of them being careful is not.
+
+    It is also the check that says what the kernel is actually handed, which is a
+    merged tree and not ours: the fragments that land in `/__sink__` are safe
+    because nothing binds to them, but that is a claim about the merged result,
+    so the result is what gets looked at. The two nodes a payload cannot boot
+    without are checked in it - the ramoops carveout and the console's
+    framebuffer - because an overlay that clobbered either would leave a boot
+    that runs and cannot be read, which is the failure this whole channel exists
+    to make impossible.
+
+    Returns True when the merge succeeds or cannot be attempted, False on a
+    refusal. A missing fdtoverlay is a note rather than a failure: it is one
+    package, and the Python replay above has already run.
+    """
+    tree = r.header.get("dtb_selected")
+    if not tree or not entry.get("blob"):
+        return True
+    if shutil.which("fdtoverlay") is None:
+        r.note("fdtoverlay is not installed (package: device-tree-compiler), so "
+               "the overlay was only checked by the fixup replay above - not "
+               "actually merged")
+        return True
+
+    with tempfile.TemporaryDirectory() as td:
+        base, ov = os.path.join(td, "base.dtb"), os.path.join(td, "ov.dtb")
+        out = os.path.join(td, "merged.dtb")
+        with open(base, "wb") as f:
+            f.write(tree["blob"])
+        with open(ov, "wb") as f:
+            f.write(entry["blob"])
+        p = subprocess.run(["fdtoverlay", "-i", base, "-o", out, ov],
+                           capture_output=True, text=True)
+        if p.returncode != 0:
+            msg = (p.stderr or p.stdout).strip().splitlines()
+            # The fixups have already been shown to resolve, so what is left here
+            # is a structural complaint about the blobs - and libfdt is the
+            # stricter of the two readers, so this says "one implementation
+            # refuses" rather than "ABL refuses".
+            return r.fail("ApplyOverlay",
+                          f"fdtoverlay refuses to merge this overlay onto this tree "
+                          f"({msg[-1] if msg else f'exit {p.returncode}'}), though the "
+                          f"fixups above do resolve - libfdt is the stricter of the "
+                          f"two readers, so this is a defect in one of the two blobs "
+                          f"before it is a statement about ABL")
+        merged = open(out, "rb").read()
+
+    h = r.header
+    h["overlay_merged_size"] = len(merged)
+    # The node names in the tree the kernel would be handed. `scan` walks the
+    # whole blob rather than looking up a path, so a node that is present but
+    # moved by the merge is still found - which is the point, since the overlay
+    # is what moved things.
+    names = {name for name, _depth, _props in fdt.scan(merged, 0)}
+    missing = [n for n in (h.get("ramoops_node_name"), "framebuffer@a0000000")
+               if n and n not in names]
+    if missing:
+        return r.fail("ApplyOverlay",
+                      f"after merging the board overlay the tree no longer has "
+                      f"{', '.join(missing)} - a payload that boots without it "
+                      f"cannot be read back")
+    r.note(f"the merge was performed, not just replayed: fdtoverlay applies dtbo "
+           f"entry {entry['index']} to the selected tree cleanly "
+           f"({len(merged):,} bytes merged, our ramoops and framebuffer nodes "
+           f"still in it)")
+    return True
 
 
 def sink_check(tree, entry, r):
@@ -417,6 +517,39 @@ def sink_check(tree, entry, r):
     if not sinks:
         return True
     used = {syms[s] for s in sinks}
+    # A `/__symbols__` entry is only half of what a fixup needs, and the other
+    # half fails in two different ways. libufdt resolves a symbol in three steps:
+    # the name in the main tree's `__symbols__`, then that value as a *path*
+    # (`ufdt_get_node_by_path`, NULL is fatal), then that node's phandle
+    # (`ufdt_node_get_phandle`, which returns 0 for a node without one rather
+    # than failing). So a path with no node behind it is a refusal before the
+    # kernel runs; a path whose node has no phandle is not - the fixup writes 0,
+    # `ufdt_apply_fragment()` reports OVERLAY_RESULT_TARGET_INVALID, and
+    # `ufdt_overlay_apply_fragments()` aborts on MERGE_FAIL alone, so the fragment
+    # is dropped and ABL boots a tree with the vendor's content missing. One
+    # silence is ABL refusing; the other is ABL succeeding with less than it was
+    # given, and they are worth telling apart in the message.
+    nodes = tree.get("paths") or set()
+    have = {p for v in ph.values() for p in v}
+    gone = sorted(p for p in used if p not in have)
+    if gone:
+        nameless = [p for p in gone if p not in nodes]
+        if nameless:
+            return r.fail("ApplyOverlay",
+                          f"{len(nameless)} of the overlay's symbols name paths this "
+                          f"tree has no node at ({', '.join(nameless[:3])}"
+                          f"{', ...' if len(nameless) > 3 else ''}), so "
+                          f"ufdt_overlay_do_fixups() reports \"Couldn't find ... path "
+                          f"in main dtb\" and ApplyOverlay() fails: the overlay is "
+                          f"refused and nothing boots")
+        return r.fail("ApplyOverlay",
+                      f"{len(gone)} of the overlay's symbols name nodes this tree has "
+                      f"no phandle on ({', '.join(gone[:3])}"
+                      f"{', ...' if len(gone) > 3 else ''}), so ufdt_node_get_phandle() "
+                      f"returns 0 for them, ufdt_apply_fragment() reports "
+                      f"TARGET_INVALID, and every one of those fragments is dropped in "
+                      f"silence - ABL boots, and the tree it hands the kernel is missing "
+                      f"whatever the vendor overlay was carrying for them")
     taken = {p: v for p, v in ph.items() if len(v) > 1}
     if taken:
         where = "; ".join(f"{p:#x} at {', '.join(v)}" for p, v in list(taken.items())[:3])
@@ -496,6 +629,9 @@ def check_regions(d, r):
         what = None
         if b"ramoops" in compat:
             what = "the log region"
+            # Remembered by name so the overlay merge below can look for it in the
+            # tree the kernel would actually be handed.
+            r.header["ramoops_node_name"] = path.rsplit("/", 1)[-1]
         elif b"simple-framebuffer" in compat:
             what = "the console's framebuffer"
         if what is None:
