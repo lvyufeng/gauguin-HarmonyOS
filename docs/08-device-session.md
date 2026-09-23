@@ -984,11 +984,17 @@ strings are not in it.
 | payload | 3,145,840 B, md5 `a2963f46faeb27fe601022c3a67aa738` — byte-identical to `SILICIUM_UEFI.fd-bootshim` |
 | previous image | sha256 `3db8aba2…`, payload md5 `8cbe30d8…` (DIAG/STATS, no SEQ) |
 
-One build note to carry forward: `FVMAIN` is at **99% — 2104 bytes free**, and it
-read the same before and after this rebuild because the FV's file records are
-padded to alignment. The instrumentation has consumed nearly all the headroom, so
-any further `DEBUG ()` text added to DXE may overflow the FV rather than simply
-fail to display.
+One build note, and it was read wrongly the first time: `FVMAIN` reports
+**99% — 2104 bytes free**, and that figure is not a budget. The FV is declared with
+`NumBlocks = 0`, so GenFv sizes it to fit its contents and rounds up to the block
+size — which means this FV reports "99% Full" for *every* build of it, and the
+"free" number is only the padding left on the last `0x1000` block. Three builds in
+`work/` prove it by disagreeing with each other: `FVMAIN` has come out at
+`0x677000`, `0x702000` and `0x753000`, each reported as 99% full. So there is no
+headroom to run out of — a new file, or more `DEBUG ()` text, grows the FV. What
+bounds it is `FVMAIN_COMPACT`, which is at 34–37% with about 2 MB free. This
+matters beyond bookkeeping: the earlier reading of that line made "is there room
+for the ACPI tables" look like a design constraint, and it is not one.
 
 **Next action, in order.** Flash this image, read the panel, and write down the
 `P2 SEQ` string before anything else — it is the last line of substance before the
@@ -1117,9 +1123,11 @@ Both failed runs did still run their restore trap — the tracked `APRIORI.inc` 
 rewritten 48 ms after the copy of it was taken — so nothing was left in the
 experimental order; they simply produced no image and no explanation.
 
-One build note, carried from 4.9 and unchanged by this experiment: `FVMAIN` sits at
-**99% (2104 bytes free)**, and this variant adds no file, so the reorder does not
-consume headroom.
+One build note, carried from 4.9 and corrected there: `FVMAIN` reports
+**99% (2104 bytes free)** in every build, because `NumBlocks = 0` makes GenFv size
+the volume to its contents and the figure is last-block padding. This variant adds
+no file, so its total is unchanged at `0x702000`, which is a useful confirmation
+that the reorder really did not change the FV's contents — only the order.
 
 **The image, and the measurement that says the reorder is the only variable.** All
 four gates passed on the artifact: `apriori-order.py` read the array back out of the

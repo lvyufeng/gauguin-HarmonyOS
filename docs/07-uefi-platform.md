@@ -2316,9 +2316,16 @@ platform: `tools/make_uefi_platform.py` rewrites `suryaPkg/Include/APRIORI.inc` 
 point at `Binaries/gauguin/`, and it is also the source of seven of the eight MDP
 stream IDs this port hands `ArmSmmuDetach` (see "The MDP stream IDs … are **not**
 verified" above). So the tables come from the platform this port is already built
-on rather than from a stranger, and Moorea's set is
-`{APIC, FACP, GTDT}` — which is also the right *shape*: Rennell's set adds
-`MCFG`, and gauguin has no PCIe to describe.
+on rather than from a stranger. **What the SoC directory supplies is a bundle, not
+a fixed list** — Moorea's holds ten tables (`APIC`, `CSRT`, `DBG2`, `FACP`, `FACS`,
+`GTDT`, `IORT`, `MCFG`, `PPTT`, `DSDT_Minimal`) and each platform's
+`AcpiTables.inf` picks its own subset: `Platforms/Realme/bitra` took three of
+Kona's, `Platforms/Xiaomi/surya` takes nine of Moorea's plus its own `DSDT.aml`.
+So choosing Moorea decides where the values come from, not which tables exist, and
+`gauguin/AcpiTables.inf` is where the subset is chosen. Two of those ten are
+already known to be the wrong shape here: `MCFG` describes PCIe segments and
+gauguin's device tree has **no `pcie` node at all**, and `DSDT_Minimal` is a
+placeholder that gauguin's own DSDT replaces.
 
 **The set decides APIC/FACP/GTDT. It does not decide the DSDT, and the DSDT is
 where gauguin actually differs.** `Platforms/Realme/bitra` ships its own
