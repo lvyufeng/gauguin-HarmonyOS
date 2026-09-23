@@ -2267,9 +2267,25 @@ three values, and they are not negotiable:
 
 | | gauguin (`Resources/DTBs/gauguin.dts`) | as INTID |
 |---|---|---|
-| `pmu { interrupts = <0x01 0x05 0x08> }` | `0x05` | **21** (0x15) |
-| `timer { … 0x01 0x02 0xff08 … }` | `0x02` | **24** (0x18) |
+| `pmu { interrupts = <0x01 0x05 0x08> }` | `0x05` | **21** (0x15) — PPI 5, `16 + 5` |
+| `interrupt-controller@17a00000 { interrupts = <0x01 0x08 0x04> }` | `0x08` | **24** (0x18) — PPI 8, `16 + 8` |
 | `interrupt-controller@17a00000` … `reg = <… 0x00 0x17a60000 0x00 0x100000>` | `0x17a60000` | GICR base |
+
+The second row was wrong on the first pass and the error is worth naming, because
+the two candidates are one node apart and only one of them is a MADT field. The
+value 24 is the **VGIC maintenance interrupt** — field `[064h] Virtual GIC
+Interrupt` in the disassembly, `VGIC Maintenance Interrupt` in the ACPI spec — and
+gauguin states it on the **GIC node itself**, `interrupts = <0x01 0x08 0x04>`. The
+`timer` node is not its source: its four PPIs (`0x01 0x02 0xff08` and friends) are
+the architectural timers, they land in `GTDT`, not in the MADT. Reading 24 off the
+timer node gets the right number from the wrong table, which is the kind of thing
+that stays hidden until the interrupt is wrong on hardware that is not this one.
+
+**The DT's own arithmetic, stated once so it is not re-derived wrongly.** A DT
+`interrupts` triple is `<type number flags>` and the INTID is not the number: for
+PPIs (type 1) it is `16 + number`, for SPIs (type 0) it is `32 + number`. Every
+value in this section uses that, and getting it backwards is what produced the
+wrong UFS conclusion corrected further down.
 
 with `uefiplat.cfg:81-84` confirming the same map from the other direction (GICD
 `0x17A00000` len `0x170000`, GICR `0x17A60000` len `0x100000`, QTIMER `0x17C00000`
@@ -2281,7 +2297,7 @@ len `0x110000`) and `BitraPkg.dsc.inc:45-52` pinning them as PCDs
 length, and the per-core PMU INTID, virtual-timer INTID and redistributor base;
 `stride` is the step between consecutive cores:
 
-| SoC set | GICC subtables | len | PMU | vtimer | GICR base | stride |
+| SoC set | GICC subtables | len | PMU | VGIC maint | GICR base | stride |
 |---|---|---|---|---|---|---|
 | Blackbolt | 8 | 82 | 22 | 25 | 0x17B00000 | 0x20000 |
 | Cedros | 8 | 80 | 23 | 25 | — | — |
@@ -2303,12 +2319,21 @@ length, and the per-core PMU INTID, virtual-timer INTID and redistributor base;
 | Waipio | 8 | 82 | 23 | 25 | 0x17180000 | 0x40000 |
 
 **Exactly three sets reproduce gauguin — Moorea, Napali and Rennell — and every
-other one fails on at least one field.** Hana and Lahaina get PMU and vtimer right
-only where they are wrong elsewhere; Kodiak has the right GICR base and the wrong
-INTIDs; the rest miss both. **Kona, the set the only Bitra-family platform file
-uses, matches nothing**: it carries no redistributor base at all (`GICR base —`)
-and INTIDs 23/25 where gauguin needs 21/24. A Kona APIC is therefore not a starting
-point that needs correcting, it is a different interrupt layout.
+other one fails on at least one field.** Hana gets the two INTIDs right and carries
+no GICR base at all; Kodiak has the right GICR base and the wrong INTIDs; the rest
+miss both. **Kona, the set the only Bitra-family platform file uses, matches
+nothing**: it carries no redistributor base (`GICR base —`) and INTIDs 23/25 where
+gauguin needs 21/24. A Kona APIC is therefore not a starting point that needs
+correcting, it is a different interrupt layout.
+
+**There is a trap in reading these dumps and it caught this pass.** Every value in
+a `Decompiled/*.dsl` is printed **in hex**, per that file's own header line
+(`FieldName : FieldValue (in hex)`), but the small ones have no `0x` and no letters
+to give it away: Moorea's GICC header reads `Length : 52`, which is 0x52 — **82
+bytes**, which is what the raw `Raw Table Data:` hexdump confirms at every subtable
+boundary (`0B 52`). Read as decimal 52 it looks like a table one third smaller than
+it is, and the eight entries then appear to end 240 bytes before the GICD subtable
+starts.
 
 **Moorea is the one to take, and there is a second, independent reason.** Moorea is
 the set used by `Platforms/Xiaomi/surya` — and surya is this project's own reference
@@ -2316,21 +2341,67 @@ platform: `tools/make_uefi_platform.py` rewrites `suryaPkg/Include/APRIORI.inc` 
 point at `Binaries/gauguin/`, and it is also the source of seven of the eight MDP
 stream IDs this port hands `ArmSmmuDetach` (see "The MDP stream IDs … are **not**
 verified" above). So the tables come from the platform this port is already built
-on rather than from a stranger. **What the SoC directory supplies is a bundle, not
+on rather than from a stranger.
+
+**Moorea's two other geometry tables were then checked against gauguin's device
+tree, and both are drop-ins — which the APIC argument alone did not establish.**
+The APIC decides the interrupt controller; `GTDT` decides the timers, and a wrong
+one is a machine with no working clock:
+
+| | gauguin (`Resources/DTBs/gauguin.dts`) | Moorea `GTDT` |
+|---|---|---|
+| `timer { interrupts = <…> }` | PPI 1, 2, 3, 0 → INTID **17, 18, 19, 16** | `0x11, 0x12, 0x13, 0x10` |
+| `timer@17c20000` | block `0x17C20000`, frame 0 `0x17C21000` + `0x17C22000` | `Block Address 0x17C20000`, `Base 0x17C21000`, `EL0 Base 0x17C22000` |
+| `frame@17c21000 { interrupts = <0x00 0x08 0x04 0x00 0x06 0x04> }` | SPI 8, SPI 6 → INTID **40, 38** | `Timer Interrupt 0x28`, `Virtual Timer Interrupt 0x26` |
+
+All four architectural-timer INTIDs, the platform timer block, its frame address
+and both of that frame's interrupts agree — eight values from two sources that were
+never derived from one another. `FACP` is the same: `PSCI Compliant : 1` with
+`Must use HVC : 0` is gauguin's `psci { compatible = "arm,psci-1.0"; method = "smc" }`,
+it is a hardware-reduced table (`Hardware Reduced : 1`, `PM Profile : 08 [Tablet]`)
+with every legacy PM block left at zero, and its `Reset Register` is inert because
+`Reset Register Supported` is clear, so the reset path is PSCI in both. **So the
+three tables that come from Moorea are verified against gauguin's own tree rather
+than assumed transferable.** The other seven in the bundle are a different matter
+and are dealt with below.
+
+**What the SoC directory supplies is a bundle, not
 a fixed list** — Moorea's holds ten tables (`APIC`, `CSRT`, `DBG2`, `FACP`, `FACS`,
 `GTDT`, `IORT`, `MCFG`, `PPTT`, `DSDT_Minimal`) and each platform's
 `AcpiTables.inf` picks its own subset: `Platforms/Realme/bitra` took three of
 Kona's, `Platforms/Xiaomi/surya` takes nine of Moorea's plus its own `DSDT.aml`.
 So choosing Moorea decides where the values come from, not which tables exist, and
-`gauguin/AcpiTables.inf` is where the subset is chosen. Two of those ten are
-already known to be the wrong shape here: `MCFG` describes PCIe segments and
-gauguin's device tree has **no `pcie` node at all**, and `DSDT_Minimal` is a
-placeholder that gauguin's own DSDT replaces.
+`gauguin/AcpiTables.inf` is where the subset is chosen. **The subset a shipped
+platform picks is small, and the two Moorea users disagree about it**:
+`Platforms/Lenovo/j706f` — a Snapdragon 7150 device, Moorea's own SoC — takes
+exactly `APIC`, `FACP` and `GTDT` and nothing else, while `Platforms/Xiaomi/surya`
+takes all nine. That gap is the whole question, and it is decided by what each of
+the remaining seven describes:
+
+| table | what it pins down | verdict for gauguin |
+|---|---|---|
+| `MCFG` | PCIe ECAM segments | **wrong shape** — gauguin's device tree has **no `pcie` node at all** |
+| `DBG2` | the debug UART's address | Moorea's address; gauguin's console is the framebuffer |
+| `IORT` | SMMU topology and stream IDs | Moorea's devices and stream IDs — gauguin's differ |
+| `PPTT` | cache hierarchy and package topology | Moorea is A76/A55, gauguin is A77/A55 |
+| `CSRT` | non-ACPI device resources | Moorea's device list |
+| `FACS` | the firmware-wake handshake block | generic; carries no device data |
+| `DSDT_Minimal` | eight `ACPI0007` CPU devices | a skeleton gauguin's own DSDT supersedes |
+
+**`j706f`'s three is the set to take**, and the reason is not austerity: APIC,
+FACP and GTDT are the three tables whose content is *SoC geometry* — INTIDs, GICR
+frames, timer INTIDs — and those are the three that have now been checked value by
+value against gauguin's own device tree and agree exactly. The other four are
+device inventories, and each would have to be re-derived from gauguin's tree before
+it could be trusted; a wrong `PPTT` or `IORT` is not a missing feature, it is the
+OS told something false about hardware it will then touch. `FACS` is generic and
+costs nothing, so it comes along. `DSDT_Minimal` is superseded by gauguin's DSDT,
+which carries the same CPU devices.
 
 **The set decides APIC/FACP/GTDT. It does not decide the DSDT, and the DSDT is
 where gauguin actually differs.** `Platforms/Realme/bitra` ships its own
-`DSDT.aml` alongside the borrowed Kona set, and reading it is exactly what shows
-the boundary: bitra's `Device (UFS0)` declares its interrupt as
+`DSDT.aml` alongside the borrowed Kona set, and reading it revises what was
+expected: bitra's `Device (UFS0)` declares its interrupt as
 
 ```
 0x00000129,        /* bitra DSDT, _CRS */
@@ -2342,28 +2413,52 @@ and gauguin's device tree declares the same controller as
 interrupts = <0x00 0x109 0x04>;    /* gauguin dts, ufshc */
 ```
 
-`0x129` is 297 and `0x109` is 265. Borrowing bitra's DSDT would hand Windows an
-interrupt number 32 above the one this hardware raises, on the device the whole
-ported OS lives on — which is the kind of error that survives all the way to a
-storage timeout rather than to an assert. So the DSDT has to be written from
-gauguin's own device tree, and `Platforms/Realme/bitra/DSDT.aml` is a worked
-example of the form, not a source of values.
+`0x129` is 297. Gauguin's `0x109` is SPI 265, and a DT SPI number is an index, not
+an INTID: the INTID is `32 + 265` = **297 = 0x129**. The two files agree, and the
+earlier reading of this pair — that bitra was 32 too high, and that gauguin's DSDT
+needed a correction there — was wrong, because it compared a DT index against an
+ACPI GSI. **An ACPI `Interrupt ()` resource carries the INTID directly**, so
+gauguin's UFS interrupt is 297 and bitra's value is already gauguin's.
+
+The same read-through produces the other half of the answer, which is that the
+DSDT's device nodes are mostly *in*herited rather than *authored*, because the
+SDM7xx/SM8250 Qualcomm reference they both descend from put the controllers where
+gauguin's device tree says they are:
+
+| | bitra `DSDT.aml` | gauguin device tree | |
+|---|---|---|---|
+| UFS0 window | `0x01D84000` + `0x00014000` | `ufs@1d84000` std `0x3000` + ice at `0x1D90000` | covered |
+| UFS0 interrupt | GSI `0x129` = 297 | SPI 265 → INTID 297 | **identical** |
+| UFS0 `_HID` | `QCOM24A5`, `_ADR 0x08` | — | the Qualcomm UFS driver's IDs |
+| URS0 window | `0x0A600000` + `0x000FFFFF` | `usb@a600000` (dwc3 core) `0xcd00` | covered |
+| URS0 interrupt 1 | GSI `0x000000A5` = 165 | `usb@a600000 { interrupts = <0x00 0x85 …> }` → SPI 133 → INTID **165** | **identical** |
+| URS0 interrupt 2 | GSI `0x000000A3` = 163 | wrapper `hs_phy_irq` SPI 131 → INTID **163** | **identical** |
+
+So three of the DSDT's load-bearing values are verified equal, and what is left to
+author is small: the CPU devices (`ACPI0007`, `_UID` 0–7, which
+`Silicon/Qualcomm/Moorea/DSDT_Minimal.asl` already has as source), the PMIC-sourced
+`dp_hs_phy_irq` / `dm_hs_phy_irq` / `ss_phy_irq` GSIs from gauguin's `PM7250B`, and
+the header's `OEM Table ID`. The UFS and USB blocks are copied from bitra with their
+numbers checked against the device tree, not assumed.
 
 **What exists and what is missing, so the next session starts from the right
-place.** Present: the table sets above, `iasl` at `/usr/bin/iasl`, and 20 platform
+place.** Present: the table sets above, `iasl` at `/usr/bin/iasl`, the ASL source
+for the CPU skeleton at `Silicon/Qualcomm/Moorea/DSDT_Minimal.asl`, and 20 platform
 `AcpiTables.inf` files to copy the shape from — all of them
 `FILE_GUID = 7E374E25-8E01-4FEE-87F2-390C23C606CD`,
 `MODULE_TYPE = USER_DEFINED`, `INF_VERSION = 0x00010005`. Missing, all four of them:
 
-1. `gauguin/AcpiTables.inf` plus a `.dsl`/`.asl` DSDT and SSDT — the only new
-   content; the APIC/FACP/GTDT come from `Moorea/`.
-2. The `INF RuleOverride = ACPITABLE gauguin/AcpiTables.inf` line at
+1. An `AcpiTables.inf` for gauguin, listing `DSDT.aml`, `Common/SSDT.aml`,
+   `Moorea/APIC.aml`, `Moorea/FACP.aml`, `Moorea/FACS.aml`, `Moorea/GTDT.aml` —
+   `Platforms/Lenovo/j706f`'s list plus `FACS` — and the `gauguin.dsl`/`.asl` it
+   compiles. The DSDT is the only genuinely new content.
+2. The `INF RuleOverride = ACPITABLE …` line at
    `gauguin.fdf:73`, which is present and commented out.
 3. A `[Components]` section in `gauguin.dsc` — **the file has none at all**, so
    adding the table module is not a one-line insert.
 4. `BitraPkg/Library/AcpiTableUpdateLib/AcpiTableUpdate.c`, whose `UpdateAcpiTables ()`
-   is the deliberate no-op with the P3 TODO. This is where gauguin's own
-   corrections get applied over the borrowed tables.
+   is the deliberate no-op with the P3 TODO. Nothing needs correcting in the three
+   borrowed tables as they stand, so this stays a no-op until something does.
 
 **A trap in reading these files, because it produced a confident wrong answer
 first.** The GICC subtable is labelled `Subtable Type : 0B [Generic Interrupt
@@ -2376,7 +2471,7 @@ table above is the corrected one.
 |---|---|
 | sets examined | 18 (`Silicium-ACPI/Silicon/Qualcomm/*/Decompiled/APIC.dsl`) |
 | sets matching gauguin | **3** — Moorea, Napali, Rennell |
-| set chosen | **Moorea** (`Platforms/Xiaomi/surya` uses it) |
+| set chosen | **Moorea**, and `APIC`/`FACP`/`GTDT` only — every value checked against gauguin's device tree |
 | set `Platforms/Realme/bitra` uses | Kona — matches nothing |
-| DSDT | must be written for gauguin; bitra's has UFS at 297, gauguin's is 265 |
+| DSDT | authored for gauguin, but its UFS and USB values are verified equal to bitra's |
 | next step | `gauguin/AcpiTables.inf` + DSDT, then 1–4 above |
