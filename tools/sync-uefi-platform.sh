@@ -10,7 +10,8 @@
 # Mu-Silicium builds the *whole* firmware from a checkout that also carries 40
 # other devices' packages. Everything this script installs is inside a path
 # named gauguin, so a sync is additive and a re-sync overwrites only our own
-# files - with one exception, noted below (the DTB directory is shared).
+# files - with two exceptions, both noted below: the DTB directory is shared,
+# and Mu_Basecore is patched rather than overwritten.
 #
 # Usage:  sync-uefi-platform.sh [--mu DIR] [--build] [--clean]
 
@@ -87,6 +88,31 @@ say "installing device config"
 install -d "$MU/Resources/Configs"
 cp "$GEN/Resources/Configs/gauguin.toml" "$MU/Resources/Configs/gauguin.toml"
 echo "   Resources/Configs/gauguin.toml"
+
+# ---------------------------------------------------------------------------
+say "applying local edits to Mu_Basecore"
+# ---------------------------------------------------------------------------
+# Mu_Basecore is a nested checkout of upstream microsoft/mu_basecore, and it
+# lives under work/, which this repository ignores - so the edits that make the
+# firmware build and behave on this device are carried as a patch instead of as
+# a commit in someone else's repository. Without this step a fresh checkout
+# builds a firmware that was never tested on the device. The patch's own header
+# lists what is in it and how to regenerate it after editing the checkout.
+#
+# Idempotent: the tree already carrying the patch fails the forward check and
+# passes the reverse one, which is the second branch.
+PATCH=$REPO/uefi/patches/mu-basecore-local.patch
+[ -f "$PATCH" ] || die "missing $PATCH"
+BASECORE=$MU/Mu_Basecore
+[ -d "$BASECORE/.git" ] || die "$BASECORE is not a git checkout"
+if git -C "$BASECORE" apply --check "$PATCH" 2>/dev/null; then
+    git -C "$BASECORE" apply "$PATCH"
+    echo "   applied  (tree was pristine)"
+elif git -C "$BASECORE" apply --reverse --check "$PATCH" 2>/dev/null; then
+    echo "   already applied"
+else
+    die "cannot apply $PATCH to $BASECORE - the tree has diverged, reconcile it by hand"
+fi
 
 # ---------------------------------------------------------------------------
 say "building the device tree"

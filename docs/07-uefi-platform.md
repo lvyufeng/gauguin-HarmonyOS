@@ -70,6 +70,27 @@ tools/fv-inventory.py  ->  lists what is really inside a built Mu-<device>.img
 question as "is it in the source tree", and which cannot be answered by grepping
 the image — see "Reading the volume takes some care" below.
 
+### Some of the firmware edits are not in this repository's tree
+
+`work/` is ignored, so a Mu-Silicium or Mu_Basecore checkout living there is not
+versioned here at all, and the edits made directly in those checkouts — the timer
+frequency fallback, the boot menu, the USB bus TPL, the authenticated-variable
+write guard, and the temporary P2 dispatcher instrumentation — would otherwise
+exist only on this one machine and never reach the remote. They are carried as
+`uefi/patches/mu-basecore-local.patch`, which is tracked, documents each hunk in
+its own header, and is applied by `tools/sync-uefi-platform.sh` as part of the
+sync (idempotently — the reverse-check tells it the patch is already in).
+
+Regenerating it after editing the checkout:
+
+```sh
+git -C work/uefi/Mu-Silicium/Mu_Basecore diff > uefi/patches/mu-basecore-local.patch
+```
+
+The patch is not committed into Mu_Basecore itself: that checkout's `origin` is
+`microsoft/mu_basecore` and its HEAD is detached at the revision Mu-Silicium
+pins, so a commit there would be neither pushable nor meaningful.
+
 ### Binaries/gauguin/
 
 Of the 86 drivers in XBL, 55 are Qualcomm drivers that get packaged as binary

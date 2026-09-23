@@ -731,6 +731,116 @@ depex on the Variable protocols. A single failure early in that chain takes two
 or three names off the list at once, which is why the name matters more than the
 count.
 
+## Step 4.9 — The eight names, and the firmware made to name the culprit
+
+Step 4.8's screen was read, and it says more than the assert did:
+
+```
+Security, Bds, Watchdog, Variable, Capsule, Monotonic, Reset, Real Time Clock
+Arch Protocol not present
+```
+
+Eight of the thirteen, in the order `CoreAllEfiServicesAvailable ()` walks them.
+The five that *are* present — CPU, Metronome, Timer, Runtime, Variable Write —
+matter more than the eight that are not, because they rule things out.
+
+**What the static pass established, and what it killed.** Reading the built
+dependency expressions straight out of the volume (`/tmp/FvMain.bin`, GUID names
+resolved through `Guid.xref` — the `.inf` `[Depex]` text is *not* the built depex,
+`Common.fdf.inc:36` makes GenFv derive it from the libraries):
+
+| Driver | Built depex | State |
+|---|---|---|
+| `ArmGicDxe` | `CpuArch AND PcdProtocol AND END` | **present** |
+| `ArmTimerDxe` | `HardwareInterrupt AND PcdProtocol AND END` | **present** |
+| `RuntimeDxe` | `PcdProtocol AND END` | **present** |
+| `MetronomeDxe` | `PcdProtocol AND END` | **present** |
+| `SecurityStubDxe` | `PcdProtocol AND END` | absent |
+| `VariableRuntimeDxe` | `PcdProtocol AND END` | absent |
+| `ResetSystemRuntimeDxe` | `PcdProtocol AND END` | absent |
+| `EmbeddedMonotonicCounter` | `PcdProtocol AND END` | absent |
+| `WatchdogTimer` | `TimerArch AND PcdProtocol AND END` | absent |
+| `CapsuleRuntimeDxe` | `VariableWriteArch AND PcdProtocol AND END` | absent |
+| `RealTimeClock` | `VariableArch AND PcdProtocol AND END` | absent |
+| `BdsDxe` | `PcdProtocol AND HiiString AND HiiDatabase AND HiiConfigRouting AND VariablePolicy AND END` | absent |
+
+That table kills the two hypotheses step 4.8 left open. `ArmTimerDxe` depexes on
+`gHardwareInterruptProtocolGuid`, which only `ArmGicDxe` produces, and it ran — so
+`ArmGicDxe` ran, so a protocol was installed, so `gBS` was valid and
+`PcdProtocol` exists (four present drivers depex on it). "The PCD driver never
+started" is false, and so is "something corrupted the pool before the first
+protocol was installed". Corollary worth keeping: **a driver cannot be the root
+cause if it is absent from the FD's dependency closure**, which is why the
+`MetronomeDxe`-dereferences-`gBS` theory died — it predicted a split that the
+`ArmGicDxe`-ran argument contradicts.
+
+Three more candidates died the same way:
+
+- **The Apriori file.** FvMain's file `[0]`, GUID `FC510EE7-FFDC-11D4-BD41-0080C73C8881`,
+  is one `EFI_SECTION_RAW` of 1120 bytes = 70 GUIDs. **All 70 name a real file in
+  the volume, and all eight missing providers are in it.** A-priori membership
+  separates nothing. Its one real property is subtler and is a genuine mechanism
+  difference: `CorePreProcessDepex` marks a-priori members `Dependent = TRUE`, the
+  promotion loop clears it, and the sweep at `Dispatcher.c:556` only evaluates
+  `CoreIsSchedulable` for entries still `Dependent` — so **a-priori entries are
+  scheduled once and never retried**, unlike depex-driven drivers, which are
+  re-evaluated on every pass of the `do { … } while (ReadyToRun)` loop. That does
+  not yet name a driver, but it is the one asymmetry in the dispatcher that could
+  produce a whole cluster of missing protocols at once.
+- **Malformed images.** All 18 drivers inspected are well-formed `0xaa64` PE32+
+  (uniform `OptHeaderSize 0xf0`, `DllCharacteristics 0x160`, `ImageBase 0x0`), and
+  the FFS `Checksum`/`State`/`FileSize` block is not re-validated on the start
+  path anyway — `CoreValidateFfsHeader` runs only on the read path.
+- **A logging channel we could read instead of the panel.** There is no `logfs`
+  writer anywhere in the Mu-Silicium tree, so the firmware does not append to the
+  ring `tools/read-logfs.py` reads; and the P0 dump of that partition is a stock
+  Android boot, overwritten ~50 times since. The panel is the only channel.
+
+**So the discriminator is runtime, and the firmware now reports it.** In the
+dispatcher there are exactly two ways an entry leaves the scheduled queue: its
+`EntryPoint` returned, or `CoreLoadImage` failed and it was marked `Initialized`
+and skipped. Neither prints anything a DEBUG build can reach. `Dispatcher.c` now
+carries a self-contained `P2BRINGUP` block — struct `P2BRINGUP_DIAG {EFI_GUID
+Guid; EFI_STATUS Status; CHAR8 Phase;}`, `mP2Diag[64]`, `P2Record ()` — wired into
+`CoreAddToDriverList` (`mP2Discovered`), the Apriori promotion (`mP2Apriori`), the
+`CoreLoadImage` failure path (`Phase 'L'`) and around `CoreStartImage`
+(`Phase 'S'`, with `mP2Started` on success). It reports from
+`CoreDisplayDiscoveredNotDispatched`, which `DxeMain.c:575` calls immediately
+before `CoreAllEfiServicesAvailable ()` at 582 and the assert at 593 — so the
+output lands while the evidence is still the last thing on the panel:
+
+```
+P2 NOLOAD <guid> dep=<0|1> sched=<0|1> unt=<0|1>     (up to 12, then a total)
+P2 DIAG <L|S> <guid> <status>                        (one per recorded failure)
+P2 STATS discovered=N apriori=N/70 started=N diag=N noload=N
+```
+
+All at `DEBUG_ERROR`, which `PcdDebugPrintErrorLevel` `0x8007EE0F` enables. The
+line budget is deliberate: eight missing protocols print as sixteen lines, so the
+`NOLOAD` list is capped at twelve and `P2 STATS` is printed **last**, which puts it
+inside the console's final screenful no matter how long the dump gets.
+
+**This is unverified.** Nothing here has been run on hardware — the phone was not
+on USB when the image was built. What *is* verified is that the instrumentation is
+in the artifact: `strings` finds all four format strings in `DxeCore.efi`, in the
+packed `FVMAIN.Fv`, and the chain that leads to `boot` is intact.
+
+| | |
+|---|---|
+| image | `work/out/p2-variants/Mu-gauguin-silicon-gzip.img` |
+| sha256 | `3db8aba23d70230df9c0bd581d0ac5e6f9426f1b9db63976e0980baac2e79622` |
+| payload | 3,145,840 B, md5 `8cbe30d8dac037c4ebd3436cecb4903a` — byte-identical to `SILICIUM_UEFI.fd-bootshim` |
+| previous image | sha256 `816b1d41…`, payload md5 `6c87b01e…` |
+
+One build note to carry forward: `FVMAIN` is at **99% — 2104 bytes free**. The
+instrumentation consumed nearly all remaining headroom, so any further `DEBUG ()`
+text added to DXE may overflow the FV rather than simply fail to display.
+
+**Next action, in order.** Flash this image, read the panel, and quote the
+`P2 DIAG` and `P2 STATS` lines before anything else — they are the last two blocks
+before the assert and they name the driver. Then remove the `P2BRINGUP` block,
+fix whatever it names, and re-run the standing cycle.
+
 ## Step 5 — Leave it bootable
 
 Whatever the outcome, end the session with the stock image back on `boot`:
