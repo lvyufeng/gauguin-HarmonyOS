@@ -61,6 +61,17 @@
 #       walk ended" from "the walk was cut off" by count, the second says whether
 #       what remained was memory. Both are things the host cannot compute.
 #
+#       The same block prints the load failures three times over, and that is
+#       deliberate rather than redundant. `P2 SEQ` gives the phase per Apriori
+#       entry as L/S/s, `P2 WHY` gives the status class at the same position as a
+#       letter, and `P2 ERR` groups the same statuses and names them. All three
+#       carry one reading; the reason for three spellings is that the first two
+#       are 46 unbroken characters which only mean anything read as a pair, and
+#       the SEQ line has been read off the panel three times while the WHY line
+#       has never been read once. A person photographing a phone gets one line
+#       per photograph, so the answer that is wanted - the reason the 27 loads
+#       failed - is now also a short line in words, complete on its own.
+#
 #       It also replaces the digest's pause. The repeat loop stalled on
 #       CoreStall, which waits through the Metronome - and the Metronome is
 #       installed by `MetronomeDxe`, one of the drivers this volume is being

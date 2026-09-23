@@ -2341,7 +2341,9 @@ Three lines were added, all from inside the same `P2BRINGUP` block, all printed 
   in common, and the existing retracted-mechanism list is largely about telling
   them apart. `'s'` is success. (A *start* failure is a separate letter, `'S'`, in
   `SEQ` itself — see the phase split above; `WHY` is what distinguishes the 27
-  load failures from each other.)
+  load failures from each other.) Step 4.15 adds a third line, **`P2 ERR
+  <status name> x<count>`**, which carries the same statuses grouped and named,
+  because this pair turned out not to survive being read off a phone.
 
 ### The reading, and the race was shortened rather than removed
 
@@ -2616,6 +2618,75 @@ lines and `P2 FREE`. The difference is that a given frame now stays up for
 long enough to be written down rather than remembered, which is what the last
 four sessions were losing.
 
+## Step 4.15 — The reason, printed where it will be read
+
+Step 4.13 added `P2 WHY` for exactly one purpose: to say *why* the 27 loads failed,
+because `P2Record` collapses every `CoreLoadImage` failure to `'L'` and
+`EFI_OUT_OF_RESOURCES`, `EFI_NOT_FOUND` and `EFI_SECURITY_VIOLATION` have no
+mechanism in common. The line has been on the panel in every one of the three
+sessions since, and it has not been read once — the `SEQ` line has, three times.
+
+That is not a reading error to be corrected by asking more carefully. `SEQ` and
+`WHY` are 46 unbroken characters each and neither means anything alone: `SEQ`
+says the phase, `WHY` says the status at the same position, and they are only an
+answer as a pair. A person photographing a phone gets one line per photograph, so
+a design that requires two captures to produce one reading loses the reading half
+the time, and it has lost this one every time.
+
+Step 4.15 prints the same statuses a third time, grouped and named:
+
+```
+P2 ERR <status name> x<n>
+```
+
+one line per distinct status among the entries that are not `EFI_SUCCESS`, or
+`P2 ERR none` if there are none. `P2MarkSeq` now keeps the raw `EFI_STATUS` per
+Apriori entry in `mP2ApriSt[]`, and `P2Digest ()` groups it — so this is not a
+new measurement, it is the existing one in a form that survives being read once.
+The block that produces it sits between `P2 WHY` and `P2 STATS`, and the line is
+a handful of words: it cannot be truncated, it cannot be half-photographed, and
+it does not need the `SEQ` line to mean something.
+
+### What the line decides
+
+Given a `SEQ` of 18 `s`, then `L L L`, then `s`, then 24 `L`, the batch broke at
+ap19 and stopped, and `P2 ERR` names the cause of all 27 at once:
+
+| `P2 ERR` shows | what it means | where that leaves the work |
+|---|---|---|
+| one status, `x27` | all 27 failed for one reason | the retracted-mechanism list has a single target, and the cause is a property of the batch rather than of individual drivers |
+| `x25` and `x2` | the batch broke for one reason and two drivers failed for another | the two are the ones to explain; ap22 `ShmBridgeDxe` is already the odd `s` in the middle of the run |
+| `Out of Resources` | the failing path is allocation | `P2 FREE largest=` is the number that pairs with it, and step 4.13's table already says how to read the two together |
+| `Not Found` | the failing path is lookup, not memory | the `P2 WALK` lines and `P2 APRI miss` are the pair, and the heap is a bystander |
+| several unrelated statuses | there is no single cause | that is itself the finding, and it retires the search for one |
+
+### The image, and where it is now
+
+| | |
+|---|---|
+| image | `work/out/p2-variants/Mu-gauguin-silicon-gzip.img` |
+| size | 1,140,736 B |
+| sha256 | `25fd2d5757b0c06544ac52ec7431ab89fb08b54180072125ef97750f93e37e85` |
+| supersedes | `725c33c18df17b69f6e0e95186f2bb63b941e55b4dc4890e25ab8339c534371e` (step 4.14, preserved at `work/out/p2-4.14/Mu-gauguin-silicon-gzip.img`) |
+| difference | the digest function and one assignment per record in `DxeCore`; the other 122 files are at the same offsets, and `fv-inventory.py --against` reports "123 offsets and GUIDs, zero mismatches" |
+| on the phone | **no** — the phone carries the step-4.13 image, and the whole of step 4.15 is host-side work |
+| to write it | `tools/flash-boot.sh --twrp work/out/p2-variants/Mu-gauguin-silicon-gzip.img`, from TWRP |
+
+The payload was checked against the build it claims to be, byte for byte rather
+than structurally: the gzip kernel is a 112-byte `BootShim.bin` followed by
+`SILICIUM_UEFI.fd` exactly, and the new strings are in the `FVMAIN.Fv` that build
+produced. `tools/check-payload.py`, `tools/abl-boot-check.py` and the GenFv-map
+comparison all pass, so a refusal by ABL is not what a failed attempt will mean.
+
+### What to read
+
+`P2 ERR` is now the line the session is decided on, and it is short enough to be
+read in the same photograph as `P2 STATS`. Everything else is unchanged from step
+4.14 — `P2 APRI` (`bytes=1120 entries=70 sum=a998b263` is the host's value),
+`P2 APRI miss=`, `P2 SEQ`, `P2 WHY`, `P2 STATS`, the five `P2 WALK` lines and
+`P2 FREE largest=` — and each frame is still held for minutes by step 4.14's
+bounded busy-wait, so the window is not the constraint any more.
+
 ## Step 5 — Leave it bootable
 
 Whatever the outcome, end the session with the stock image back on `boot`:
@@ -2672,6 +2743,11 @@ attempt  image                          fbreason                     screen     
          (rebuilt again with 4.14:
          CoreStall's pause replaced
          by P2Hold), sha256 725c33c1
+9        Mu-gauguin-silicon-gzip.img    (not flashed)                (not read)             n/a           (not read)
+         (4.15: the digest also
+         groups the failure statuses
+         and names them, P2 ERR),
+         sha256 25fd2d57
 ```
 
 Row 4 is the one that matters and is step 4.8: our firmware ran and drew its own
@@ -2717,6 +2793,15 @@ side by side in `work/out/` (row 7's copy at
 `work/out/p2-silicon-gzip-preread-0923d.img`, same sha256 as what is on the
 phone) rather than overwritten.
 
+Row 9 is step 4.15, and it is the first change made *because* of how the readings
+have been going rather than because of what they said. The reason the loads failed
+has been printed since 4.13 — `P2 WHY` is one status-class letter per `SEQ`
+character, aligned with it — and the `SEQ` line has been read off the panel three
+times while `WHY` has never been read once. They are 46 characters each and only
+mean anything as a pair, so the reason needed two captures and got none. Row 9 adds
+a third spelling of the same statuses, `P2 ERR <name> x<count>`, which is short
+enough to be photographed on its own. Like row 8 it has not been flashed; the phone
+still carries row 7.
 
 The `abllog` column is step 4.6's answer — the last stage ABL's own log for that
 boot reached. It is the one column that is filled in whether or not the payload

@@ -61,6 +61,17 @@
 #       walk ended" from "the walk was cut off" by count, the second says whether
 #       what remained was memory. Both are things the host cannot compute.
 #
+#       The same block prints the load failures three times over, and that is
+#       deliberate rather than redundant. `P2 SEQ` gives the phase per Apriori
+#       entry as L/S/s, `P2 WHY` gives the status class at the same position as a
+#       letter, and `P2 ERR` groups the same statuses and names them. All three
+#       carry one reading; the reason for three spellings is that the first two
+#       are 46 unbroken characters which only mean anything read as a pair, and
+#       the SEQ line has been read off the panel three times while the WHY line
+#       has never been read once. A person photographing a phone gets one line
+#       per photograph, so the answer that is wanted - the reason the 27 loads
+#       failed - is now also a short line in words, complete on its own.
+#
 #       It also replaces the digest's pause. The repeat loop stalled on
 #       CoreStall, which waits through the Metronome - and the Metronome is
 #       installed by `MetronomeDxe`, one of the drivers this volume is being
@@ -286,10 +297,10 @@ index 39668123..8405bc31 100644
  #define  USB_INTERFACE_SIGNATURE  SIGNATURE_32 ('U', 'S', 'B', 'I')
  #define  USB_BUS_SIGNATURE        SIGNATURE_32 ('U', 'S', 'B', 'B')
 diff --git a/MdeModulePkg/Core/Dxe/Dispatcher/Dispatcher.c b/MdeModulePkg/Core/Dxe/Dispatcher/Dispatcher.c
-index d7c7147e..2776f9c1 100644
+index d7c7147e..aca3092d 100644
 --- a/MdeModulePkg/Core/Dxe/Dispatcher/Dispatcher.c
 +++ b/MdeModulePkg/Core/Dxe/Dispatcher/Dispatcher.c
-@@ -60,6 +60,264 @@ EFI_LOCK  mDispatcherLock = EFI_INITIALIZE_LOCK_VARIABLE (TPL_HIGH_LEVEL);
+@@ -60,6 +60,276 @@ EFI_LOCK  mDispatcherLock = EFI_INITIALIZE_LOCK_VARIABLE (TPL_HIGH_LEVEL);
  //
  BOOLEAN  gDispatcherRunning = FALSE;
  
@@ -336,7 +347,10 @@ index d7c7147e..2776f9c1 100644
 +//       entry is '?' too
 +//   's' EntryPoint returned EFI_SUCCESS
 +//   'S' EntryPoint returned an error
-+//   'L' CoreLoadImage failed, so the EntryPoint was never called
++//   'L' CoreLoadImage failed, so the EntryPoint was never called. `L` says only
++//       that the load failed; the status behind it is kept in mP2ApriSt and
++//       printed twice more by the digest, as a class letter (P2 WHY, aligned
++//       with this line) and in words (P2 ERR, grouped by status)
 +//
 +#define P2BRINGUP_APRIORI_MAX  128
 +
@@ -400,6 +414,14 @@ index d7c7147e..2776f9c1 100644
 +//
 +STATIC CHAR8     mP2ApriWhy[P2BRINGUP_APRIORI_MAX];
 +STATIC CHAR8     mP2WhyLine[P2BRINGUP_APRIORI_MAX + 8];
++
++//
++// P2BRINGUP: the raw status behind mP2ApriWhy, kept so the digest can print the
++// reason in words instead of only in a letter. The letters and the words are the
++// same information, so this is not a second measurement - it is the same one in
++// a form that survives being read once. See the note above P2 ERR in P2Digest.
++//
++STATIC EFI_STATUS  mP2ApriSt[P2BRINGUP_APRIORI_MAX];
 +
 +STATIC
 +UINTN
@@ -527,7 +549,8 @@ index d7c7147e..2776f9c1 100644
 +  for (Index = 0; Index < mP2Apriori && Index < P2BRINGUP_APRIORI_MAX; Index++) {
 +    if (CompareGuid (&mP2AprioriGuid[Index], Guid)) {
 +      mP2AprioriRes[Index] = Ch;
-+      mP2ApriWhy[Index]    = P2WhyLetter (Status);
++      mP2ApriWhy[Index] = P2WhyLetter (Status);
++      mP2ApriSt[Index]  = Status;
 +      return;
 +    }
 +  }
@@ -554,7 +577,7 @@ index d7c7147e..2776f9c1 100644
  //
  // Module globals to manage the FwVol registration notification event
  //
-@@ -483,6 +741,8 @@ CoreDispatcher (
+@@ -483,6 +753,8 @@ CoreDispatcher (
              DriverEntry->Initialized = TRUE;
            }
  
@@ -563,7 +586,7 @@ index d7c7147e..2776f9c1 100644
            DriverEntry->Scheduled = FALSE;
            RemoveEntryList (&DriverEntry->ScheduledLink);
  
-@@ -519,6 +779,13 @@ CoreDispatcher (
+@@ -519,6 +791,13 @@ CoreDispatcher (
  
          Status = CoreStartImage (DriverEntry->ImageHandle, NULL, NULL);
  
@@ -577,7 +600,7 @@ index d7c7147e..2776f9c1 100644
          REPORT_STATUS_CODE_WITH_EXTENDED_DATA (
            EFI_PROGRESS_CODE,
            (EFI_SOFTWARE_DXE_CORE | EFI_SW_PC_INIT_END),
-@@ -896,6 +1163,8 @@ CoreAddToDriverList (
+@@ -896,6 +1175,8 @@ CoreAddToDriverList (
  
    CoreReleaseDispatcherLock ();
  
@@ -586,7 +609,7 @@ index d7c7147e..2776f9c1 100644
    return EFI_SUCCESS;
  }
  
-@@ -1309,6 +1578,16 @@ CoreFwVolEventProtocolNotify (
+@@ -1309,6 +1590,16 @@ CoreFwVolEventProtocolNotify (
                                    &Attributes,
                                    &Size
                                    );
@@ -603,7 +626,7 @@ index d7c7147e..2776f9c1 100644
          if (!EFI_ERROR (GetNextFileStatus)) {
            if (Type == EFI_FV_FILETYPE_DXE_CORE) {
              //
-@@ -1412,6 +1691,26 @@ CoreFwVolEventProtocolNotify (
+@@ -1412,6 +1703,26 @@ CoreFwVolEventProtocolNotify (
                          );
      if (!EFI_ERROR (Status)) {
        AprioriEntryCount = SizeOfBuffer / sizeof (EFI_GUID);
@@ -630,7 +653,7 @@ index d7c7147e..2776f9c1 100644
      } else {
        AprioriEntryCount = 0;
      }
-@@ -1433,11 +1732,43 @@ CoreFwVolEventProtocolNotify (
+@@ -1433,11 +1744,43 @@ CoreFwVolEventProtocolNotify (
            DriverEntry->Scheduled = TRUE;
            InsertTailList (&mScheduledQueue, &DriverEntry->ScheduledLink);
            CoreReleaseDispatcherLock ();
@@ -674,7 +697,7 @@ index d7c7147e..2776f9c1 100644
      }
  
      //
-@@ -1470,6 +1801,149 @@ CoreInitializeDispatcher (
+@@ -1470,6 +1813,210 @@ CoreInitializeDispatcher (
    PERF_FUNCTION_END ();
  }
  
@@ -698,6 +721,9 @@ index d7c7147e..2776f9c1 100644
 +  UINTN                  Index;
 +  UINTN                  SeqLen;
 +  UINTN                  NotLoaded;
++  UINTN                  Prior;
++  UINTN                  Same;
++  UINTN                  Errors;
 +
 +  NotLoaded = 0;
 +  for (Link = mDiscoveredList.ForwardLink; Link != &mDiscoveredList; Link = Link->ForwardLink) {
@@ -764,7 +790,10 @@ index d7c7147e..2776f9c1 100644
 +  // The batch, one character per Apriori entry, in the order it was dispatched.
 +  // The first character that is not 's' is where the batch stopped producing
 +  // working drivers; `miss` above says whether anything after that was even
-+  // considered.
++  // considered. SEQ is the phase, WHY is the status class at the same position,
++  // and P2 ERR below is the same statuses again in words - three spellings of
++  // one reading, because the two letter lines are only useful as a pair and a
++  // pair is two captures.
 +  //
 +  SeqLen = mP2Apriori;
 +  if (SeqLen > P2BRINGUP_APRIORI_MAX) {
@@ -783,6 +812,61 @@ index d7c7147e..2776f9c1 100644
 +    mP2WhyLine[SeqLen] = '\0';
 +    DEBUG ((DEBUG_ERROR, "P2 SEQ [%a]\n", mP2SeqLine));
 +    DEBUG ((DEBUG_ERROR, "P2 WHY [%a]\n", mP2WhyLine));
++  }
++
++  //
++  // The failure reasons a third time, in words, and the only spelling of them
++  // that is complete on its own. SEQ and WHY are 46 unbroken characters each and
++  // only mean anything read as a pair - SEQ has been read off this panel three
++  // times and WHY has never been read once. That is not carelessness: the reader
++  // is a person photographing a phone, and two long lines is two chances to lose
++  // the answer. So the same statuses are printed here, grouped and named. If the
++  // batch failed for one reason this is a single short line; if it did not, the
++  // split between the reasons is itself the finding, because a status that is
++  // OUT_OF_RESOURCES at one index and NOT_FOUND at another has no single cause.
++  //
++  Errors = 0;
++  for (Index = 0; Index < SeqLen; Index++) {
++    if (mP2ApriSt[Index] != EFI_SUCCESS) {
++      Errors++;
++    }
++  }
++
++  if (SeqLen == 0) {
++    // nothing was promoted, so there is nothing to have failed
++  } else if (Errors == 0) {
++    DEBUG ((DEBUG_ERROR, "P2 ERR none\n"));
++  } else {
++    for (Index = 0; Index < SeqLen; Index++) {
++      if (mP2ApriSt[Index] == EFI_SUCCESS) {
++        continue;
++      }
++
++      //
++      // Report each distinct status once, at its first occurrence: walk back
++      // for an earlier slot holding the same status and skip this one if there
++      // is one. Successes are already skipped above, so a match here is always
++      // a real earlier failure.
++      //
++      for (Prior = 0; Prior < Index; Prior++) {
++        if (mP2ApriSt[Prior] == mP2ApriSt[Index]) {
++          break;
++        }
++      }
++
++      if (Prior < Index) {
++        continue;
++      }
++
++      Same = 0;
++      for (Prior = 0; Prior < SeqLen; Prior++) {
++        if (mP2ApriSt[Prior] == mP2ApriSt[Index]) {
++          Same++;
++        }
++      }
++
++      DEBUG ((DEBUG_ERROR, "P2 ERR %r x%d\n", mP2ApriSt[Index], Same));
++    }
 +  }
 +
 +  DEBUG ((
@@ -824,7 +908,7 @@ index d7c7147e..2776f9c1 100644
  //
  // Function only used in debug builds
  //
-@@ -1486,11 +1960,73 @@ CoreDisplayDiscoveredNotDispatched (
+@@ -1486,11 +2033,73 @@ CoreDisplayDiscoveredNotDispatched (
  {
    LIST_ENTRY             *Link;
    EFI_CORE_DRIVER_ENTRY  *DriverEntry;
