@@ -474,15 +474,42 @@ size = 0x300000
 #
 # Android Boot Image Kernel Configs
 #
+# append_dtb is off because at header_version 2 the DTB is a region of its own
+# and not part of the kernel blob. Gluing it onto the kernel instead - which is
+# what append_dtb does - leaves dtb_size 0 and the region empty, and ABL's
+# GetSocDtb() then scans from DtbOffset to the end of the image, finds no tree,
+# and returns NULL ("No match found for Soc Dtb type").
 [boot_image_kernel]
 kernel_compression = "gzip"
-append_dtb         = true
+append_dtb         = false
 
 #
 # Android Boot Image Configs
 #
+# header_version 2, which is what this phone's own boot partition declares.
+#
+# This was 1, and 1 is not merely a worse choice here - it is unconditionally
+# fatal, and fatal in a way that points at the wrong thing. DTBImgCheckAndAppendDT
+# enters its DTB-locating branch only `if (HeaderVersion > BOOT_HEADER_VERSION_ONE)`
+# (QcomModulePkg/Library/BootLib/BootLinux.c:454, and BOOT_HEADER_VERSION_ONE is 1),
+# so at v1 DtbOffset is never computed and stays at the 0 the BootParamlist was
+# initialised with. This device's dtbo partition validates, so ABL takes the
+# overlay branch, calls GetSocDtb() with that 0, and returns NULL on the function's
+# first check (`if (!DtbOffset)`, LocateDeviceTree.c:1005) with "DTB offset is
+# NULL" - a message about the DTB, from a header that made the DTB unreachable
+# before it could be looked at. ABL's own source says the same thing in words:
+# "DT size doesn't apply to header versions 0 and 1" (BootLinux.c:1239).
+#
+# Changing it here does not make this builder's output bootable, and that is not
+# something a config value can fix: build_uefi.py never passes --pagesize to
+# mkbootimg, so every image it makes is page 2048 while this device's ABL and its
+# stock boot both use 0x1000, and it has no way to declare a DTB region at all
+# (it only ever appends one). The payload of record is built by
+# tools/build-p2-payloads.sh, which wraps the same volume with
+# tools/make_boot_image.py --profile stock. Setting v2 here is so that a stray
+# `./build_uefi.py -d gauguin` fails for a reason that is true.
 [boot_image]
-header_version = 1
+header_version = 2
 """
 
 

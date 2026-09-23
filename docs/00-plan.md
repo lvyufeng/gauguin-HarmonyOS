@@ -7,7 +7,7 @@ cellular and cameras are permanently out of reach, Wi-Fi/audio/GPU are hard but 
 Each phase ends with a commit. A phase is only "done" when its gate has actually been
 observed on hardware, not when the code compiles.
 
-## Where things actually stand (2026-09-22)
+## Where things actually stand (2026-09-23)
 
 Nothing below is "done" except P0, and no gate has been observed on hardware
 except P0's. This table is the honest state; the sections under it are the plan.
@@ -16,7 +16,7 @@ except P0's. This table is the honest state; the sections under it are the plan.
 |---|---|---|
 | **P0** survey + backup | partitions dumped and verified; no existing port | **done** — 74 partitions carved and signature-checked, `boot`/`abl`/`recovery` hashes match the device, 86 XBL drivers recovered, and `git ls-files Silicon/Qualcomm` confirms no SM7225 package upstream |
 | **P1** mainline kernel | device boots mainline and prints something | **not done** — `work/out/boot-pstore.img` is built, reproducible (`make_boot_image.py --kernel`), and carries both channels a device with no UART needs: the panel itself (`simple-framebuffer` + `simpledrm` + fbcon, so the boot log is photographed off the screen) and pstore (`console-ramoops-0`, readable from Android after a warm reboot). The earlier `fastboot boot` was refused with `Failed to load/authenticate boot image` on the RAM path, and the partition path has never been tried |
-| **P2** UEFI skeleton | the boot manager draws on the phone's screen and UFS appears as a block device | **gate open** — platform package built, image written to `boot` and verified byte-for-byte, **never observed to execute an instruction**. The gate said "reaches a shell" until the volume was inventoried and the shell turned out to be absent from *every* platform in the tree, `suryaPkg` included — see `docs/07`, so it would not have distinguished our firmware from a working one |
+| **P2** UEFI skeleton | the boot manager draws on the phone's screen and UFS appears as a block device | **gate open** — platform package built, image written to `boot` and verified byte-for-byte, **never observed to execute an instruction**. The gate said "reaches a shell" until the volume was inventoried and the shell turned out to be absent from *every* platform in the tree, `suryaPkg` included — see `docs/07`, so it would not have distinguished our firmware from a working one. The image that was written could not have executed either: its device tree was stale and its header was a version at which ABL locates no DTB, so it was refused twice over before any of our code was reached. Both are fixed offline, and the next attempt is the port's first |
 | **P3** ACPI | Windows installer boots and sees UFS | not started — `AcpiTableUpdate` is a deliberate no-op |
 | **P4** Windows | desktop appears | not started — destroys `userdata` |
 | **P5** peripherals | touch, Wi-Fi, GPU, audio | not started |
@@ -81,7 +81,9 @@ outcome means and which payload to try next, is
    builds, one per surviving candidate (uncompressed vs gzip kernel). Each pairs
    with a P1 variant on the compression property, which is what makes the pair —
    and not the individual attempt — the thing to read: see step 4b/4c in the
-   runbook.
+   runbook. Both are built by `tools/build-p2-payloads.sh`, and the pair that was
+   written to `boot` before it existed could not have run at all — a stale device
+   tree and an Android header version at which ABL locates no DTB (`docs/07`).
 
 Those pieces are backed by four offline tools, which exist because a device cycle
 is expensive and a bad image costs a physical reset. Every defect this project has
@@ -109,6 +111,16 @@ found in a payload was found by one of them rather than by the phone:
   rather than a check: without it ABL refuses every payload with
   `ApplyOverlay: ufdt apply overlay failed`, and with it the overlay lands in a
   subtree nothing binds to.
+- `tools/build-device-tree.sh` — builds the one device tree every payload
+  carries, and checks the built blob rather than the source it came from: the
+  `/__symbols__` count, exactly one `ramoops` node at `0xd0000000`, and the four
+  `/chosen/framebuffer` properties. It is a script of its own because the tree
+  has two consumers — the P1 payloads and the UEFI ones — and holding it in one
+  builder is what stops the second consumer building against a stale copy, which
+  is what happened (`docs/07`).
+- `tools/build-p1-payloads.sh` / `tools/build-p2-payloads.sh` — the two payload
+  sets, each ending in both checkers so a payload that fails one never reaches
+  anyone.
 
 The reference for all of these is Qualcomm's own `QcomModulePkg` (the ABL
 source), vendored at `work/ref/mu_qcommodulepkg` from

@@ -26,6 +26,14 @@ tools/restore-stock-boot.sh --check                  # must print "ok"
 tools/flash-boot.sh                                  # usage line, exits 1 - it is executable
 ```
 
+`ls` proves a file is there, not that it is current. Both sets are rebuilt in one
+command each — `tools/build-p1-payloads.sh` and `tools/build-p2-payloads.sh` — and
+both end by refusing to exit 0 if any image fails the offline checkers. Run the
+one whose payload is about to be flashed rather than trusting the timestamps: the
+P2 pair that was written to `boot` had been built by hand and was stale in two
+ways that made it unbootable, neither of which `ls` or `tools/check-payload.py`
+can see (`docs/07`).
+
 If `--check` fails, stop. Every write in this runbook depends on that file being
 the byte-identical stock image.
 

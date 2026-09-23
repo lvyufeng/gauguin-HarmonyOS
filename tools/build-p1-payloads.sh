@@ -96,71 +96,11 @@ check_font() {
 
 cd "$LINUX"
 
-log "== device tree ($DTB_NAME.dtb)"
-# The board DTS is tracked in dts/ and copied into the kernel tree, because that
-# tree is not versioned here. Refresh it, so this build cannot run against a
-# stale copy of the file the ramoops check below is about - the two drifting
-# apart is exactly how the log ends up somewhere Android does not read.
-#
-# What is copied is the tracked file *plus* a generated fragment, and the
-# fragment is the difference between a boot and ABL's refusal. The tree ABL hands
-# the kernel is not the one we write: the phone's dtbo validates, so ABL takes the
-# overlay path, picks the Gauguin overlay out of it, and hands both to libufdt -
-# which resolves the overlay's 158 `__fixups__` against our tree's `/__symbols__`
-# and returns -1 if one is missing, printing "ApplyOverlay: ufdt apply overlay
-# failed" and returning EFI_NOT_FOUND before the kernel's first instruction. Ours
-# is not built with `-@` (scripts/Makefile.dtbs only adds it to base-dtb-y), so it
-# carries no symbols at all and every payload built without the fragment is
-# refused. tools/make_dtbo_sinks.py generates one empty node per symbol the dtbo
-# asks for and a `/__symbols__` naming them, so the overlay applies cleanly and
-# lands inside a subtree nothing binds to. docs/07 has the measurements.
-SINKS="$OUT/gauguin-dtbo-sinks.dtsi"
-python3 "$ROOT/tools/make_dtbo_sinks.py" --dtbo "$DTBO_IMG" -o "$SINKS"
-cat "$ROOT/dts/$DTB_NAME.dts" "$SINKS" > "arch/arm64/boot/dts/qcom/$DTB_NAME.dts"
-# And make a missing Makefile entry an error rather than a stale .dtb.
-rm -f "arch/arm64/boot/dts/qcom/$DTB_NAME.dtb"
-make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- -j"$(nproc)" dtbs
-cp "arch/arm64/boot/dts/qcom/$DTB_NAME.dtb" "$DTB"
-# The sinks are only a fix if they survived into the built blob; a tree that
-# silently lost them is one ABL refuses, and it looks exactly like the ones that
-# were refused before the fix. Checked as a symbol count rather than trusted.
-nsym=$(fdtget -p "$DTB" /__symbols__ 2>/dev/null | wc -l) || true
-[ "${nsym:-0}" -ge 200 ] \
-    || { echo "$DTB carries ${nsym:-0} symbols in /__symbols__, expected the ~217" \
-              "tools/make_dtbo_sinks.py generates - ABL would refuse the overlay" >&2
-         exit 1; }
-printf '   /__symbols__ %s entries\n' "$nsym"
-# A tree that still carries the inherited 0xffc00000 ramoops, or a second
-# ramoops node, would silently move the log - ramoops holds "only a single
-# ramoops area allowed at a time" and fails extra probes, so which of two nodes
-# wins comes down to node order.
-n=$(dtc -I dtb -O dts -o - "$DTB" 2>/dev/null | grep -c 'ramoops@')
-[ "$n" = 1 ] || { echo "expected exactly 1 ramoops node in $DTB, found $n" >&2; exit 1; }
-dtc -I dtb -O dts -o - "$DTB" 2>/dev/null | grep -q 'ramoops@d0000000' \
-    || { echo "$DTB has no ramoops@d0000000 - the address is derived from"
-              "docs/p1-cmdline.txt and the board dts, and the two have to agree" >&2
-         exit 1; }
-
-# The other channel, and the one that needs no reboot to read: /chosen's
-# simple-framebuffer is what simpledrm binds to and fbcon draws on, so the
-# kernel's own printk lands on the panel the bootloader just used for the logo.
-# Without this node the boot is undiagnosable from the screen - a kernel that
-# works and a kernel that dies in early setup both look like a dead phone.
-# width/height/stride/format are checked too, because the console geometry is
-# computed from them and a wrong stride draws diagonal text.
-#
-# All four are read out of the DTB rather than grepped as text, so a node that
-# exists but is missing a property cannot pass. compatible/format are strings
-# and width/height/stride are single cells.
-FBNODE=/chosen/framebuffer@a0000000
-command -v fdtget >/dev/null || { echo "fdtget not found (package: device-tree-compiler)" >&2; exit 1; }
-for spec in compatible:s width:i height:i stride:i format:s; do
-    prop=${spec%:*} type=${spec#*:}
-    v=$(fdtget -t "$type" "$DTB" "$FBNODE" "$prop" 2>/dev/null) \
-        || { echo "$DTB: $FBNODE has no '$prop' - the panel would stay dark and" \
-                  "there is no other channel that needs no round trip" >&2; exit 1; }
-    printf '   framebuffer %-10s %s\n' "$prop" "$v"
-done
+# The tree is built by a script of its own, because it now has two consumers:
+# the payloads here and the UEFI ones (tools/build-p2-payloads.sh). It was built
+# by hand for the second consumer and went stale, which is a failure this
+# arrangement cannot have - see the header of tools/build-device-tree.sh.
+"$ROOT/tools/build-device-tree.sh" -o "$DTB"
 
 # --- 1. the EFI-stub kernel, as configured -----------------------------------
 log "== building Image (CONFIG_EFI as configured)"
