@@ -94,6 +94,19 @@ which one: one character per Apriori entry, in the order the dispatcher ran them
 `S` for an entry point that returned an error, `L` for one whose image failed to
 load. `docs/08` step 4.9 has the line and how to read it.
 
+The instrumentation is written into `boot` and was booted on 2026-09-23; the
+reading is outstanding. The depex reading of the same evidence is dead —
+four of the eight are `[Depex] TRUE` and the other four need only Timer and
+Variable, all installed well before them — so what is left is that something in
+the middle of the batch breaks shared state and returns success anyway, which no
+dispatch-count line can see. `docs/08` step 4.10 is the experiment that separates
+the two readings: `tools/build-apriori-variant.sh` rebuilds the platform with the
+eight moved ahead of the Qualcomm block and nothing else changed — the two
+decompressed volumes differ in 554 bytes, all of them inside the Apriori file's
+GUID array — and `tools/apriori-order.py` proves the flashable image carries the
+order that was asked for. If the eight install there, the order was the cause; if
+they fail again, they fail wherever they sit.
+
 P0 result: all 38 partition images dumped and size-verified against the GPT; **86
 signed AArch64 DXE drivers** and Qualcomm's own `uefiplat.cfg` recovered from the
 phone's XBL; confirmed by search that no existing UEFI port covers this SoC.

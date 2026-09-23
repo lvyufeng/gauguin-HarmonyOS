@@ -179,8 +179,47 @@ def decompress_guided(body):
     return out[i - FV_SIG:] if i >= FV_SIG else out
 
 
+def fvmain_of_fd(fd, verbose=True):
+    """Walk an FD (FVMAIN_COMPACT) -> (files, fv_len, offsets, inner FV bytes).
+
+    Split out of `unpack` because `tools/apriori-order.py` needs the same walk
+    and the same decompressed volume, and because the descent - not the payload
+    wrapper - is the part with the padding rules in it (see `_walk_from` and
+    `fv_files`). A second copy of this would be a second set of those rules.
+    """
+    outer = fv_files(fd)
+    if verbose:
+        print(f"FD (FVMAIN_COMPACT) {len(fd):#x}, {len(outer)} top-level FFS files")
+
+    for g, typ, size, off, state in outer:
+        body = fd[off + 24:off + size]
+        if verbose:
+            print(f"  file {guid_str(g)}  type {typ:#04x} size {size:#x} "
+                  f"state {state:#04x} ({'valid' if state == FX_FILE_DATA_VALID else 'NOT VALID'})")
+        if typ != FILE_FIRMWARE_VOLUME_IMAGE:
+            continue
+        for st, sbody in sections(body):
+            if st != SECTION_GUID_DEFINED:
+                continue
+            inner = decompress_guided(sbody)
+            if inner is None:
+                if verbose:
+                    print(f"    GUIDed section {guid_str(sbody[0:16])}: not decompressed")
+                continue
+            if verbose:
+                print(f"    -> inner FV {len(inner):#x} bytes")
+            out, offs = [], []
+            for g2, t2, s2, o2, st2 in fv_files(inner):
+                nm = gui_name(inner[o2 + 24:o2 + s2])
+                out.append((guid_str(g2), t2, s2, nm, st2))
+                offs.append(o2)
+            return out, len(inner), offs, inner
+    return [], None, [], None
+
+
 def unpack(img):
-    """Walk image -> FD -> FVMAIN -> ([(guid, type, size, name, state)], fv_len)."""
+    """Walk image -> FD -> FVMAIN -> ([(guid, type, size, name, state)], fv_len,
+    offsets, inner FV bytes)."""
     d = open(img, "rb").read()
     if d[:8] != b"ANDROID!":
         sys.exit(f"{img}: not an Android boot image")
@@ -205,31 +244,8 @@ def unpack(img):
     # offset, so a change in that header size is not silently wrong.
     sig = payload.find(b"_FVH")
     fd = payload[sig - FV_SIG:]
-    outer = fv_files(fd)
-    print(f"{os.path.basename(img)}: payload {len(payload):#x}, "
-          f"FD (FVMAIN_COMPACT) {len(fd):#x}, {len(outer)} top-level FFS files")
-
-    for g, typ, size, off, state in outer:
-        body = fd[off + 24:off + size]
-        print(f"  file {guid_str(g)}  type {typ:#04x} size {size:#x} "
-              f"state {state:#04x} ({'valid' if state == FX_FILE_DATA_VALID else 'NOT VALID'})")
-        if typ != FILE_FIRMWARE_VOLUME_IMAGE:
-            continue
-        for st, sbody in sections(body):
-            if st != SECTION_GUID_DEFINED:
-                continue
-            inner = decompress_guided(sbody)
-            if inner is None:
-                print(f"    GUIDed section {guid_str(sbody[0:16])}: not decompressed")
-                continue
-            print(f"    -> inner FV {len(inner):#x} bytes")
-            out, offs = [], []
-            for g2, t2, s2, o2, st2 in fv_files(inner):
-                nm = gui_name(inner[o2 + 24:o2 + s2])
-                out.append((guid_str(g2), t2, s2, nm, st2))
-                offs.append(o2)
-            return out, len(inner), offs
-    return [], None, []
+    print(f"{os.path.basename(img)}: payload {len(payload):#x}")
+    return fvmain_of_fd(fd)
 
 
 def compare_map(files, offsets, map_path, fv_len=None):
@@ -290,7 +306,7 @@ def main():
     if not args.image:
         sys.exit(__doc__)
 
-    files, fv_len, offsets = unpack(args.image)
+    files, fv_len, offsets, _ = unpack(args.image)
     print(f"\nFVMAIN: {len(files)} FFS files, "
           f"{sum(s for _, _, s, _, _ in files):#x} bytes of file headers+data")
 

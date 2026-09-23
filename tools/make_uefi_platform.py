@@ -531,6 +531,16 @@ header_version = 2
 
 REF_PLATFORM = "surya"          # Xiaomi POCO X3 NFC / SM7150 - closest sibling
 
+# APRIORI.inc is a load-order list, not just a list. CoreFwVolEventProtocolNotify
+# walks the volume's Apriori file in index order and appends every match to the
+# scheduled queue, and the dispatcher drains that queue first-in-first-out, so the
+# position of a line here is the order in which the driver's entry point runs
+# (docs/08 step 4.9). That is what makes `--apriori-move` an experiment rather
+# than a cosmetic edit, and the reason a reordering is worth trying before
+# anything is removed: the eight architectural-protocol providers this board never
+# gets are all late in the list, which is consistent both with "these drivers
+# fail" and with "something earlier in the batch fails them".
+
 # Drivers this XBL carries that the surya reference package does not list, but
 # which 16-51 other platform packages in the tree do. surya is an older SoC
 # generation; the older ordering omits them. Taken from Xiaomi's aliothPkg
@@ -584,12 +594,64 @@ def load_guid_table(mu_root):
     return table
 
 
-def rewrite_incs(ref_dir, have, device):
+def apply_apriori_moves(lines, moves):
+    """Move the named INF lines of APRIORI.inc to just after an anchor line.
+
+    `moves` is a list of (anchor, [name, ...]); anchor and names are substrings
+    of `INF ...` lines. Nothing is added or removed, only reordered, so the
+    firmware volume keeps the same files at the same offsets and the only byte
+    that changes is the Apriori GUID array itself.
+
+    Every name has to match exactly one line. A name that matches none would
+    otherwise move nothing and read, in a build log, exactly like an experiment
+    that ran; a name that matches two would silently move whichever came first.
+    Both are exit conditions rather than warnings.
+
+    Returns [(anchor, path), ...] for the report and for the generated header.
+    """
+    report = []
+    for anchor, names in moves:
+        anchor_at = [i for i, l in enumerate(lines)
+                     if anchor in l and l.strip().startswith("INF")]
+        if len(anchor_at) != 1:
+            sys.exit(f"--apriori-move: anchor {anchor!r} matches "
+                     f"{len(anchor_at)} INF lines in APRIORI.inc, want 1")
+        src = []
+        for name in names:
+            at = [i for i, l in enumerate(lines)
+                  if name in l and l.strip().startswith("INF")]
+            if len(at) != 1:
+                sys.exit(f"--apriori-move: {name!r} matches {len(at)} INF lines "
+                         f"in APRIORI.inc, want 1")
+            if at[0] == anchor_at[0]:
+                sys.exit(f"--apriori-move: {name!r} is the anchor line {anchor!r}")
+            src.append(at[0])
+        if len(set(src)) != len(src):
+            sys.exit(f"--apriori-move: two names under anchor {anchor!r} match "
+                     f"the same line")
+
+        picked = [lines[i] for i in src]
+        # Where the anchor ends up once the moved lines are gone from in front of
+        # it. Removing and re-inserting in one pass would need the indices
+        # rewritten anyway, so they are rewritten once, here.
+        after = anchor_at[0] - len([i for i in src if i < anchor_at[0]])
+        for i in sorted(src, reverse=True):
+            del lines[i]
+        for offset, line in enumerate(picked):
+            lines.insert(after + 1 + offset, line)
+            report.append((anchor, line.strip().removeprefix("INF ")))
+    return report
+
+
+def rewrite_incs(ref_dir, have, device, apriori_moves=()):
     """Produce (dxe_inc, apriori_inc) for `device` from the reference package.
 
     `have` is the set of `QcomPkg/Drivers/.../*.inf` paths present under
     Binaries/<device>. Reference lines we cannot satisfy are commented out
     rather than dropped, so the gap stays visible in the generated file.
+
+    `apriori_moves` reorders APRIORI.inc only, and only when asked for; the
+    default output is byte-for-byte the reference order.
     """
     out = {}
     referenced = set()
@@ -625,6 +687,13 @@ def rewrite_incs(ref_dir, have, device):
             lines.insert(idx + 1, f"  INF Binaries/{device}/{path}")
             referenced.add(path)
 
+        # Reordering is APRIORI.inc's alone. DXE.inc decides which FFS files the
+        # volume carries and where they land, and reordering it would move every
+        # offset in the map that tools/fv-inventory.py checks against.
+        moved = []
+        if name == "APRIORI.inc" and apriori_moves:
+            moved = apply_apriori_moves(lines, apriori_moves)
+
         # Nothing in the reference lists these, so they would be packaged and
         # then silently left out of the firmware volume. Naming them in the file
         # keeps that visible after the generator's stdout is long gone.
@@ -636,6 +705,15 @@ def rewrite_incs(ref_dir, have, device):
                   f"#\n"
                   f"#  Rewritten to Binaries/{device}/ and filtered to the drivers this\n"
                   f"#  project actually extracted from the device's own XBL.\n")
+        if moved:
+            header += ("#\n"
+                       "#  EXPERIMENT - NOT the reference order. --apriori-move was used,\n"
+                       "#  so the a-priori batch runs in the order below, not surya's:\n")
+            header += "".join(f"#    {path}\n#      moved to just after {anchor}\n"
+                              for anchor, path in moved)
+            header += ("#  Regenerate without --apriori-move to restore the reference\n"
+                       "#  order. Which one the device ran is recorded by\n"
+                       "#  tools/build-apriori-variant.sh.\n")
         if dropped:
             header += "#\n#  Not available (commented out below):\n"
             header += "".join(f"#    {d}\n" for d in sorted(set(dropped)))
@@ -649,6 +727,8 @@ def rewrite_incs(ref_dir, have, device):
         out[key] = header + "\n".join(lines) + "\n"
         out[key + "_dropped"] = dropped
         out["orphans_seen"] = set(skipped)
+        if moved:
+            out["apriori_moved"] = moved
     out.pop("orphans_seen", None)
     out["referenced"] = referenced
     return out
@@ -998,7 +1078,22 @@ def main():
                     help="qcom = Qualcomm DisplayDxe (the goal); "
                          "simple = SiliciumPkg SimpleFbDxe (diagnostic, needs no "
                          "panel bring-up). Default: qcom")
+    ap.add_argument("--apriori-move", action="append", default=[],
+                    metavar="ANCHOR:NAME[,NAME...]",
+                    help="move the named APRIORI.inc INF lines to just after "
+                         "ANCHOR, keeping the order they are named in. Repeatable "
+                         "(later moves see the result of earlier ones). Changes "
+                         "the order the a-priori batch runs in and nothing else - "
+                         "see the note at REF_PLATFORM. Off by default, so a "
+                         "plain run reproduces the reference order exactly.")
     args = ap.parse_args()
+
+    apriori_moves = []
+    for spec in args.apriori_move:
+        anchor, _, names = spec.partition(":")
+        if not anchor or not names:
+            ap.error(f"--apriori-move wants ANCHOR:NAME[,NAME...], got {spec!r}")
+        apriori_moves.append((anchor, [n for n in names.split(",") if n]))
 
     cfg = os.path.join(args.repo, "device/config/uefiplat.cfg")
     if not os.path.isfile(cfg):
@@ -1061,7 +1156,10 @@ def main():
     if not os.path.isdir(ref_dir):
         sys.exit(f"missing reference package {ref_dir}\n"
                  f"clone Mu-Silicium into {mu_root} first")
-    model = rewrite_incs(ref_dir, have, "gauguin")
+    model = rewrite_incs(ref_dir, have, "gauguin", apriori_moves)
+    for anchor, path in model.pop("apriori_moved", []):
+        print(f"  a-priori move: {path}")
+        print(f"                 -> after {anchor}")
 
     guid_table = load_guid_table(mu_root)
     model["raw_inc"] = emit_raw_inc(dxe_dir, guid_table, "gauguin")

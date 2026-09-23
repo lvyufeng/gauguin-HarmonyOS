@@ -1005,9 +1005,179 @@ returning an error at its own entry point — which is the one failure mode the
 instrumentation cannot see. The order comes from the reference package verbatim:
 `tools/make_uefi_platform.py` rewrites `suryaPkg/Include/APRIORI.inc` to point at
 `Binaries/gauguin/`, comments out what this device's XBL did not provide, and
-inserts the four extra drivers — it never reorders. So the experiment needs a move
-step added to `rewrite_incs ()`, not a hand edit: `APRIORI.inc` says "do not edit
-by hand" and means it.
+inserts the four extra drivers — it never reorders. **The move step that paragraph
+needed now exists**; step 4.10 is the experiment it enables, and it is a better
+first move than dragging `HALIOMMUDxe` around, because it separates "these eight
+fail" from "something in the middle fails them" without needing a suspect.
+
+## Step 4.10 — The depex dead end, and the one experiment that separates the readings
+
+Step 4.9's boundary — every provider at a-priori position 5–9 installs its
+protocol, every one at 31 or later does not — has two readings, and the panel
+cannot tell them apart on its own:
+
+- **the eight fail wherever they are put**, or
+- **something between position 9 and position 31 fails them** without returning an
+  error at its own entry point.
+
+**The dependency reading is the one the static pass can finish, and it is dead.**
+Reading the eight providers' `[Depex]` out of the packages that build them
+(`Mu_Basecore`, not the volume) gives:
+
+| driver | `[Depex]` | built depex (from step 4.9) |
+|---|---|---|
+| `VariableRuntimeDxe` | `TRUE` | `PcdProtocol AND END` |
+| `ResetSystemRuntimeDxe` | `TRUE` | `PcdProtocol AND END` |
+| `SecurityStubDxe` | `TRUE` | `PcdProtocol AND END` |
+| `EmbeddedMonotonicCounter` | `TRUE` | `PcdProtocol AND END` |
+| `WatchdogTimer` | `gEfiTimerArchProtocolGuid` | `TimerArch AND PcdProtocol AND END` |
+| `RealTimeClockRuntimeDxe` | `gEfiVariableArchProtocolGuid` | `VariableArch AND PcdProtocol AND END` |
+| `CapsuleRuntimeDxe` | `gEfiVariableWriteArchProtocolGuid` | `VariableWriteArch AND PcdProtocol AND END` |
+| `BdsDxe` | `TRUE` | `PcdProtocol AND HiiString AND HiiDatabase AND HiiConfigRouting AND VariablePolicy AND END` |
+
+The extra `PcdProtocol` conjunct in the built column is the libraries', not the
+driver's (`Common.fdf.inc:36` — the same fact step 4.9's table rests on). So every
+conjunct of all eight was satisfied before their entry points ran: `PcdDxe` is at
+`P2 SEQ` 0 and installs, `TimerDxe` at 8, and `VariableRuntimeDxe`/`VariableWrite`
+by 30. Four of the eight are `TRUE` and cannot be blocked by anything at all. And
+for an a-priori member the depex is not even consulted — step 4.9 established that
+the promotion loop clears `Dependent` and the sweep only evaluates
+`CoreIsSchedulable` for entries still marked — so all eight were invoked
+unconditionally regardless. Either way **"a dependency was never satisfied" cannot
+account for the set**, and what is left is a state effect: something in the middle
+of the batch breaks shared state (heap, pool, GCD map) and returns success anyway.
+That is precisely the failure no dispatch-count line can see, which is why this
+step is an experiment rather than another reading of the same evidence.
+
+**The experiment: run the eight before the Qualcomm block.** Move all eight lines
+of `APRIORI.inc` to immediately after `ArmPkg/Drivers/TimerDxe/TimerDxe.inf` —
+chosen as the anchor because it is already early and its own result is known good,
+and because four of the eight depex on the protocol it installs. No driver is
+added, removed or rebuilt; the volume keeps every file at every offset it had (the
+map check below is what makes that a measurement); the only bytes that differ
+between this image and the baseline are the Apriori file's GUID array. What the
+panel then shows answers both readings at once:
+
+- **the eight install.** Then the order was the cause, and the culprit is in the
+  block they were moved ahead of. Bisect by moving the anchor later.
+- **they still fail, in the same way.** Then the order is not the factor, they fail
+  wherever they sit, and the next probe is inside `VariableRuntimeDxe` and
+  `SecurityStubDxe` themselves — with `SecurityStubDxe`, which installs one
+  protocol and returns, as the control.
+
+Both readings need the baseline's `P2 SEQ` string first, which is why the order of
+operations is baseline image, then this one. In the variant the eight land at SEQ
+**9–16**, in this order:
+
+| SEQ | 0 | 1–8 | 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16 |
+|---|---|---|---|---|---|---|---|---|---|---|
+| driver | Pcd | EnvDxe … TimerDxe | Variable | Reset | Watchdog | SecurityStub | Monotonic | RTC | Capsule | Bds |
+
+so the eight's fates are the eight characters after position 8, and a healthy line
+reads `s` at all eight. Everything after position 8 in the *baseline* shifts down by
+eight here (`SmemDxe` 17 … `GraphicsConsoleDxe` 68), so the two strings are
+compared by driver, not by index.
+
+**The tooling, and why it is three files rather than a build command.**
+
+- `tools/make_uefi_platform.py --apriori-move ANCHOR:NAME[,NAME...]` is the move
+  step `rewrite_incs ()` was missing. It is deliberately strict: a name that
+  matches zero or more than one `INF` line in `APRIORI.inc` is an error, not an
+  experiment that quietly did nothing. It applies to `APRIORI.inc` alone — DXE.inc
+  decides which FFS files the volume carries and where they land, and reordering it
+  would move every offset in the map the volume is checked against.
+- `tools/apriori-order.py` reads the order **out of the image that would be
+  flashed** rather than out of the file that was meant to produce it, and checks the
+  two positionally. That distinction is the whole point: a reorder that never
+  reached the volume would look exactly like a reorder that made no difference on
+  the device. It resolves GUIDs to module names through the build's own `Guid.xref`
+  and reads each module's `BASE_NAME` out of its `.inf` — deriving the name from the
+  file name is wrong often enough here to matter (`TLMMDxe/TLMMDxe.inf` builds
+  `DALTLMM`, `TzDxe/TzDxeLA.inf` builds `TzDxe`) and a first version of this tool
+  reported 69 confident `OUT OF ORDER` lines about an array that was in the right
+  order. Verified against the baseline (`70 entries, zero mismatches`, exit 0) and
+  against two deliberately wrong inputs (a wrong `--display`: 11 problems; a
+  reordered `--expect`: 35 problems; exit 1 each).
+- `tools/build-apriori-variant.sh arch-first` drives the two above, builds with
+  `-c`, and gates the result on `apriori-order.py`, `check-payload.py`,
+  `abl-boot-check.py` and `fv-inventory.py --against FVMAIN.Fv.txt`, reading each
+  gate's exit status from the command itself rather than from a pipe. An `EXIT`
+  trap regenerates the reference order, so a checkout that has built the
+  experimental firmware does not keep it.
+
+**A trap that cost two runs, worth recording because it is silent.** Mu-Silicium's
+`setup_env.sh` is a package installer and it is not `-u`-clean: line 40 tests
+`$CI_BUILD` unguarded, so sourcing it from a script that has `set -u` on aborts the
+whole shell on `CI_BUILD: unbound variable`. The abort is fatal to the *sourcing*
+script rather than something `||` catches, and its one message goes into the
+redirect on that line — so the symptom is a script that stops after printing
+`== building the firmware` and gives no reason at all. The fix is `set +u` around
+the `source` (`build-apriori-variant.sh` does that, with the reason at the line).
+Both failed runs did still run their restore trap — the tracked `APRIORI.inc` was
+rewritten 48 ms after the copy of it was taken — so nothing was left in the
+experimental order; they simply produced no image and no explanation.
+
+One build note, carried from 4.9 and unchanged by this experiment: `FVMAIN` sits at
+**99% (2104 bytes free)**, and this variant adds no file, so the reorder does not
+consume headroom.
+
+**The image, and the measurement that says the reorder is the only variable.** All
+four gates passed on the artifact: `apriori-order.py` read the array back out of the
+image as the experimental INF order (`70 entries, zero mismatches`), `check-payload.py`
+and `abl-boot-check.py` passed, and `fv-inventory.py --against FVMAIN.Fv.txt` matched
+every one of the 122 files at its offset.
+
+| | |
+|---|---|
+| image | `work/out/p2-variants/Mu-gauguin-arch-first-gzip.img` |
+| size | 1,138,688 B (same as the baseline image) |
+| sha256 | `9a7e8ab8235f8f24f70e1012df7b840645043dc34d256dc156e093d3d2c35ce3` |
+| payload | 3,145,840 B, md5 `1e2e8d22a62d448fb5b0df2e2e2970ee` |
+| baseline for comparison | `Mu-gauguin-silicon-gzip.img`, sha256 `09db7402…` |
+| `APRIORI.inc` as built | `work/out/p2-variants/APRIORI.arch-first.inc` (tracked file restored) |
+
+Then the two images were compared directly, which is the check that makes the
+experiment an experiment:
+
+- The **compressed** `FVMAIN_COMPACT` differs in **1,012,015 bytes of its 3,145,728** —
+  and that number means nothing, because one changed GUID early in an LZMA stream
+  reflows everything downstream of it. A byte-diff at this level would read as "the
+  build is not reproducible", which is the wrong conclusion; the inner file's
+  compressed size moved by 96 bytes (`0xf8200` → `0xf81a0`) and the volume's did not.
+- The **decompressed** `FVMAIN` differs in **7 runs, 554 bytes, and every one of them
+  is inside FVMAIN file #0** — the Apriori file. Not one byte of the other 121 files
+  differs, they are at the same offsets, and both volumes are `0x702000`. The
+  differing bytes are **GUID slots 10–44 of the array, contiguous**: the eight arrive
+  at 10–17 and the 27 slots behind them shift down by eight, which is exactly the
+  difference that was asked for and nothing besides.
+
+**What it means on the device, and the order to do it in.** Flash the baseline
+first: its `P2 SEQ` string is what the variant is read against, and it is the one
+piece of evidence that cannot be recovered afterwards. In the variant the eight
+occupying SEQ **9–16** are, in order:
+
+| SEQ | 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16 |
+|---|---|---|---|---|---|---|---|---|
+| driver | Variable | Reset | Watchdog | SecurityStub | Monotonic | RTC | Capsule | Bds |
+| if it worked | `s` | `s` | `s` | `s` | `s` | `s` | `s` | `s` |
+
+and a prompt that reports *eight* protocols missing rather than thirteen — CPU,
+Metronome, Timer, Runtime and Variable Write were never among the missing — is the
+same signal read off the assert instead of off `P2 SEQ`.
+
+- **All eight `s`.** The order was the cause, and the culprit is inside the block
+  they were moved ahead of, between `SmemDxe` (now SEQ 17) and `ScmDxeLA`. Move the
+  anchor later and re-run to bisect.
+- **The same failures as the baseline, at the same drivers.** Order is not the
+  factor and the eight fail wherever they sit; the next probe is inside the drivers
+  themselves, `SecurityStubDxe` first as the control, since it installs one protocol
+  and cannot fail except by `EFI_OUT_OF_RESOURCES`.
+- **`?` at 9 or a new `L`.** The forced-early batch did not even get its entry
+  points called, which would put the failure before anything this reorder touches —
+  and the baseline's string is what distinguishes that from the same result.
+
+This is still unverified on hardware. The phone was off USB for every build in
+steps 4.9 and 4.10, and nothing in either step has been run on the device.
 
 ## Step 5 — Leave it bootable
 
