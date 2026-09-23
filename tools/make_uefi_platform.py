@@ -339,6 +339,18 @@ GAUGUIN_DSC = """##
   # QCOM Libraries
   #
   ConfigurationMapLib|gauguinPkg/Library/ConfigurationMapLib/ConfigurationMapLib.inf
+
+[Components]
+  #
+  # ACPI Tables
+  #
+  # The module resolves as `gauguin/AcpiTables.inf` because
+  # `Silicium-ACPI/Platforms/Xiaomi` is on PackagesPath - the same way surya's
+  # resolves. The .aml files it lists are prebuilt binaries the build copies
+  # into the volume, not sources it compiles; DSDT.aml is compiled from
+  # tools/acpi/gauguin.asl by tools/sync-uefi-platform.sh.
+  #
+  gauguin/AcpiTables.inf
 """
 
 GAUGUIN_FDF = """##
@@ -408,12 +420,12 @@ READ_LOCK_STATUS   = TRUE
   INF MdeModulePkg/Universal/Acpi/AcpiTableDxe/AcpiTableDxe.inf
   INF MdeModulePkg/Universal/Acpi/AcpiPlatformDxe/AcpiPlatformDxe.inf
   #
-  # P3: the ACPI tables are not generated yet. The surya DSDT is a different
-  # board's hardware description and shipping it would tell any OS that boots
-  # here a set of lies about where the interrupt controllers and UART are, so
-  # there is no table package in the volume at all until P3 writes one.
+  # The tables themselves. `RuleOverride = ACPITABLE` is
+  # Silicon/Silicium/SiliciumPkg/Common.fdf.inc's rule and it puts each entry
+  # into the FV as a RAW section, which is what the AcpiTableDxe above scans
+  # the volume for.
   #
-  # INF RuleOverride = ACPITABLE gauguin/AcpiTables.inf
+  INF RuleOverride = ACPITABLE gauguin/AcpiTables.inf
 
   !include QcomPkg/Extra.fdf.inc
 
@@ -456,6 +468,38 @@ GAUGUIN_DEC = """##
   PACKAGE_NAME      = gauguinPkg
   PACKAGE_GUID      = 7E1B4C62-2F4A-4D18-9E31-2C5A0D8B6F42
   PACKAGE_VERSION   = 0.1
+"""
+
+GAUGUIN_ACPI_INF = """##
+#  Xiaomi Redmi Note 9 Pro 5G (gauguin) - ACPI tables
+#  SPDX-License-Identifier: BSD-2-Clause-Patent
+##
+#
+# The DSDT is ours (tools/acpi/gauguin.asl, compiled to DSDT.aml here). The
+# other four come from Silicon/Qualcomm/Moorea unmodified, because everything
+# they carry is SoC geometry and all of it was checked against this board's own
+# device tree - see docs/07-uefi-platform.md, "which SoC's ACPI tables gauguin
+# can use". Moorea's other six are deliberately not here: MCFG describes PCIe
+# and this board's device tree has no pcie node, and IORT/PPTT/CSRT/DBG2 are
+# device inventories that would each have to be re-derived before they could be
+# trusted. The set is Platforms/Lenovo/j706f's, plus FACS, which is generic.
+#
+# SSDT.aml is the shared Common/ one every platform in the tree uses.
+
+[Defines]
+  INF_VERSION                    = 0x00010005
+  BASE_NAME                      = AcpiTables
+  FILE_GUID                      = 7E374E25-8E01-4FEE-87F2-390C23C606CD
+  MODULE_TYPE                    = USER_DEFINED
+  VERSION_STRING                 = 1.0
+
+[Binaries]
+  ASL|DSDT.aml
+  ASL|Common/SSDT.aml
+  ASL|Moorea/APIC.aml
+  ASL|Moorea/FACP.aml
+  ASL|Moorea/FACS.aml
+  ASL|Moorea/GTDT.aml
 """
 
 GAUGUIN_TOML = """#
@@ -1065,6 +1109,32 @@ UpdateAcpiTables ()
 """
 
 
+def emit_acpi_tables(out_root):
+    """Write the platform's ACPI table package under Silicium-ACPI/.
+
+    The DSDT is the one table this port authors; its source lives in
+    tools/acpi/gauguin.asl and is copied here so the tree carrying the .inf
+    also carries the thing the .inf is built from. The compiled DSDT.aml is
+    not written here - tools/sync-uefi-platform.sh runs iasl over the copy -
+    so that a checked-in tree never disagrees with its own source.
+    """
+    d = os.path.join(out_root, "Silicium-ACPI/Platforms/Xiaomi/gauguin")
+    os.makedirs(d, exist_ok=True)
+
+    src = os.path.join(REPO, "tools/acpi/gauguin.asl")
+    if not os.path.isfile(src):
+        sys.exit(f"missing {src} - the DSDT source is the one hand-written "
+                 f"file this generator installs")
+    with open(src, encoding="utf-8") as fh:
+        asl = fh.read()
+
+    with open(os.path.join(d, "AcpiTables.inf"), "w") as fh:
+        fh.write(GAUGUIN_ACPI_INF)
+    with open(os.path.join(d, "gauguin.asl"), "w") as fh:
+        fh.write(asl)
+    return d
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--repo", default=REPO)
@@ -1074,10 +1144,22 @@ def main():
                     help="extracted DXE drivers (default: <repo>/device/dxe)")
     ap.add_argument("--mu", default=None,
                     help="Mu-Silicium checkout (default: <repo>/work/uefi/Mu-Silicium)")
-    ap.add_argument("--display", choices=("qcom", "simple"), default="qcom",
-                    help="qcom = Qualcomm DisplayDxe (the goal); "
-                         "simple = SiliciumPkg SimpleFbDxe (diagnostic, needs no "
-                         "panel bring-up). Default: qcom")
+    #
+    # The default is `simple`, not `qcom`, because a default is what a plain
+    # regeneration produces and that has to be the configuration that has been
+    # on the device. DisplayDxe re-initialises the panel from the panel XML and
+    # its failure mode is a black screen, which on a phone with no UART is
+    # indistinguishable from a firmware that never ran; SimpleFbDxe draws onto
+    # the framebuffer the bootloader has just painted and has put text on this
+    # panel for every measurement in docs/08. Flipping to `qcom` is a bring-up
+    # step of its own, taken once DXE reaches BDS - not something that should
+    # happen by omitting a flag.
+    #
+    ap.add_argument("--display", choices=("qcom", "simple"), default="simple",
+                    help="qcom = Qualcomm DisplayDxe (the goal, untested on this "
+                         "panel); simple = SiliciumPkg SimpleFbDxe (draws on the "
+                         "bootloader's framebuffer, no panel bring-up). "
+                         "Default: simple")
     ap.add_argument("--apriori-move", action="append", default=[],
                     metavar="ANCHOR:NAME[,NAME...]",
                     help="move the named APRIORI.inc INF lines to just after "
@@ -1189,6 +1271,10 @@ def main():
     with open(toml, "w") as fh:
         fh.write(GAUGUIN_TOML)
     print(f"wrote {os.path.relpath(toml, out_root)}")
+
+    acpi = emit_acpi_tables(out_root)
+    print(f"wrote ACPI table package {os.path.relpath(acpi, out_root)} "
+          f"(AcpiTables.inf + gauguin.asl)")
 
     print(f"\npackages written under {out_root}")
     print("next: tools/sync-uefi-platform.sh to install them into the Mu-Silicium tree")

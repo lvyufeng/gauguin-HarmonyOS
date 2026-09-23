@@ -90,6 +90,45 @@ cp "$GEN/Resources/Configs/gauguin.toml" "$MU/Resources/Configs/gauguin.toml"
 echo "   Resources/Configs/gauguin.toml"
 
 # ---------------------------------------------------------------------------
+say "installing ACPI tables"
+# ---------------------------------------------------------------------------
+# Silicium-ACPI is a submodule of the Mu-Silicium checkout, so the platform's
+# table package cannot live in it - it is copied in from the generated tree on
+# every sync. DSDT.aml is compiled here from the .asl beside it rather than
+# committed, so a tree can never carry a binary that disagrees with its source.
+ACPI_SRC=$GEN/Silicium-ACPI/Platforms/Xiaomi/gauguin
+ACPI_DST=$MU/Silicium-ACPI/Platforms/Xiaomi/gauguin
+[ -f "$ACPI_SRC/AcpiTables.inf" ] || die "missing $ACPI_SRC/AcpiTables.inf - re-run tools/make_uefi_platform.py"
+[ -f "$ACPI_SRC/gauguin.asl" ] || die "missing $ACPI_SRC/gauguin.asl"
+command -v iasl >/dev/null 2>&1 || die "iasl not found - install acpica-tools"
+
+install -d "$ACPI_DST"
+cp "$ACPI_SRC/AcpiTables.inf" "$ACPI_DST/AcpiTables.inf"
+cp "$ACPI_SRC/gauguin.asl" "$ACPI_DST/gauguin.asl"
+if ! iasl -p "$ACPI_DST/DSDT" "$ACPI_DST/gauguin.asl" >/tmp/iasl-gauguin.log 2>&1 ||
+   ! grep -q "0 Errors" /tmp/iasl-gauguin.log; then
+    sed 's/^/     /' /tmp/iasl-gauguin.log | tail -20
+    die "iasl failed on gauguin.asl"
+fi
+echo "   Silicium-ACPI/Platforms/Xiaomi/gauguin  (DSDT.aml $(stat -c%s "$ACPI_DST/DSDT.aml") bytes, from gauguin.asl)"
+
+# EDK2 resolves each [Binaries] ASL path against the module's own directory
+# first and then against each PackagesPath entry, and a miss is a build failure
+# minutes later with the table list as the only clue - so it is checked here
+# instead. The three roots are the Silicium-ACPI entries gauguin's
+# DeviceBuild.py puts on PackagesPath, in the order it puts them there: the
+# package's own directory is where DSDT.aml lands, `Common/SSDT.aml` sits at
+# the Silicium-ACPI root, and `Moorea/*.aml` under Silicon/Qualcomm.
+for t in $(sed -n 's/^  ASL|//p' "$ACPI_DST/AcpiTables.inf"); do
+    found=
+    for root in "$ACPI_DST" "$MU/Silicium-ACPI" "$MU/Silicium-ACPI/Silicon/Qualcomm"; do
+        [ -f "$root/$t" ] && { found=$root/$t; break; }
+    done
+    [ -n "$found" ] || die "AcpiTables.inf names $t but no PackagesPath root under Silicium-ACPI provides it"
+done
+echo "   all $(sed -n 's/^  ASL|//p' "$ACPI_DST/AcpiTables.inf" | wc -l) named tables resolve"
+
+# ---------------------------------------------------------------------------
 say "applying local edits to Mu_Basecore"
 # ---------------------------------------------------------------------------
 # Mu_Basecore is a nested checkout of upstream microsoft/mu_basecore, and it

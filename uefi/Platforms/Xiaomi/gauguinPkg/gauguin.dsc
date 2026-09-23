@@ -87,3 +87,15 @@
   # QCOM Libraries
   #
   ConfigurationMapLib|gauguinPkg/Library/ConfigurationMapLib/ConfigurationMapLib.inf
+
+[Components]
+  #
+  # ACPI Tables
+  #
+  # The module resolves as `gauguin/AcpiTables.inf` because
+  # `Silicium-ACPI/Platforms/Xiaomi` is on PackagesPath - the same way surya's
+  # resolves. The .aml files it lists are prebuilt binaries the build copies
+  # into the volume, not sources it compiles; DSDT.aml is compiled from
+  # tools/acpi/gauguin.asl by tools/sync-uefi-platform.sh.
+  #
+  gauguin/AcpiTables.inf

@@ -65,12 +65,12 @@ READ_LOCK_STATUS   = TRUE
   INF MdeModulePkg/Universal/Acpi/AcpiTableDxe/AcpiTableDxe.inf
   INF MdeModulePkg/Universal/Acpi/AcpiPlatformDxe/AcpiPlatformDxe.inf
   #
-  # P3: the ACPI tables are not generated yet. The surya DSDT is a different
-  # board's hardware description and shipping it would tell any OS that boots
-  # here a set of lies about where the interrupt controllers and UART are, so
-  # there is no table package in the volume at all until P3 writes one.
+  # The tables themselves. `RuleOverride = ACPITABLE` is
+  # Silicon/Silicium/SiliciumPkg/Common.fdf.inc's rule and it puts each entry
+  # into the FV as a RAW section, which is what the AcpiTableDxe above scans
+  # the volume for.
   #
-  # INF RuleOverride = ACPITABLE gauguin/AcpiTables.inf
+  INF RuleOverride = ACPITABLE gauguin/AcpiTables.inf
 
   !include QcomPkg/Extra.fdf.inc
 
