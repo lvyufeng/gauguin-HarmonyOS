@@ -488,17 +488,19 @@ append_dtb         = false
 #
 # header_version 2, which is what this phone's own boot partition declares.
 #
-# This was 1, and 1 is not merely a worse choice here - it is unconditionally
-# fatal, and fatal in a way that points at the wrong thing. DTBImgCheckAndAppendDT
-# enters its DTB-locating branch only `if (HeaderVersion > BOOT_HEADER_VERSION_ONE)`
-# (QcomModulePkg/Library/BootLib/BootLinux.c:454, and BOOT_HEADER_VERSION_ONE is 1),
-# so at v1 DtbOffset is never computed and stays at the 0 the BootParamlist was
-# initialised with. This device's dtbo partition validates, so ABL takes the
-# overlay branch, calls GetSocDtb() with that 0, and returns NULL on the function's
-# first check (`if (!DtbOffset)`, LocateDeviceTree.c:1005) with "DTB offset is
-# NULL" - a message about the DTB, from a header that made the DTB unreachable
-# before it could be looked at. ABL's own source says the same thing in words:
-# "DT size doesn't apply to header versions 0 and 1" (BootLinux.c:1239).
+# This was 1. v1 is not unconditionally fatal - a v1 image whose kernel is a gzip
+# package finds its tree, because on that path it is ABL's own decompressor that
+# writes DtbOffset (docs/07) - but it is still wrong here, and wrong in the way
+# that makes the failure hard to read. DTBImgCheckAndAppendDT computes an offset
+# of its own only `if (HeaderVersion > BOOT_HEADER_VERSION_ONE)`
+# (QcomModulePkg/Library/BootLib/BootLinux.c:454, and BOOT_HEADER_VERSION_ONE is
+# 1); ABL's own words at :1239 are "DT size doesn't apply to header versions 0 and
+# 1". So at v1 *where the tree is found* stops being a property of the header and
+# becomes a property of the compression, which is not something anyone would
+# guess: a raw kernel leaves DtbOffset at the 0 the BootParamlist was initialised
+# with, GetSocDtb() returns NULL on its first check (`if (!DtbOffset)`,
+# LocateDeviceTree.c:1005) with "DTB offset is NULL", and the appended tree is
+# never reached at all.
 #
 # Changing it here does not make this builder's output bootable, and that is not
 # something a config value can fix: build_uefi.py never passes --pagesize to

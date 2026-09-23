@@ -13,18 +13,21 @@
 # They were found by running `tools/abl-boot-check.py` over the images, which
 # nothing was doing. This script runs it, so the two cannot drift again.
 #
-# The payload of record is **not** `Mu-Silicium/Mu-gauguin.img`. That is what
-# Mu-Silicium's own builder produces, and it cannot be made bootable here: the
-# builder never passes `--pagesize` (so every image it makes is page 2048 while
-# this device's ABL, and its own stock `boot`, use 0x1000) and it has no way to
-# put the DTB in a declared region (it only ever glues the DTB onto the end of
-# the kernel blob, and ABL's `DTBImgCheckAndAppendDT` reads no DTB at all when
-# `header_version` is 1 — `BootLinux.c:454`). `tools/make_boot_image.py
-# --profile stock` is what builds the images here.
-#
-# What comes from the UEFI build is the volume and the shim, which is the part
-# that took an EDK2 toolchain. Rebuilding those is `./build_uefi.py -d gauguin
-# -r DEBUG -c` inside work/uefi/Mu-Silicium; this script only consumes them.
+# The payload of record is **not** `Mu-Silicium/Mu-gauguin.img`, which is what
+# Mu-Silicium's own builder produces and what currently sits in the phone's `boot`
+# partition. It glues whatever `.dtb` it is handed onto the end of the kernel blob
+# and has no way to put the tree in a region the header declares, and `build_uefi.py`
+# passes it page_size 0x800 / header_version 1 where this device's stock `boot` is
+# 0x1000 / v2. Only one of those is established as a fault: the tree it was handed
+# was two changes stale and carried no `/__symbols__`, so ABL refuses the vendor
+# overlay - the same refusal as any other payload built that way. `tools/make_boot_image.py
+# --profile stock` is what builds the images here, with the tree declared rather
+# than glued; `--profile silicon --compression gzip` reproduces the builder's shape
+# with the *current* tree and passes the same offline checks, which makes it a third
+# candidate rather than the excluded one it was taken for. What comes from the UEFI
+# build is the volume and the shim, which is the part that took an EDK2 toolchain.
+# Rebuilding those is `./build_uefi.py -d gauguin -r DEBUG -c` inside
+# work/uefi/Mu-Silicium; this script only consumes them.
 #
 # Usage:  tools/build-p2-payloads.sh
 #         FD=... BOOTSHIM=... DTBO=... to override the inputs.
@@ -72,18 +75,34 @@ for c in none gzip; do
         -o "$P2/Mu-gauguin-stock-$c.img"
 done
 
+# A third candidate, and deliberately not part of the pair: it varies the header
+# version, the page size and where the DTB lives all at once, so it cannot be read
+# as a one-variable experiment. It is here because it is the shape the framework
+# Mu-Silicium builds for itself - v1, page 2048, DTB appended to the kernel blob -
+# and because a payload in that shape with the *current* tree passes every check
+# ABL makes before it hands over, which was not known when that shape was written
+# off. The gzip compression is what makes it work at v1: it is ABL's decompressor
+# that supplies the DTB offset (docs/07). Kept as the fallback if both stock
+# variants are refused for a reason that turns out to be about the stock shape.
+log "== Mu-gauguin-silicon-gzip.img"
+python3 "$MK" --fd "$FD" --bootshim "$BOOTSHIM" --dtb "$DTB" \
+    --compression gzip --profile silicon \
+    -o "$P2/Mu-gauguin-silicon-gzip.img"
+
 log "== done"
-ls -la "$P2"/Mu-gauguin-stock-*.img
+ls -la "$P2"/Mu-gauguin-*.img
 
 # Both gates, and both are gates rather than printouts: each exits nonzero if
-# any image fails. check-payload.py reads the wrapper's structure; abl-boot-check.py
-# replays ABL's own decision path over it - the header check, the msm-id selection,
+# any image fails. check-payload.py reads the wrapper's structure - judged
+# against the shape the image declares itself to be, so the silicon one is not
+# failed for the ways it is deliberately unlike stock; abl-boot-check.py replays
+# ABL's own decision path over it - the header check, the msm-id selection,
 # the overlay's fixups against the tree's /__symbols__, and where the ramoops
 # region and the framebuffer land in the phone's memory map. An image that fails
 # the second one is refused by ABL before any of our code runs, so trying it costs
 # a physical reset and tells you nothing.
 log "== structure"
-python3 "$ROOT/tools/check-payload.py" "$P2"/Mu-gauguin-stock-*.img
+python3 "$ROOT/tools/check-payload.py" "$P2"/Mu-gauguin-*.img
 
 log "== ABL's checks, replayed offline"
-python3 "$ROOT/tools/abl-boot-check.py" --dtbo "$DTBO_IMG" "$P2"/Mu-gauguin-stock-*.img
+python3 "$ROOT/tools/abl-boot-check.py" --dtbo "$DTBO_IMG" "$P2"/Mu-gauguin-*.img

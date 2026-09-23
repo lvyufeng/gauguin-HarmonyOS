@@ -9,9 +9,20 @@ file was flashed, and each such mistake costs a physical reset of the phone.
 
 So this prints the properties that are being varied, next to the same
 properties read out of the device's own `boot` image, and fails loudly on
-anything structurally wrong (bad magic, a DTB that is not at the offset the
-header declares, declared regions that do not add up to the file size, an AVB
-footer).
+anything structurally wrong (bad magic, a DTB that is not where the shape says
+it is, declared regions that do not add up to the file size, an AVB footer).
+
+There are two shapes here and the difference between them is not a defect, so
+which one applies is read off the image rather than asserted: `stock` is the
+phone's own `boot` partition (v2 header, 4096-byte pages, the tree in a region
+the header declares) and `silicon` is what Mu-Silicium's builder emits for this
+device (v1, 2048-byte pages, no room for a tree in the header at all, so it is
+glued onto the kernel blob). Judging the second against the first produces a
+list of the ways it is deliberately different and calls it a fault - which is
+what this did until the corrected ABL replay in docs/07 showed that shape is
+admissible when it carries the current tree. What decides whether a payload is
+actually takeable is `tools/abl-boot-check.py`, which replays ABL's own checks
+and does not care which shape an image is.
 
 It also checks the log region a payload declares, but only against the payload
 itself: one ramoops node, and a device tree and a command line that agree on the
@@ -36,6 +47,38 @@ MAGIC = b"ANDROID!"
 ARM64_MAGIC = b"ARMd"
 AVB_MAGIC = b"AVB0"
 DTB_MAGIC = b"\xd0\x0d\xfe\xed"
+
+# The two shapes a payload here is built in. This is not a list of what is
+# allowed: it is what each shape *is*, so that a difference between an image and
+# one of them can be reported as a difference rather than as a fault. A shape is
+# not correct because it matches one of these - it is correct if ABL takes it,
+# which is `tools/abl-boot-check.py`'s question and not this file's.
+PROFILES = {
+    # The phone's own `boot` partition, which is what a stock-shaped payload is
+    # reproducing: v2 header, 4096-byte pages, the tree in a region the header
+    # declares at its own offset and size.
+    "stock": dict(name="stock", header_version=2, page_size=0x1000,
+                  dtb_in_header=True),
+    # What Mu-Silicium's builder emits for this device: v1 header, 2048-byte
+    # pages, no room in the header for a tree at all, so the tree is glued onto
+    # the kernel blob and ABL's decompressor is what finds it (docs/07).
+    "silicon": dict(name="silicon", header_version=1, page_size=0x800,
+                    dtb_in_header=False),
+}
+
+
+def detect_profile(f):
+    """Which of the two shapes this image is, read off the image itself.
+
+    A v2 header is the only one that has somewhere to write a DTB size, so an
+    image that declares one is judged as `stock`; everything else keeps its tree
+    on the kernel blob the way `silicon` does. Deriving this rather than taking
+    it as an argument means an image cannot be judged leniently by naming the
+    wrong profile - the lenient one is the one whose tree location the header
+    cannot express in the first place, so it is the shape that has to be
+    detected, not the shape that gets asserted.
+    """
+    return "stock" if f["header_version"] >= 2 else "silicon"
 
 
 def read_image(path):
@@ -216,7 +259,27 @@ def format_spec(s):
             f"pmsg {s.get('pmsg_size', 0):#x} ecc {s.get('ecc_size', 0):#x}")
 
 
-def describe(f):
+def appended_dtb(f):
+    """(file offset, blob) of the tree glued onto the kernel blob, or (None, None).
+
+    ABL finds that tree from the offset its own decompressor reports - the end of
+    the gzip member plus its trailer - and the header has no field for it, so the
+    header cannot be asked where it is. What can be asked is whether one is there
+    at all and whether it is complete: `d00dfeed` appears only at the start of an
+    fdt, so the last one in the blob is the candidate, and its `totalsize` has to
+    land exactly on the end of the kernel region.
+    """
+    blob = f["kernel"]
+    pos = blob.rfind(DTB_MAGIC)
+    if pos < 0:
+        return None, None
+    total, = struct.unpack_from(">I", blob, pos + 4)
+    if pos + total != len(blob):
+        return None, None
+    return f["kernel_off"] + pos, blob[pos:pos + total]
+
+
+def describe(f, prof=PROFILES["stock"]):
     hdr = arm64_header(f["kernel"])
     comp = "gzip" if f["kernel"][:2] == b"\x1f\x8b" else "raw"
     lines = [
@@ -225,9 +288,16 @@ def describe(f):
         f"   kernel  {f['kernel_size']:>12,} @ {f['kernel_addr']:#x}  {comp}"
         f"  first4 {f['kernel'][:4]!r}",
         f"   ramdisk {f['ramdisk_size']:>12,} @ {f['ramdisk_addr']:#x}",
-        f"   dtb     {f['dtb_size']:>12,} @ {f['dtb_addr']:#x}  file "
-        f"{f['dtb_off']:#x}  first4 {f['dtb'][:4]!r}",
     ]
+    if prof["dtb_in_header"]:
+        lines.append(f"   dtb     {f['dtb_size']:>12,} @ {f['dtb_addr']:#x}  file "
+                     f"{f['dtb_off']:#x}  first4 {f['dtb'][:4]!r}")
+    else:
+        off, blob = appended_dtb(f)
+        lines.append(f"   dtb     {len(blob) if blob else 0:>12,}  appended to the "
+                     f"kernel blob"
+                     + (f"  file {off:#x}  first4 {blob[:4]!r}" if blob else
+                        "  ** none found **"))
     if hdr and hdr.get("magic"):
         form = "MZ/PE (EFI stub)" if (hdr["code0"] & 0xffff) == 0x5a4d else \
                ("branch" if (hdr["code0"] >> 26) == 0b000101 else
@@ -240,9 +310,10 @@ def describe(f):
     else:
         lines.append("   arm64 header: ** kernel does not decompress **")
 
-    if f["dtb_size"] and f["dtb"][:4] == DTB_MAGIC:
+    tree_blob = f["dtb"] if prof["dtb_in_header"] else appended_dtb(f)[1]
+    if tree_blob and tree_blob[:4] == DTB_MAGIC:
         try:
-            tree = ramoops_spec(f["dtb"])
+            tree = ramoops_spec(tree_blob)
         except ValueError as e:
             tree = f"** unparseable: {e} **"
         cmd = cmdline_ramoops(f["cmdline"])
@@ -252,20 +323,45 @@ def describe(f):
     return "\n".join(lines)
 
 
-def problems(f):
-    """Structural faults that would waste the device cycle outright."""
+def problems(f, prof=PROFILES["stock"]):
+    """Structural faults that would waste the device cycle outright.
+
+    The reference here is a boot image shape, not a check of its own: `stock` is
+    the phone's own `boot` partition, because that is what this wrapper exists to
+    reproduce, and `silicon` is the shape Mu-Silicium's builder produces - v1,
+    page 2048, the tree glued onto the kernel blob. Comparing the second shape
+    against the first is not a fault report; it is a list of the ways it is
+    deliberately different. `tools/abl-boot-check.py` is what judges a payload
+    regardless of shape, by replaying the checks ABL makes.
+    """
     out = []
-    if f["header_version"] != 2:
-        out.append(f"header_version is {f['header_version']}, stock is 2")
-    if f["page"] != 0x1000:
-        out.append(f"page_size is {f['page']:#x}, stock is 0x1000")
+    if f["header_version"] != prof["header_version"]:
+        out.append(f"header_version is {f['header_version']}, "
+                   f"{prof['name']} is {prof['header_version']}")
+    if f["page"] != prof["page_size"]:
+        out.append(f"page_size is {f['page']:#x}, {prof['name']} is "
+                   f"{prof['page_size']:#x}")
     if not f["kernel_size"]:
         out.append("no kernel")
-    if f["dtb_size"] and f["dtb"][:4] != DTB_MAGIC:
-        out.append(f"DTB region at {f['dtb_off']:#x} does not start with the "
-                   f"DTB magic (got {f['dtb'][:4]!r})")
-    if not f["dtb_size"]:
-        out.append("no DTB declared in the header")
+    if prof["dtb_in_header"]:
+        if f["dtb_size"] and f["dtb"][:4] != DTB_MAGIC:
+            out.append(f"DTB region at {f['dtb_off']:#x} does not start with the "
+                       f"DTB magic (got {f['dtb'][:4]!r})")
+        if not f["dtb_size"]:
+            out.append("no DTB declared in the header")
+    else:
+        # Where the tree is is decided by the compression, not by a header field:
+        # ABL's decompressor reports the offset of whatever follows the gzip
+        # member, and a raw kernel blob has nothing to report at all (docs/07).
+        # So the check is that a complete tree is glued on.
+        if not f["kernel"][:2] == b"\x1f\x8b" and f["kernel"][:16] != \
+                b"UNCOMPRESSED_IMG":
+            out.append("the kernel is neither a gzip package nor a patched "
+                       "kernel, so nothing supplies ABL with a DTB offset and "
+                       "this shape cannot locate a tree (docs/07)")
+        if appended_dtb(f)[1] is None:
+            out.append("no complete DTB appended to the kernel blob (no "
+                       "d00dfeed, or its totalsize does not end the blob)")
     if f["regions_end"] > f["size"]:
         out.append(f"declared regions end at {f['regions_end']:#x}, past the "
                    f"file ({f['size']:#x})")
@@ -280,11 +376,11 @@ def problems(f):
     if hdr is None or not hdr.get("magic"):
         out.append("the kernel carries no arm64 image header (no ARMd at 0x38) "
                    "- ABL's kernel-mode check reads exactly that")
-    out += ramoops_problems(f)
+    out += ramoops_problems(f, prof)
     return out
 
 
-def ramoops_problems(f, ref=None):
+def ramoops_problems(f, prof=PROFILES["stock"]):
     """Whether the log region this image declares is one a boot could use.
 
     What is checked here is only what this image says about itself: there is one
@@ -307,11 +403,16 @@ def ramoops_problems(f, ref=None):
     the *device* by `tools/abl-boot-check.py` (DRAM partitions and the phone's own
     no-map carveouts, from tools/gauguin.py), which runs as part of
     tools/build-p1-payloads.sh.
+
+    The tree read here is whichever one this shape carries - the header's region
+    for `stock`, the blob glued onto the kernel for `silicon` - since both are
+    the tree ABL ends up handing the kernel.
     """
-    if not f["dtb_size"] or f["dtb"][:4] != DTB_MAGIC:
+    tree_blob = f["dtb"] if prof["dtb_in_header"] else appended_dtb(f)[1]
+    if not tree_blob or tree_blob[:4] != DTB_MAGIC:
         return []
     try:
-        tree = ramoops_spec(f["dtb"])
+        tree = ramoops_spec(tree_blob)
     except ValueError as e:
         return [f"the device tree in this image does not parse ({e})"]
 
@@ -338,6 +439,10 @@ def ramoops_problems(f, ref=None):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("images", nargs="+")
+    ap.add_argument("--profile", choices=["auto", *PROFILES], default="auto",
+                    help="which shape to judge each image against; `auto` reads "
+                         "the shape off the image, and is what the build scripts "
+                         "use")
     args = ap.parse_args()
 
     bad = 0
@@ -347,8 +452,10 @@ def main():
             print(f"== {p}\n   ** not an Android boot image **\n")
             bad += 1
             continue
-        print(describe(f))
-        probs = problems(f)
+        name = detect_profile(f) if args.profile == "auto" else args.profile
+        prof = PROFILES[name]
+        print(describe(f, prof) + f"\n   shape:  {name}")
+        probs = problems(f, prof)
         if probs:
             for x in probs:
                 print(f"   !! {x}")

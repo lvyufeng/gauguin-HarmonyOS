@@ -16,7 +16,7 @@ except P0's. This table is the honest state; the sections under it are the plan.
 |---|---|---|
 | **P0** survey + backup | partitions dumped and verified; no existing port | **done** — 74 partitions carved and signature-checked, `boot`/`abl`/`recovery` hashes match the device, 86 XBL drivers recovered, and `git ls-files Silicon/Qualcomm` confirms no SM7225 package upstream |
 | **P1** mainline kernel | device boots mainline and prints something | **not done** — `work/out/boot-pstore.img` is built, reproducible (`make_boot_image.py --kernel`), and carries both channels a device with no UART needs: the panel itself (`simple-framebuffer` + `simpledrm` + fbcon, so the boot log is photographed off the screen) and pstore (`console-ramoops-0`, readable from Android after a warm reboot). The earlier `fastboot boot` was refused with `Failed to load/authenticate boot image` on the RAM path, and the partition path has never been tried |
-| **P2** UEFI skeleton | the boot manager draws on the phone's screen and UFS appears as a block device | **gate open** — platform package built, image written to `boot` and verified byte-for-byte, **never observed to execute an instruction**. The gate said "reaches a shell" until the volume was inventoried and the shell turned out to be absent from *every* platform in the tree, `suryaPkg` included — see `docs/07`, so it would not have distinguished our firmware from a working one. The image that was written could not have executed either: its device tree was stale and its header was a version at which ABL locates no DTB, so it was refused twice over before any of our code was reached. Both are fixed offline, and the next attempt is the port's first |
+| **P2** UEFI skeleton | the boot manager draws on the phone's screen and UFS appears as a block device | **gate open** — platform package built, image written to `boot` and verified byte-for-byte, **never observed to execute an instruction**. The gate said "reaches a shell" until the volume was inventoried and the shell turned out to be absent from *every* platform in the tree, `suryaPkg` included — see `docs/07`, so it would not have distinguished our firmware from a working one. The image that was written could not have executed either: the device tree inside it was stale — no `/__symbols__` at all — and ABL refuses the vendor overlay over that, before any of our code is reached. A second reason was given at the time and has since been retracted (`docs/07`). Both the cause and the replay that found it are fixed offline, and the next attempt is the port's first |
 | **P3** ACPI | Windows installer boots and sees UFS | not started — `AcpiTableUpdate` is a deliberate no-op |
 | **P4** Windows | desktop appears | not started — destroys `userdata` |
 | **P5** peripherals | touch, Wi-Fi, GPU, audio | not started |
@@ -81,9 +81,16 @@ outcome means and which payload to try next, is
    builds, one per surviving candidate (uncompressed vs gzip kernel). Each pairs
    with a P1 variant on the compression property, which is what makes the pair —
    and not the individual attempt — the thing to read: see step 4b/4c in the
-   runbook. Both are built by `tools/build-p2-payloads.sh`, and the pair that was
-   written to `boot` before it existed could not have run at all — a stale device
-   tree and an Android header version at which ABL locates no DTB (`docs/07`).
+   runbook. A third image sits beside them, `Mu-gauguin-silicon-gzip.img`,
+   deliberately not part of the pair: it varies the header version, the page size
+   and where the tree lives all at once, so it cannot be read as a one-variable
+   experiment, and it is kept as the fallback for the case where both stock
+   variants are refused for a reason that turns out to be the stock shape itself.
+   All three are built by `tools/build-p2-payloads.sh`, and the earlier build
+   of the pair — made by hand, never flashed — could not have run at all: it
+   carried a stale device tree with no `/__symbols__`, so ABL would have refused
+   the vendor overlay (`docs/07`). The image that *is* in `boot` is
+   `Mu-Silicium/Mu-gauguin.img`, and it carries the same stale tree.
 
 Those pieces are backed by four offline tools, which exist because a device cycle
 is expensive and a bad image costs a physical reset. Every defect this project has

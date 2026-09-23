@@ -401,25 +401,40 @@ the pair, not the attempt. With 1 and 2 already run, this pair is the same
 experiment one layer up: it asks whether compression acts on the kernel or on
 ABL's path to it, and only the pair can say.
 
-The interpretation that is tempting and wrong is "4b/4c changed nothing, so UEFI
-fails for a different reason than the kernel". The reverse is what the evidence
-says. Eight images that share a **v2 header, our DTB in the declared DTB slot, and
-ABL's load-and-authenticate path**, and differ in the kernel inside them, all
-producing the *same* result, is an argument that the variable is in the part they
-share — the packaging and the bootloader path — not in any kernel property. A
-shared outcome across everything we build points at ABL, and at that point more
-payload variants are the wrong next step; the questions become `oem fbreason`,
-the auth result, and where in ABL's path the refusal happens. (The third of those
-— "whether ABL's DTB slot is really used as-is" — is now answered: it is not, and
-the overlay applies to our tree on every boot. See the note under the 4a table.)
+**The inference that used to be drawn here was not available, and this is the
+correction worth carrying into the next session.** The section used to argue that
+eight images sharing a v2 header, our DTB in the declared DTB slot and ABL's
+load-and-authenticate path, all producing the same result, pointed at ABL rather
+than at any kernel property. The P2 half of that was never true: the image that
+was written to `boot` could not execute, and the reason is a property of the file
+rather than of UEFI (`docs/07`) — a device tree with no `/__symbols__`, so ABL
+refuses the overlay at `ApplyOverlay`. A second reason was given at the time
+(`header_version = 1`, at which ABL was said to locate no DTB by any route) and it
+has since been retracted: the image's kernel is a gzip package, so ABL's
+decompressor supplies the DTB offset and the header version never decides it.
+ABL refusing a payload says nothing about the payload's own code, and the
+outcomes were not the same outcome either: P1's images were refused on the RAM
+chain-load path, and the P2 image wedged a bootloader that never reached it. So
+**4b/4c has not been run**, and the next attempt is the port's first execution
+rather than a repetition of a negative result.
 
-The pairwise comparison is what separates the two:
+What survives is the pairwise design, which is unchanged and still the reason to
+read 4b/4c as a pair:
 
 | what 4b/4c do relative to 4a | what it means |
 |---|---|
 | `-gzip` matches 2/5/6 and `-none` matches 1/3/4 | the property that differs *between* those groups is the live variable; the UEFI code is not implicated yet |
 | `-gzip` and `-none` agree with each other but **not** with their P1 partners | compression is not the variable; what differs is the payload, so P2 has its own problem and the UEFI side needs its own investigation |
 | 4b/4c differ from each other, and follow their P1 partners | compression is the variable, and it acts on ABL's path rather than on the kernel — which is a statement about *where* to look, not about which check: the `Decompress kernel size` message that used to be the candidate here compares the decompressed length against the size of a pointer and cannot fire (`docs/07`) |
+
+There is a fourth outcome that the table did not have a row for and that the
+failed attempt shows is the one to expect first: **nothing changes at all.** The
+screen stays as it was and `oem fbreason` answers the same as step 2. That is
+`docs/07`'s "One enumeration, then nothing" — which has an important corollary
+this runbook relies on. ABL's USB descriptors still answer in that state, and
+they can only answer from ABL, so **a silent fastboot means ABL is stuck, not
+that our image ran.** Reading it the other way is how a payload that never
+executed gets recorded as a payload that failed.
 
 After each attempt, the rule is the same as 4a: a change in `oem fbreason` is the
 signal, and the difference between this attempt and the one it is paired with is

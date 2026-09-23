@@ -11,10 +11,16 @@ So this walks the same code the bootloader runs, in the same order, and prints
 the verdict along with the vendor's own error text for whichever check fails:
 
     CheckImageHeader        magic, page size, sizes, the v2 dtb_size, overflow
-    DTBImgCheckAndAppendDT  where ABL computes the DTB to be, vs where it is
     UpdateKernelModeAndPkg  gzip or raw, patched-kernel magic, ARM\\x64 magic
     UpdateBootParams        the load addresses, from the platform memory map
     GZipPkgCheck            decompress, then the two runtime size checks
+    DTBImgCheckAndAppendDT  where ABL reads the DTB from, vs where it is
+
+The last two share a variable, and the order they run in decides what it holds:
+for a gzip package kernel it is ABL's decompressor that writes `DtbOffset`, and at
+`header_version` 0 or 1 nothing else ever does - so the v0/v1 branch of the DTB
+stage is reachable only if the decompressor is replayed first, exactly as it is in
+the C. Both header branches are modelled.
 
 and then the stage that decides what the kernel is actually handed, which is not
 in the image at all - the `dtbo` partition, whose presence and shape choose
@@ -84,6 +90,7 @@ import gauguin  # noqa: E402
 
 # --- constants, from QcomModulePkg ------------------------------------------
 MAGIC = b"ANDROID!"
+FDT_MAGIC = b"\xd0\x0d\xfe\xed"
 PAGE_MAX = 4096                     # BOOT_IMG_MAX_PAGE_SIZE
 DT_SIZE_2MB = 2 * 1024 * 1024       # reserved for the DT inside the kernel region
 KERNEL_64BIT_LOAD_OFFSET = 0x80000  # added to KernelBaseAddr before the kernel is copied
@@ -283,40 +290,138 @@ def check_image_header(d, r):
     return True
 
 
-def check_dtb_offset(d, r):
-    """DTBImgCheckAndAppendDT(), v2 branch.
+def dtb_offset_before_dtbcheck(raw, h):
+    """BootParamlist.DtbOffset as DTBImgCheckAndAppendDT() receives it.
 
-    ABL does not read dtb_addr. It computes where the DTB must be:
+    Two earlier stages can write that field, and **neither consults the header
+    version** - which is the whole reason its value matters here:
+
+      GZipPkgCheck, gzip package kernel. ABL's own decompress() reports
+
+          pos = stream->next_in - in_buf + 8;
+
+      the offset, *inside the compressed kernel blob*, of the end of the gzip
+      member plus its 8-byte trailer - which is where a DTB appended to the
+      stream begins. Reproduced the way the vendor does it: skip the fixed 10-byte
+      header, skip the FNAME field if FLG says there is one, inflate a raw deflate
+      stream (`inflateInit2(stream, -MAX_WBITS)`), and count what zlib consumed.
+
+      GZipPkgCheck, patched kernel. A 32-bit value read out of the kernel header
+      at `PageSize + sizeof(PATCHED_KERNEL_MAGIC) - 1`, i.e. kernel + 16, by a
+      stage that then copies the kernel out from behind PATCHED_KERNEL_HEADER_SIZE.
+
+    Anything else leaves the 0 the BootParamlist was zeroed with. The emulation is
+    not taken on trust: where its output is used it is checked against the fdt
+    magic it is supposed to point at, and says so when that is not there.
+    """
+    if h["gzip"]:
+        if len(raw) <= 10:
+            return 0, "the decompressor would not set it (the gzip header is truncated)"
+        p = 10
+        if raw[3] & 0x8:                       # FLG.FNAME
+            end = raw.find(b"\0", p, min(len(raw), p + 256))
+            if end < 0:
+                return 0, ("the decompressor would not set it (the gzip FNAME field "
+                           "has no terminator)")
+            p = end + 1
+        o = zlib.decompressobj(-zlib.MAX_WBITS)
+        try:
+            o.decompress(raw[p:])
+            o.flush()
+        except zlib.error:
+            return 0, "the decompressor would not set it (the deflate stream failed)"
+        pos = p + (len(raw) - p - len(o.unused_data)) + 8
+        if raw[pos:pos + 4] != FDT_MAGIC:
+            return pos, (f"GZipPkgCheck's decompressor left {pos:#x} there, which is "
+                         f"not where an fdt starts - the emulation is off by a byte "
+                         f"or two, or the DTB is not appended to the gzip stream")
+        return pos, (f"GZipPkgCheck's decompressor left {pos:#x} there - the end of "
+                     f"the gzip member and its trailer, where the appended tree's "
+                     f"d00dfeed is - not the header")
+    if h["patched"]:
+        off = r32(raw, len(PATCHED_KERNEL_MAGIC))
+        return off, f"the patched kernel header supplied {off:#x} (kernel + 16)"
+    return 0, "nothing before DTBImgCheckAndAppendDT writes it, so it is still 0"
+
+
+def check_dtb_offset(d, r):
+    """DTBImgCheckAndAppendDT(), both of its header branches.
+
+    The C locates the DTB in one of two ways, and which way is not a free choice:
+
+        if (HeaderVersion > BOOT_HEADER_VERSION_ONE) { ... DtbOffset = pages ... }
+
+    At v0/v1 that block is skipped - "DT size doesn't apply to header versions 0
+    and 1", `BootLinux.c:1239` - so DtbOffset keeps whatever the earlier stages
+    left in it (`dtb_offset_before_dtbcheck()`), and an image whose kernel is
+    neither a gzip package nor a patched kernel has 0 there, which GetSocDtb()
+    rejects on its first line.
+
+    A v1 image is not *always* refused, though, and this replay used to model only
+    the v2 branch - which made it report the v2 branch's failure for one. A gzip
+    package kernel has its offset written by the decompressor on a path that never
+    looks at the header version, and ABL goes on to read the appended tree. So both
+    branches are modelled, and the two are not interchangeable in either direction.
+
+    For v2 ABL does not read dtb_addr. It computes where the DTB must be:
         page * (1 + kernel + ramdisk + second + recovery_dtbo pages)
     and then requires a valid fdt there whose totalsize fits in the region the
     header declared (dtb_size).
     """
     h = r.header
-    pages = 1 + h["kernel_pages"] + h["ramdisk_pages"] + h["second_pages"]
-    pages += round_page(h["recovery_dtbo_size"], h["page"]) // h["page"]
-    off = h["page"] * pages
+    page, hv = h["page"], h["hv"]
+    if hv > 1:
+        base = 0                              # ImageBuffer, the boot image header
+        pages = 1 + h["kernel_pages"] + h["ramdisk_pages"] + h["second_pages"]
+        pages += round_page(h["recovery_dtbo_size"], page) // page
+        off = page * pages
+        region = h["dtb_size"] + off          # ABL's `ImageSize` for this function
+        h["abl_dtb_offset_source"] = "computed from the header's page counts"
+    else:
+        # ImageBuffer = ImageBuffer + PageSize + PatchedKernelHdrSize and
+        # ImageSize = KernelSize, so here the offset is relative to the kernel blob
+        # and the bound is the end of it, not a dtb_size the header declared.
+        base = page + (PATCHED_KERNEL_HEADER_SIZE if h["patched"] else 0)
+        off = h["dtb_offset_before"]
+        region = h["kernel_size"]
+        h["abl_dtb_offset_source"] = h["dtb_offset_source"]
     h["abl_dtb_offset"] = off
-    region = h["dtb_size"] + off          # ABL's `ImageSize` for this function
+    h["abl_dtb_base"] = base
+    if not off:
+        return r.fail(
+            "DTBImgCheckAndAppendDT",
+            "GetSocDtb: \"DTB offset is NULL\" -> \"Error: Appended Soc Device "
+            f"Tree blob not found\" -> EFI_NOT_FOUND. header_version is {hv}, and ABL "
+            "computes no DTB offset from a v0/v1 header at all - \"DT size doesn't "
+            "apply to header versions 0 and 1\" (BootLinux.c:1239) - so the offset "
+            "can only have come from the decompressor or a patched kernel header, "
+            f"and {h['dtb_offset_source']}")
     if off >= region:
-        return r.fail("DTBImgCheckAndAppendDT", "Dtb offset goes beyond the image size")
-    totalsize = fdt.header_ok(d, off)
+        return r.fail("DTBImgCheckAndAppendDT",
+                      f"Dtb offset goes beyond the image size: offset {off:#x}, "
+                      f"image {region:#x}, both measured from the point ABL calls "
+                      f"ImageBuffer")
+    totalsize = fdt.header_ok(d, base + off)
     if totalsize is None:
         h["dtb_present"] = False
         return r.fail("DTBImgCheckAndAppendDT",
-                      f"no valid fdt at ABL's computed offset {off:#x}")
+                      f"no valid fdt at ABL's offset {off:#x} "
+                      f"(file offset {base + off:#x})")
     h["dtb_present"] = True
     h["dtb_totalsize"] = totalsize
-    if (region - off) < totalsize:
+    if hv > 1 and (region - off) < totalsize:
+        # Only the v2 branch bounds the tree by dtb_size; the v1 walk is bounded by
+        # the end of the kernel region.
         return r.fail("DTBImgCheckAndAppendDT", "Dtb offset goes beyond the image size")
     # The slot is a *table*: GetSocDtb() walks it as concatenated fdt blobs and
     # ReadDtbFindMatch() on each, keeping the best. A tree with no qcom,msm-id is
     # never selectable at all (GetPlatformMatchDtb leaves DtMatchVal at
     # NONE_MATCH), and one whose platform id is another SoC is rejected outright,
     # so what matters is the tree that answers to this device's own chip id.
-    trees, p = [], off
-    while p + 40 <= region:
+    trees, p, end = [], base + off, base + region
+    while p + 40 <= end:
         t = fdt.header_ok(d, p)
-        if t is None or p + t > region:
+        if t is None or p + t > end:
             break
         props = fdt.root_props(d, p, t)
         trees.append(dict(off=p, totalsize=t, props=props,
@@ -331,6 +436,13 @@ def check_dtb_offset(d, r):
         p += t
     h["dtb_trees"] = trees
     h["dtb_is_multi"] = len(trees) > 1
+    if not trees:
+        h["dtb_selected"] = None
+        return r.fail("DTBImgCheckAndAppendDT",
+                      f"GetSocDtb walked from {off:#x} to the end of the image "
+                      f"({region:#x}) and matched nothing: \"No match found for Soc "
+                      f"Dtb type\" -> NULL -> \"Error: Appended Soc Device Tree blob "
+                      f"not found\" -> EFI_NOT_FOUND")
 
     def matches(t):
         return any((c & 0xFFFF) in gauguin.GAUGUIN_PLATFORM_IDS for c in (t["msm_id"] or ()))
@@ -724,9 +836,16 @@ def check(path, kernel_base, kernel_size, dtbo_entries=None):
         return r
     if not geometry(r, kernel_base, kernel_size):
         return r
+    # ABL's order, not a convenient one: UpdateKernelModeAndPkg and GZipPkgCheck run
+    # at BootLinux.c:957 and :976, DTBImgCheckAndAppendDT at :1022, and for a gzip
+    # package kernel it is the decompressor that writes the DtbOffset the DTB stage
+    # then uses. Running the DTB stage first (which this did) does not just misorder
+    # the report - it makes the v0/v1 branch unreachable, so a v1 image gets a v2
+    # diagnosis.
+    if not check_kernel_mode(d, r):
+        return r
     if not check_dtb_offset(d, r):
         return r
-    check_kernel_mode(d, r)
     # check_regions() before check_overlay(), only because Report keeps the last
     # failure: a payload that trips both would be refused by ABL at the overlay
     # stage first, before any address of ours was ever touched.
@@ -736,7 +855,13 @@ def check(path, kernel_base, kernel_size, dtbo_entries=None):
 
 
 def check_kernel_mode(d, r, decompressed_kernel=None):
-    """UpdateKernelModeAndPkg() plus GZipPkgCheck()'s two runtime checks."""
+    """UpdateKernelModeAndPkg() plus GZipPkgCheck()'s two runtime checks.
+
+    It also records what those two functions leave in BootParamlist.DtbOffset, which
+    is what check_dtb_offset() reads for a v0/v1 header - so this has to run first,
+    as it does in the C (`GZipPkgCheck` at `BootLinux.c:976`, the DTB stage at
+    `:1022`).
+    """
     h = r.header
     page = h["page"]
     raw = d[page:page + h["kernel_size"]]
@@ -773,6 +898,8 @@ def check_kernel_mode(d, r, decompressed_kernel=None):
             # Not fatal here: ABL decides it is a 32-bit kernel and boots that way.
             r.note("no ARM\\x64 magic at kernel+56 - ABL sets BootingWith32BitKernel "
                    "and would enter AArch32")
+    h["dtb_offset_before"], h["dtb_offset_source"] = \
+        dtb_offset_before_dtbcheck(raw, h)
     h["kptr_magic_ok"] = kptr_magic == KERNEL64_HDR_MAGIC
     h["kptr_image_size"] = kptr_image_size
     if kptr_magic == KERNEL64_HDR_MAGIC:
@@ -808,6 +935,12 @@ def describe(path, r, verbose):
     if r.failed:
         print(f"\033[31mFAIL\033[0m {name}")
         print(f"     {r.failed[0]}: {r.failed[1]}")
+        if h and h.get("hv", 2) <= 1 and h.get("dtb_offset_source"):
+            # The stage that failed is downstream of the one that found the DTB, so
+            # which branch located it is still worth saying - for a v0/v1 header it
+            # was not the header.
+            print(f"     header_version {h['hv']}: the DTB offset did not come from "
+                  f"the header - {h['dtb_offset_source']}")
         if r.failed[0] == "UpdateBootParams" and h:
             print("     (no header problem - this is a memory-geometry failure)")
         if r.failed[0] == "ApplyOverlay" and h and h.get("overlay_missing"):
@@ -824,7 +957,9 @@ def describe(path, r, verbose):
           f"kernel {h['kernel_size']:,} ({h['kernel_pages']}p)  "
           f"ramdisk {h['ramdisk_size']:,} ({h['ramdisk_pages']}p)  "
           f"dtb {h['dtb_size']:,}")
-    print(f"     ABL computes the DTB at {h['abl_dtb_offset']:#x}"
+    print(f"     ABL reads the DTB at {h['abl_dtb_offset']:#x} "
+          f"(from {'the kernel blob' if h['hv'] <= 1 else 'the file start'}: "
+          f"{h['abl_dtb_offset_source']})"
           + (f", fdt totalsize {h['dtb_totalsize']:#x}" if h.get("dtb_present") else ""))
     if h["gzip"]:
         print(f"     kernel is gzip -> decompressed {h['out_len']:,} bytes, "
