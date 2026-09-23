@@ -84,8 +84,24 @@ sync (idempotently — the reverse-check tells it the patch is already in).
 Regenerating it after editing the checkout:
 
 ```sh
-git -C work/uefi/Mu-Silicium/Mu_Basecore diff > uefi/patches/mu-basecore-local.patch
+tools/regen-mu-basecore-patch.sh
 ```
+
+Not a bare `git diff >`, which is what the first version of this note said and
+which is wrong: the header is hand-written prose that no diff contains, so a
+redirect over the file deletes it. The header now lives in its own tracked file,
+`uefi/patches/mu-basecore-local.header`, and the script concatenates the two and
+then checks the result both ways — that it applies to a pristine upstream `HEAD`
+and that it reverse-applies to the working tree it came from, which is exactly
+what makes the sync idempotent.
+
+Two things about that checkout that cost time to discover: `Mu_Basecore/.git` is a
+**file**, not a directory, because it is a submodule of the Mu-Silicium checkout
+and its git dir is `Mu-Silicium/.git/modules/Mu_Basecore`; and `git diff` there
+reports the five source edits and nothing else, so an empty diff means the edits
+were lost rather than that the tree is clean. The regeneration script refuses to
+write an empty patch for exactly that reason. Both scripts ask git
+(`rev-parse --git-dir`) rather than testing for the directory.
 
 The patch is not committed into Mu_Basecore itself: that checkout's `origin` is
 `microsoft/mu_basecore` and its HEAD is detached at the revision Mu-Silicium

@@ -1,0 +1,55 @@
+# Local edits to Mu_Basecore, carried as a patch because Mu_Basecore is a nested
+# checkout of upstream microsoft/mu_basecore and lives under `work/`, which the
+# outer repository ignores. Without this file none of the changes below would
+# reach the remote, and a fresh clone of the checkout would build something that
+# is not the firmware that was tested on the device.
+#
+# Apply with tools/sync-uefi-platform.sh, which installs the generated platform
+# package and then applies this patch (idempotently). By hand:
+#
+#     git -C work/uefi/Mu-Silicium/Mu_Basecore apply uefi/patches/mu-basecore-local.patch
+#
+# Regenerate after editing the checkout:
+#
+#     tools/regen-mu-basecore-patch.sh
+#
+# Do not regenerate with a bare `git diff >`: this header is not part of the
+# checkout's diff and a bare redirect overwrites it. The script concatenates
+# uefi/patches/mu-basecore-local.header with the diff, then checks that the
+# result applies to a pristine upstream HEAD and reverse-applies to the working
+# tree - which is what sync-uefi-platform.sh relies on to be idempotent.
+#
+# What is in here, and why:
+#
+#   ArmPkg/Library/ArmGenericTimer{Phy,Virt}CounterLib
+#       Fall back to gSiliciumPkgTokenSpaceGuid.PcdTimerFreqOverwrite when
+#       CNTFRQ_EL0 reads as zero. Some XBL/ABL builds do not program the counter
+#       frequency for the OS, and a timer frequency of 0 makes every later
+#       Metronome/Timer calculation divide by it.
+#
+#   MdeModulePkg/Application/BootManagerMenuApp
+#       Hide "UEFI Misc Device" entries, add Power Off and Exit, drop the third
+#       help line, and draw the menu light-on-dark instead of white-on-blue.
+#       Cosmetic on a phone panel except for Power Off, which is the only way to
+#       shut the device down from the menu.
+#
+#   MdeModulePkg/Bus/Usb/UsbBusDxe/UsbBus.h
+#       Serialise bus operations at TPL_CALLBACK rather than TPL_NOTIFY.
+#
+#   SecurityPkg/Library/AuthVariableLib/AuthService.c
+#       Refuse authenticated-variable writes once EfiAtRuntime() - a deployment
+#       on this device must not be able to brick itself through the variable
+#       store. This is the anti-brick measure, not a workaround.
+#
+#   MdeModulePkg/Core/Dxe/Dispatcher/Dispatcher.c
+#       TEMPORARY P2 bring-up instrumentation (marked P2BRINGUP). The dispatcher
+#       has two failure paths that leave no trace: a driver whose CoreLoadImage
+#       fails is marked Initialized and skipped, and a driver whose EntryPoint
+#       returns an error has its status discarded. Either way the architectural
+#       protocol the driver owed is simply never installed, and the two are
+#       indistinguishable from the result. The block records both, plus one
+#       result character per Apriori entry in dispatch order, and prints them
+#       from CoreDisplayDiscoveredNotDispatched - immediately before DxeMain's
+#       "arch protocol not present" assert, i.e. while it is still the last thing
+#       on the panel. Remove this block, and this hunk from the patch, once DXE
+#       reaches BDS. See docs/08 step 4.9.

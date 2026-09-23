@@ -11,7 +11,13 @@
 #
 # Regenerate after editing the checkout:
 #
-#     git -C work/uefi/Mu-Silicium/Mu_Basecore diff > uefi/patches/mu-basecore-local.patch
+#     tools/regen-mu-basecore-patch.sh
+#
+# Do not regenerate with a bare `git diff >`: this header is not part of the
+# checkout's diff and a bare redirect overwrites it. The script concatenates
+# uefi/patches/mu-basecore-local.header with the diff, then checks that the
+# result applies to a pristine upstream HEAD and reverse-applies to the working
+# tree - which is what sync-uefi-platform.sh relies on to be idempotent.
 #
 # What is in here, and why:
 #
@@ -36,10 +42,17 @@
 #       store. This is the anti-brick measure, not a workaround.
 #
 #   MdeModulePkg/Core/Dxe/Dispatcher/Dispatcher.c
-#       TEMPORARY P2 bring-up instrumentation (marked P2BRINGUP), printing which
-#       drivers CoreLoadImage or CoreStartImage failed on, from a point before
-#       DxeMain's "arch protocol not present" assert. Remove this block, and this
-#       hunk from the patch, once DXE reaches BDS. See docs/08 step 4.9.
+#       TEMPORARY P2 bring-up instrumentation (marked P2BRINGUP). The dispatcher
+#       has two failure paths that leave no trace: a driver whose CoreLoadImage
+#       fails is marked Initialized and skipped, and a driver whose EntryPoint
+#       returns an error has its status discarded. Either way the architectural
+#       protocol the driver owed is simply never installed, and the two are
+#       indistinguishable from the result. The block records both, plus one
+#       result character per Apriori entry in dispatch order, and prints them
+#       from CoreDisplayDiscoveredNotDispatched - immediately before DxeMain's
+#       "arch protocol not present" assert, i.e. while it is still the last thing
+#       on the panel. Remove this block, and this hunk from the patch, once DXE
+#       reaches BDS. See docs/08 step 4.9.
 diff --git a/ArmPkg/Library/ArmGenericTimerPhyCounterLib/ArmGenericTimerPhyCounterLib.c b/ArmPkg/Library/ArmGenericTimerPhyCounterLib/ArmGenericTimerPhyCounterLib.c
 index fbbecdc5..9378c270 100644
 --- a/ArmPkg/Library/ArmGenericTimerPhyCounterLib/ArmGenericTimerPhyCounterLib.c
@@ -253,10 +266,10 @@ index 39668123..8405bc31 100644
  #define  USB_INTERFACE_SIGNATURE  SIGNATURE_32 ('U', 'S', 'B', 'I')
  #define  USB_BUS_SIGNATURE        SIGNATURE_32 ('U', 'S', 'B', 'B')
 diff --git a/MdeModulePkg/Core/Dxe/Dispatcher/Dispatcher.c b/MdeModulePkg/Core/Dxe/Dispatcher/Dispatcher.c
-index d7c7147e..81c48f26 100644
+index d7c7147e..17ff387b 100644
 --- a/MdeModulePkg/Core/Dxe/Dispatcher/Dispatcher.c
 +++ b/MdeModulePkg/Core/Dxe/Dispatcher/Dispatcher.c
-@@ -60,6 +60,52 @@ EFI_LOCK  mDispatcherLock = EFI_INITIALIZE_LOCK_VARIABLE (TPL_HIGH_LEVEL);
+@@ -60,6 +60,92 @@ EFI_LOCK  mDispatcherLock = EFI_INITIALIZE_LOCK_VARIABLE (TPL_HIGH_LEVEL);
  //
  BOOLEAN  gDispatcherRunning = FALSE;
  
@@ -290,6 +303,44 @@ index d7c7147e..81c48f26 100644
 +STATIC UINTN           mP2AprioriCount = 0;   // GUIDs in the largest Apriori file seen
 +STATIC UINTN           mP2Started      = 0;   // EntryPoints that returned success
 +
++//
++// P2BRINGUP: one result character per Apriori entry, in promotion order - which
++// is the order the dispatcher drains them in, because the promotion loop appends
++// in INDEX_ORDER and the drain is a FIFO. That makes a single line enough to say
++// WHERE the batch broke, which the per-failure records above cannot: they say
++// what failed but not whether anything after it was ever reached, and "reached
++// and failed" and "never reached" are the two readings that matter here.
++//
++//   '?' promoted, nothing recorded for it - either the drain never got there, or
++//       it got there and left no trace, which is itself the answer if every later
++//       entry is '?' too
++//   's' EntryPoint returned EFI_SUCCESS
++//   'S' EntryPoint returned an error
++//   'L' CoreLoadImage failed, so the EntryPoint was never called
++//
++#define P2BRINGUP_APRIORI_MAX  128
++
++STATIC EFI_GUID  mP2AprioriGuid[P2BRINGUP_APRIORI_MAX];
++STATIC CHAR8     mP2AprioriRes[P2BRINGUP_APRIORI_MAX];
++STATIC CHAR8     mP2SeqLine[P2BRINGUP_APRIORI_MAX + 8];
++
++STATIC
++VOID
++P2MarkSeq (
++  IN EFI_GUID  *Guid,
++  IN CHAR8     Ch
++  )
++{
++  UINTN  Index;
++
++  for (Index = 0; Index < mP2Apriori && Index < P2BRINGUP_APRIORI_MAX; Index++) {
++    if (CompareGuid (&mP2AprioriGuid[Index], Guid)) {
++      mP2AprioriRes[Index] = Ch;
++      return;
++    }
++  }
++}
++
 +STATIC
 +VOID
 +P2Record (
@@ -304,12 +355,14 @@ index d7c7147e..81c48f26 100644
 +    mP2Diag[mP2DiagCount].Status = Status;
 +    mP2DiagCount++;
 +  }
++
++  P2MarkSeq (Guid, (Phase == 'L') ? 'L' : 'S');
 +}
 +
  //
  // Module globals to manage the FwVol registration notification event
  //
-@@ -483,6 +529,8 @@ CoreDispatcher (
+@@ -483,6 +569,8 @@ CoreDispatcher (
              DriverEntry->Initialized = TRUE;
            }
  
@@ -318,20 +371,21 @@ index d7c7147e..81c48f26 100644
            DriverEntry->Scheduled = FALSE;
            RemoveEntryList (&DriverEntry->ScheduledLink);
  
-@@ -519,6 +567,12 @@ CoreDispatcher (
+@@ -519,6 +607,13 @@ CoreDispatcher (
  
          Status = CoreStartImage (DriverEntry->ImageHandle, NULL, NULL);
  
 +        if (EFI_ERROR (Status)) {
 +          P2Record (&DriverEntry->FileName, 'S', Status);
 +        } else {
++          P2MarkSeq (&DriverEntry->FileName, 's');
 +          mP2Started++;
 +        }
 +
          REPORT_STATUS_CODE_WITH_EXTENDED_DATA (
            EFI_PROGRESS_CODE,
            (EFI_SOFTWARE_DXE_CORE | EFI_SW_PC_INIT_END),
-@@ -896,6 +950,8 @@ CoreAddToDriverList (
+@@ -896,6 +991,8 @@ CoreAddToDriverList (
  
    CoreReleaseDispatcherLock ();
  
@@ -340,7 +394,7 @@ index d7c7147e..81c48f26 100644
    return EFI_SUCCESS;
  }
  
-@@ -1412,6 +1468,7 @@ CoreFwVolEventProtocolNotify (
+@@ -1412,6 +1509,7 @@ CoreFwVolEventProtocolNotify (
                          );
      if (!EFI_ERROR (Status)) {
        AprioriEntryCount = SizeOfBuffer / sizeof (EFI_GUID);
@@ -348,28 +402,33 @@ index d7c7147e..81c48f26 100644
      } else {
        AprioriEntryCount = 0;
      }
-@@ -1433,6 +1490,7 @@ CoreFwVolEventProtocolNotify (
+@@ -1433,6 +1531,12 @@ CoreFwVolEventProtocolNotify (
            DriverEntry->Scheduled = TRUE;
            InsertTailList (&mScheduledQueue, &DriverEntry->ScheduledLink);
            CoreReleaseDispatcherLock ();
++          if (mP2Apriori < P2BRINGUP_APRIORI_MAX) {
++            CopyGuid (&mP2AprioriGuid[mP2Apriori], &DriverEntry->FileName);
++            mP2AprioriRes[mP2Apriori] = '?';
++          }
++
 +          mP2Apriori++;
            DEBUG ((DEBUG_DISPATCH, "Evaluate DXE DEPEX for FFS(%g)\n", &DriverEntry->FileName));
            DEBUG ((DEBUG_DISPATCH, "  RESULT = TRUE (Apriori)\n"));
            break;
-@@ -1486,11 +1544,58 @@ CoreDisplayDiscoveredNotDispatched (
+@@ -1486,11 +1590,79 @@ CoreDisplayDiscoveredNotDispatched (
  {
    LIST_ENTRY             *Link;
    EFI_CORE_DRIVER_ENTRY  *DriverEntry;
 +  UINTN                  Index;
++  UINTN                  SeqLen;
 +  UINTN                  NotLoaded;
 +  UINTN                  Shown;
 +
 +  //
-+  // P2BRINGUP: the cap keeps this dump from scrolling the lines that matter off
-+  // the one screen the framebuffer console keeps. The counts at the end are the
-+  // part to read: apriori is how many of the two numbers the Apriori file's
-+  // GUID count promoted onto the scheduled queue, and diag is how many drivers
-+  // the dispatcher then failed to load or to start.
++  // P2BRINGUP: the caps keep this dump from scrolling the lines that matter off
++  // the one screen the framebuffer console keeps. The last two lines are the
++  // part to read - SEQ is the whole Apriori batch as a string of results, in the
++  // order the dispatcher ran them, and STATS is the totals.
 +  //
 +  NotLoaded = 0;
 +  Shown     = 0;
@@ -380,7 +439,7 @@ index d7c7147e..81c48f26 100644
 -      DEBUG ((DEBUG_LOAD, "Driver %g was discovered but not loaded!!\n", &DriverEntry->FileName));
 +    if (DriverEntry->ImageHandle == NULL) {
 +      NotLoaded++;
-+      if (Shown < 12) {
++      if (Shown < 6) {
 +        Shown++;
 +        DEBUG ((
 +          DEBUG_ERROR,
@@ -396,7 +455,7 @@ index d7c7147e..81c48f26 100644
 +
 +  DEBUG ((DEBUG_ERROR, "P2 NOLOAD total=%d shown=%d\n", NotLoaded, Shown));
 +
-+  for (Index = 0; Index < mP2DiagCount; Index++) {
++  for (Index = 0; Index < mP2DiagCount && Index < 24; Index++) {
 +    DEBUG ((
 +      DEBUG_ERROR,
 +      "P2 DIAG %c %g %r\n",
@@ -404,6 +463,27 @@ index d7c7147e..81c48f26 100644
 +      &mP2Diag[Index].Guid,
 +      mP2Diag[Index].Status
 +      ));
++  }
++
++  //
++  // The Apriori batch, one character per entry, in the order it was dispatched.
++  // The first character that is not 's' is where the batch stopped producing
++  // working drivers - everything before it ran, everything after it did not.
++  //
++  SeqLen = mP2Apriori;
++  if (SeqLen > P2BRINGUP_APRIORI_MAX) {
++    SeqLen = P2BRINGUP_APRIORI_MAX;
++  }
++
++  if (SeqLen == 0) {
++    DEBUG ((DEBUG_ERROR, "P2 SEQ (no Apriori entries were promoted)\n"));
++  } else {
++    for (Index = 0; Index < SeqLen; Index++) {
++      mP2SeqLine[Index] = mP2AprioriRes[Index];
++    }
++
++    mP2SeqLine[SeqLen] = '\0';
++    DEBUG ((DEBUG_ERROR, "P2 SEQ [%a]\n", mP2SeqLine));
 +  }
 +
 +  DEBUG ((

@@ -104,7 +104,9 @@ say "applying local edits to Mu_Basecore"
 PATCH=$REPO/uefi/patches/mu-basecore-local.patch
 [ -f "$PATCH" ] || die "missing $PATCH"
 BASECORE=$MU/Mu_Basecore
-[ -d "$BASECORE/.git" ] || die "$BASECORE is not a git checkout"
+# `.git` is a file here, not a directory: Mu_Basecore is a submodule of the
+# Mu-Silicium checkout, so its git dir lives in ../.git/modules/Mu_Basecore.
+git -C "$BASECORE" rev-parse --git-dir >/dev/null 2>&1 || die "$BASECORE is not a git checkout"
 if git -C "$BASECORE" apply --check "$PATCH" 2>/dev/null; then
     git -C "$BASECORE" apply "$PATCH"
     echo "   applied  (tree was pristine)"

@@ -85,12 +85,14 @@ next time the phone is in hand. What is blocking is eight architectural protocol
 — Security, Bds, Watchdog, Variable, Capsule, Monotonic, Reset, Real Time Clock —
 that DXE never installs. The static pass got as far as it can: the dependency
 expressions all resolve, the Apriori file is complete, the images are well-formed,
-and the five providers that *did* install are exactly the first five in Apriori
-order while the eight that did not are all at position 31 or later — so the batch
+and the five providers that *did* install are exactly the first five providers in
+Apriori order while the eight that did not are all far later in it — so the batch
 broke somewhere among the twenty-one modules between them, which install no
 architectural protocol and are invisible in the result. The failing driver is
 therefore a runtime property, and the firmware has been instrumented to print
-which one — `docs/08` step 4.9 has the lines to look for.
+which one: one character per Apriori entry, in the order the dispatcher ran them,
+`S` for an entry point that returned an error, `L` for one whose image failed to
+load. `docs/08` step 4.9 has the line and how to read it.
 
 P0 result: all 38 partition images dumped and size-verified against the GPT; **86
 signed AArch64 DXE drivers** and Qualcomm's own `uefiplat.cfg` recovered from the
