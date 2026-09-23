@@ -61,6 +61,27 @@
 #       walk ended" from "the walk was cut off" by count, the second says whether
 #       what remained was memory. Both are things the host cannot compute.
 #
+#       A third probe, P2 BIN / P2 RETRY, added in step 4.19: the allocator's own
+#       state, which is where step 4.18 narrowed the 27 failures to. Two identical
+#       16-page EfiRuntimeServicesCode requests come out L at slot 19 and s at
+#       slot 22, so the deciding factor is neither the request nor a running
+#       total, and what is left is the heap at the instant each request arrives -
+#       the 150-page EfiRuntimeServicesCode and 300-page EfiRuntimeServicesData
+#       bins carved as one contiguous block off the top of the heap, and the
+#       default bin's window below it. P2 BIN prints all three windows with their
+#       fill, plus the two counts as the device's own HOB carries them rather than
+#       as the DSC file declares them; `init` distinguishes "the bins are full"
+#       from "the bins do not exist here". P2 RETRY then re-attempts the requests
+#       the slots either side of the failure made - 16, 48 and 112 pages of
+#       EfiRuntimeServicesCode and 16 of EfiRuntimeServicesData - and frees each
+#       one it gets: Success on the first means the 27 were never about room, a
+#       named error means the heap really is empty and it is a different fault.
+#       The four statuses are cached in statics deliberately: the digest repeats
+#       41 times, the copy that gets photographed is whichever one is on the
+#       screen, and a probe that moved the heap and reported a different answer
+#       per copy would make that copy the wrong one. Nothing else in the block
+#       describes the heap, and no host-side file records what it looked like.
+#
 #       The same block prints the load failures three times over, and that is
 #       deliberate rather than redundant. `P2 SEQ` gives the phase per Apriori
 #       entry as L/S/s, `P2 WHY` gives the status class at the same position as a

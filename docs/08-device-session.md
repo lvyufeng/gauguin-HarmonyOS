@@ -3164,6 +3164,204 @@ Then the rest of the list from step 4.17 (`P2 APRI`'s `bytes=`/`entries=`/`sum=`
 against `P2 STATS apriori=46/70` or `46/47`; `P2 WHY`, never read; the five
 `P2 WALK` lines; the 27 `P2 DIAG` records in the repeating digest).
 
+## Step 4.19 — The bins and the retry, which is the question the host cannot answer
+
+Step 4.18 closed by naming its own missing measurement:
+
+> And the one value that would settle the heap's own size, which the host cannot
+> compute and which no `P2` line prints: `CoreInitializeMemoryServices`' chosen
+> `BaseAddress`, `Length` and `MinimalMemorySizeNeeded`. … **If a `P2` addition is
+> wanted, that is the line to add**
+
+That is this step, with the measurement taken from a different side of the same
+question. What step 4.18 left standing is a state that differs between two
+*identical* 16-page requests made milliseconds apart, and the two candidates for
+that state — a bin boundary and a promotion — are both properties of the heap at
+the instant the request arrives. No file in the firmware volume records that, so
+the only way to read it is to ask the allocator while the heap is in the failing
+state, which is exactly when the digest prints. So this step adds the probe.
+
+### The probe, and why it re-attempts the failing request rather than describing it
+
+`P2Retry` makes four allocations at the assert and frees each one it gets back;
+`P2Bins` calls it once and then prints the bins. The four sizes are not arbitrary
+— they are the requests the slots either side of the failure actually made, after
+the 16-page rounding step 4.18 measured:
+
+| request | who made it | outcome in the SEQ |
+|---|---|---|
+| 16 pages `EfiRuntimeServicesCode` | `RpmhDxe` (slot 19), `PdcDxe` (slot 20) | `L` `L` |
+| 48 pages `EfiRuntimeServicesCode` | `ClockDxe` (slot 21) | `L` |
+| 16 pages `EfiRuntimeServicesCode` | `ShmBridgeDxe` (slot 22) | `s` |
+| 112 pages `EfiRuntimeServicesCode` | `BdsDxe` (the largest request in the set) | `L` |
+| 16 pages `EfiRuntimeServicesData` | the runtime family's pools | — |
+
+```c
+STATIC BOOLEAN  mP2RetryDone = FALSE;
+STATIC EFI_STATUS  mP2Rc16;
+STATIC EFI_STATUS  mP2Rc48;
+STATIC EFI_STATUS  mP2Rc112;
+STATIC EFI_STATUS  mP2Rd16;
+
+STATIC
+VOID
+P2Retry (
+  VOID
+  )
+{
+  EFI_PHYSICAL_ADDRESS  Memory;
+
+  if (mP2RetryDone) {
+    return;
+  }
+
+  mP2RetryDone = TRUE;
+
+  Memory = 0;
+  mP2Rc16 = CoreAllocatePages (AllocateAnyPages, EfiRuntimeServicesCode, 16, &Memory);
+  if (!EFI_ERROR (mP2Rc16)) {
+    CoreFreePages (Memory, 16);
+  }
+  …
+}
+```
+
+Two design points, both because the digest repeats 41 times and the copy that gets
+photographed is whichever one happens to be on the screen:
+
+- **The statuses are cached in statics and the allocations happen once.** The probe
+  moves the heap itself. A line that changed between copies would make the copy that
+  was read the wrong one, and there would be no way to tell from the photograph
+  which copy it was. Caching makes all 41 copies read identically — the first one
+  prints exactly what the last one prints.
+- **Everything it allocates is freed immediately.** The probe returns the heap to the
+  state it found, so the bins it then prints are the bins the 46 attempts produced,
+  not the bins the probe produced. This matters more than it looks: the four
+  allocations, if kept, would be 192 pages of the very type whose exhaustion is
+  under test.
+
+`P2Bins` prints the state as five lines, each `DEBUG_ERROR` so it is not compiled
+away at any level:
+
+```
+P2 BIN init=%d hob_rc=%d hob_rd=%d
+P2 BIN rc=%lx..%lx used=%ld/%ld
+P2 BIN rd=%lx..%lx used=%ld/%ld
+P2 BIN def=%lx..%lx
+P2 RETRY rc16=%r rc48=%r rc112=%r rd16=%r
+```
+
+| line | fields, in the order they print | what it decides |
+|---|---|---|
+| `P2 BIN init=` | `mMemoryTypeInformationInitialized` | whether the memory-type-information HOB arrived at all. `0` means `AllocateMemoryTypeInformationBins` never ran, the 450-page carve step 4.18 derived from `SiliciumPkg.dsc.inc` does not exist on this device, and the bin-boundary candidate is dead — the failure is then about the default bin and alignment alone |
+| `P2 BIN …hob_rc=/hob_rd=` | `gMemoryTypeInformation[…].NumberOfPages` | the 150 and 300 **as the device's own HOB carries them**, not as the DSC file declares them. This is the check on the host-side derivation: `rc=150 rd=300` confirms it, anything else and every page count in step 4.18 describes a different machine |
+| `P2 BIN rc=` | `BaseAddress..MaximumAddress used=Current/Number` | the `EfiRuntimeServicesCode` bin's window and fill. `used==total` says the type's own bin was full and every later request fell through the ladder — which is the mechanism step 4.18 predicts; a `used` well under 150 says the requests never got into their own bin |
+| `P2 BIN rd=` | same, for `EfiRuntimeServicesData` | the 300-page window against the 160 pages of runtime pools |
+| `P2 BIN def=` | `mDefaultBaseAddress..mDefaultMaximumAddress` | where the fallthrough rung starts. `AllocateMemoryTypeInformationBins` drops `*DefaultMaximumAddress` to `BaseAddress - 1` of the carved block, so this pair is the 450-page carve seen from below, and `def=` above `rc=`/`rd=` would mean the carve did not happen in that order |
+| `P2 RETRY` | the four statuses, `%r` | below |
+
+### The decision, and it is one word on one line
+
+`P2 RETRY rc16=` is the whole of step 4.18's question in a single status:
+
+| `rc16=` | what it means |
+|---|---|
+| `Success` | a 16-page `EfiRuntimeServicesCode` request — the exact size and type that failed at slots 19 and 20 — **still succeeds** at the assert, after all 46 attempts, with the heap in the state those attempts left it in. The 27 were therefore never about room, and what decides them is per-request state inside `FindFreePages`' ladder: which rung the request is allowed to use, and whether a rung that was closed for slot 19 is open for slot 22 |
+| any named error | the heap really is empty at the point the assert fires. Against 1824 pages of demand and 9056 pages of heap that is not plain exhaustion by the drivers, so something else is holding the rest — and that is a different fault with a different fix, and it moves the search out of the dispatcher |
+
+Read with `P2 FREE largest=`, which is the same question asked by the ladder
+`{4096, 1024, 256, 64, 16, 4, 1}` that `P2LargestAlloc` walks, the four combinations
+separate the candidates:
+
+| `rc16` | `P2 FREE largest=` | reading |
+|---|---|---|
+| `Success` | `≥16` | room exists and both probes find it. The failures are the ladder's rules, not its supply: the bin window (`rc=`), the alignment requirement, or `PromoteMemoryResource` firing between slots. The next step is then a probe inside `FindFreePages` itself, not another census |
+| `Success` | `0` | the two probes disagree, which is itself the finding: `EfiRuntimeServicesCode` can be served while a `EfiBootServicesData` request of any size cannot, so the two are drawing on different regions and the "35.4 MiB heap" is not one pool in practice |
+| error | `≥16` | the type's own bin and its fallthrough rungs are exhausted for that type while other memory remains — the bin boundary is confirmed as the mechanism |
+| error | `0` | the heap is empty. The demand figure in step 4.18 is then wrong about something, and the item to check is what the 1824 pages were rounded *from* |
+
+### What it does not do, and what it stands in for
+
+Step 4.18 asked for three numbers from `Gcd.c:2505` inside
+`CoreInitializeMemoryServices`. This probe gets at the same question from inside
+DxeCore instead, and the reason is that it costs one patched file rather than two:
+the two bins sit at the top of the heap and `def=` is the boundary the carve drops
+below them, so `rc=`, `rd=` and `def=` locate the carved block in the address space
+without leaving the module that is already patched. If the read comes back with
+`init=1`, non-zero windows below `def=`, and `hob_rc=150 hob_rd=300`, then the
+host-side derivation is confirmed on the device and the `Gcd.c` line is not needed.
+The one outcome that would make it necessary is a `BIN` block that is all zeros
+while the `RETRY` line still fails — which would say the memory-type-information
+mechanism is not running here and the bins are a story about a different platform.
+
+### What proves it is in the image, and it is not the file size
+
+The check that would normally be run — did the file change size — **fails here and
+would have been read as a bad build.** The 4.19 `DxeCore` is 172,592 bytes in the
+FFS file and 172,544 bytes as a PE, and so is 4.16's, to the byte. Two things
+absorb the addition:
+
+- the PE's `FileAlignment` is `0x200`, and `.rdata` had 0x1E4 bytes of padding at
+  its end. The five new literals are 0xC0 of it, so `.rdata`'s raw size is
+  unchanged while its virtual size goes `0x821c → 0x82dc`.
+- `.text` is one of the sections the linker aligns, and its growth went into
+  padding that sat before the section's trailing aligned block, so every later
+  branch target moved `+0x174` while the section's declared size stayed `0x1e020`.
+
+So presence is proved by content, on four independent counts:
+
+| check | 4.16 | 4.19 |
+|---|---|---|
+| the five literals in the decompressed inner volume | 0 | 1 each |
+| `.rdata` virtual size | `0x821c` | `0x82dc` (+0xC0, the five literals exactly) |
+| `.data` virtual size | `0x7530` | `0x7550` (+0x20, the four cached `EFI_STATUS`) |
+| `add #0x2f8` in `.text` ("P2 BIN init=%d", RVA `0x242f8`) | none | one, at `0x1198c` |
+
+and the last one is the one that matters, because a `DEBUG` call is only emitted if
+a reachable call site names its format string. Five `adrp`/`add` pairs sit in one
+0x74-byte window — `0x11988` through `0x119fc` — and they resolve to exactly the
+five new literals' RVAs:
+
+```
+ADRP/ADD at 0x11988/0x1198c -> 0x242f8  P2 BIN init=%d hob_rc=%d hob_rd=%d
+ADRP/ADD at 0x119b0/0x119b4 -> 0x24138  P2 BIN rc=%lx..%lx used=%ld/%ld
+ADRP/ADD at 0x119cc/0x119d0 -> 0x24110  P2 BIN rd=%lx..%lx used=%ld/%ld
+ADRP/ADD at 0x119e4/0x119e8 -> 0x23740  P2 BIN def=%lx..%lx
+ADRP/ADD at 0x119f8/0x119fc -> 0x23d08  P2 RETRY rc16=%r rc48=%r rc112=%r rd16=%r
+```
+
+One window, five references, the sizes above — that is `P2Bins` inlined into
+`P2Digest`, which is also why `llvm-nm` on `Dispatcher.obj` shows no `P2Retry` or
+`P2Bins` symbol: both are `STATIC` and called once, so clang inlined them and the
+names are gone. A symbol search would have been the second wrong check to reach for.
+
+### The image, and where it is
+
+| | |
+|---|---|
+| image | `work/out/p2-4.19/Mu-gauguin-silicon-gzip.img`, 1,140,736 B, sha256 `ef9f8217ae7a4b6f9d640f856d9c6f3f0f142bc45b8639d1c79e0201f84d24aa` — **not flashed** |
+| on the phone | still step 4.13's `8c565681d1093b76c1cf184a549099aa2a957127c8be5ded439d934164535842` |
+| changed | `Dispatcher.c` only, inside the existing `P2BRINGUP` block: `P2Retry`, `P2Bins`, and one call at the end of `P2Digest` |
+| reproducible from | `tools/build-p2-payloads.sh`; all three variants pass `check-payload.py`, `abl-boot-check.py` and the 123-offset map comparison |
+| verified | the same three images came out of a rebuild of the corrected source byte-identically, which is the only reason the archive and the build agree: the first build of this step carried a comment that described `%r` as printing a `Y`, which it does not, and the correction changed no code |
+
+### What to read
+
+Six lines now, and the first three are the ones this step exists for:
+
+1. **`P2 ERR`** — unchanged first priority. It names the status the 27 report, and
+   everything in steps 4.18 and 4.19 is a guess about the mechanism behind that name
+   until it has been read.
+2. **`P2 RETRY rc16=`** — `Success` or a named error, and the table above turns that
+   one word into the choice between "the ladder's rules" and "the heap's supply".
+3. **The four `P2 BIN` lines** — `init=`, `hob_rc=`/`hob_rd=` against the derived
+   150/300, and `rc=`/`rd=`/`def=` against each other. `init=0` is the one reading
+   that would invalidate the whole bin story.
+4. Then the list from step 4.18: **`P2 FREE largest=`**, which pairs with `rc16`;
+   `P2 DIAG`'s 27 records; `P2 APRI`'s `bytes=`/`entries=`/`sum=` against
+   `P2 STATS apriori=46/70` or `46/47`; `P2 WHY`, still never read; the five
+   `P2 WALK` lines; and the 46-character `P2 SEQ`.
+
 ## Step 5 — Leave it bootable
 
 Whatever the outcome, end the session with the stock image back on `boot`:
@@ -3232,6 +3430,15 @@ attempt  image                          fbreason                     screen     
          failure list moved into the
          repeated digest, so it stays
          on the screen), sha256 7b5a1067
+11       Mu-gauguin-silicon-gzip.img    (not flashed)                (not read)             n/a           (not read)
+         (4.19: the digest also reads
+         the allocator's own state -
+         P2 BIN for the two runtime
+         bins and the default window,
+         P2 RETRY for the four
+         requests that failed and the
+         one that succeeded), sha256
+         ef9f8217
 ```
 
 Row 4 is the one that matters and is step 4.8: our firmware ran and drew its own
@@ -3296,6 +3503,19 @@ the storage. It adds nothing to the instrument and everything to the chance of
 reading it, which is now what this step of the work turns on: the answer exists
 after every boot and has been missed after every boot, and each of rows 8, 9 and
 10 removes one way for that to happen. Row 10 has not been flashed either.
+
+Row 11 is step 4.19 and the table skips from row 10 to it because steps 4.17 and 4.18
+changed no firmware at all: they were analysis of the volume on the host, so row 11 is
+the first row since row 7 with an image behind it, and `boot` has not been written since
+row 7 was read. It is the first row whose probe was written to answer a question the
+host had already narrowed rather than to capture something unread: step 4.18 reduced the
+27 failures to two candidates, both of them heap state at the instant a request arrives,
+and neither of them is in a file. So the digest now asks the allocator itself — the two
+runtime bins' windows and fill, the default bin's window, and four allocations that
+re-attempt the exact requests the slots either side of the failure made — and it caches
+those four statuses so all 41 copies read the same. Like rows 8, 9 and 10 it exists
+because the answer has to be on the screen rather than on the wire; unlike them, the
+answer it stays there for is about the heap and not about the drivers.
 
 The `abllog` column is step 4.6's answer — the last stage ABL's own log for that
 boot reached. It is the one column that is filled in whether or not the payload
