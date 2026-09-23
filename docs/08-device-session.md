@@ -1424,21 +1424,38 @@ mapped back through the array, and landing on `L`.
 
 ### Three things this settles, and one it does not
 
-**Settled: `L` means `CoreLoadImage` or `CoreStartImage` failed — the SEQ alone
-cannot say which.** `P2Record (Guid, Phase, Status)` ends with
-`P2MarkSeq (Guid, (Phase == 'L') ? 'L' : 'S')`, so the letter written for a
-*start* failure (`'S'`) renders as `'L'` exactly like a *load* failure. What the
-letter does settle is that the driver's entry point either was never reached or
-returned an error: a driver that loaded and started would have been marked `'s'`.
-The distinction between the two lives only in the `P2 DIAG %c %g %r` lines, and
-only one such line was ever read ("Out of Resources"), so **the claim that all 27
-are load failures is not established by the SEQ**; it is established for at most
-the one driver that produced a DIAG line.
+**Settled, and this reading had it backwards for a while: the SEQ *does* separate
+a load failure from a start failure, and all 27 are load failures.**
+
+An earlier version of this paragraph said the two were indistinguishable because
+`'S'` "renders as `'L'`". That contradicts the line of code it quotes.
+`P2Record` writes **two different letters**:
+
+```c
+P2MarkSeq (Guid, (Phase == 'L') ? 'L' : 'S');   /* 'L' = CoreLoadImage failed */
+                                                 /* 'S' = CoreStartImage failed */
+```
+
+and `P2MarkSeq` assigns `mP2AprioriRes[Index] = Ch` verbatim, and the SEQ line is
+`mP2AprioriRes[0..mP2Apriori)` with no mapping in between. So a driver whose entry
+point ran and returned an error is marked `'S'`, not `'L'`. The line is `Phase ==
+'L' ? 'L' : 'S'`, not `'L'` for both.
+
+The observed string is `ssssssssssssssssssLLLsLLLLLLLLLLLLLLLLLLLLLLLL` — lowercase
+`'s'` for the 19 successes, uppercase `'L'` for the 27 failures, and **zero `'S'`
+characters**. The case is not incidental: `'s'` and `'S'` are written by different
+lines of code. So, over the 46 promoted entries, **not one driver's `DriverEntry`
+ever ran and returned an error.** Every failure is `CoreLoadImage` returning an
+error before `CoreStartImage` was called, which places the fault in the loader and
+not in the drivers. Nothing about how a driver behaves once started — including
+every `gKernel == NULL` / missing-`EFI_KERNEL_PROTOCOL` reading elsewhere in this
+document — can be the cause of these 27.
 
 **Narrowed: one `P2 DIAG` reading said Out of Resources, and the sites that can
 produce it are three.** The panel's `%r` rendered a status whose name is `Out of
-Resources` — `EFI_OUT_OF_RESOURCES`. In the load path that is
-`CoreLoadImageCommon`'s `AllocateZeroPool` of the
+Resources` — `EFI_OUT_OF_RESOURCES` — on a `P2 DIAG` line whose phase character was
+`L`, which is the reading above arriving independently and in the same direction.
+In the load path that is `CoreLoadImageCommon`'s `AllocateZeroPool` of the
 `LOADED_IMAGE_PRIVATE_DATA`, `CoreLoadPeImage`'s page allocation, or the
 `AllocatePool` inside `GetSection` when the caller passes a NULL buffer. So this
 is not 27 drivers declining to support the platform, and it is not 27 dependency
@@ -1446,6 +1463,18 @@ failures: it is a run of loads that each returned a status that *renders* as Out
 of Resources. Which site, and why an identical request two positions later
 succeeded, is what the two sections below narrow — and the memory section is
 where the obvious answer dies.
+
+**What the phase split is worth, beyond the 27.** It removes the largest class of
+candidate explanations outright. "Driver X starts before its dependency is
+installed and returns an error" and "the Apriori order starves a driver of
+something it needs at start time" both require *some* entry point to have run, and
+none did. That is also a better reason to retire step 4.10's reorder than the one
+given there: reordering changes only the drain order of the promoted batch, and the
+drain never reaches a driver's entry point at all.
+
+The distinction was never absent — it was in the string that has been on the panel
+since `e864a59`. What was missing was reading the case as significant rather than
+as decoration.
 
 **Settled: the promoted set is not a prefix of the array's first 46 — it is the
 first 46 *matches*, and 23 entries are missing from the list entirely.** Zero `?`
@@ -1817,9 +1846,9 @@ Recorded because both were written with confidence and both are now replaced:
   `tools/apriori-order.py` remain the right tooling for a reordering experiment;
   this is simply not a reordering problem.
 
-### Readings retracted in this step, and the four that replaced them
+### Readings retracted in this step, and the measurements that replaced them
 
-Four mechanisms were proposed, argued for, and then killed by measurement. They
+Six mechanisms were proposed, argued for, and then killed by measurement. They
 are listed together because each one is the natural next guess, and the list is
 the cheapest way to stop the next session from re-deriving them:
 
@@ -1838,6 +1867,12 @@ the cheapest way to stop the next session from re-deriving them:
   run, and on this volume that run is 0xcf8 bytes from the end with nothing after
   it: 123 files listed, zero corruption. The mechanism is real in the code and
   hides nothing here.
+- **The `.reloc`-less images, and memory protection.** Both were carried past this
+  step and both are killed in the two sections below — the first because
+  `RelocationsStripped` is a PE header bit and not a missing section, the second
+  because the memory-protection settings the policy reads are all zero on this
+  build. They are listed here so that the count in the heading is honest: this step
+  did not end with a surviving mechanism, it ended with none.
 
 What replaced them is four measurements: the FFS attribute histogram and the exact
 `IsValidFfsFile` test (volume clean at every layer), the Apriori-index join with
@@ -1846,27 +1881,199 @@ including its `FvHandle` conjunct (the loop cannot miss a listed file, so the 23
 absent entries were never listed), and the payload diff (the build tree differs
 from the reading's build by one `AcpiTables` file).
 
-### The one partial mechanism that survives, for 3 of the 27
+### The one partial mechanism that "survived", for 3 of the 27 — and it does not
 
 `tools/pe-facts.py`'s table has no field that separates the classes, but its last
 two lines report a *joint* condition that does most of the work for three of the
 27: **three of the 27 have no `.reloc` section and `ImageBase 0x0`** —
 `EmbeddedMonotonicCounter`, `RealTimeClock` and `CapsuleRuntimeDxe`. `has_reloc`
 on its own is a shared value (`true` and `false` both occur on both sides), so
-this is not a one-field separator; the signal is in the combination. With
-relocations stripped, `CoreLoadPeImage` takes the
+this is not a one-field separator; the signal was taken to be in the combination.
+With relocations stripped, the argument went, `CoreLoadPeImage` takes the
 `CoreAllocatePages (AllocateAddress, …)` path at address 0 and has **no**
 `AllocateAnyPages` fallback (`if (EFI_ERROR (Status) && !RelocationsStripped)`),
 and `CoreInternalAllocatePages` rejects `Start == 0` with `EFI_NOT_FOUND` because
-page 0 is reserved for null-pointer detection. That records an `L` — and records it
-with a status that does *not* render as "Out of Resources", unlike the one `P2 DIAG`
-line that was read.
+page 0 is reserved for null-pointer detection. That would record an `L` — and one
+with a status that does *not* render as "Out of Resources", unlike the one
+`P2 DIAG` line that was read.
 
-**It is a partial mechanism and not the answer, because one of the 19 successes is
-in the same state:** `StatusCodeHandlerRuntimeDxe` also has no `.reloc` and
-`ImageBase 0x0`, so it made the same page-0 request and succeeded. Whatever
-distinguishes it from the three is the same unknown that distinguishes `PdcDxe`
-from `ShmBridgeDxe`, and it is still one variable, not two.
+**The premise is false, and it is false in the source rather than by inference.**
+"Relocations stripped" is not `reloc size == 0`. It is a field on the loader's
+image context, and `PeCoffLoaderGetImageInfo` sets it from exactly one bit:
+
+```c
+  if ((!(ImageContext->IsTeImage)) && ((Hdr.Pe32->FileHeader.Characteristics & EFI_IMAGE_FILE_RELOCS_STRIPPED) != 0)) {
+    ImageContext->RelocationsStripped = TRUE;
+  } else if (...) {
+    ImageContext->RelocationsStripped = TRUE;
+  } else {
+    ImageContext->RelocationsStripped = FALSE;
+  }
+```
+
+(`MdePkg/Library/BasePeCoffLib/BasePeCoff.c:660`.) `EFI_IMAGE_FILE_RELOCS_STRIPPED`
+is `Characteristics` bit 0. **Measured, that bit is clear on all 46 promoted
+drivers** — `Characteristics` is only ever `0x2e` or `0x2022` across the whole
+promoted set, and it is clear on all 80 DRIVER files in the volume. So
+`RelocationsStripped` is `FALSE` for every one of the 46, every one takes the
+`AllocateAnyPages` fallback, and the page-0 `AllocateAddress` path is taken by
+**none of them**. The `.reloc`-size signal is not a partial mechanism for three of
+the 27; it is not a mechanism for any of them, and `tools/pe-facts.py`'s closing
+two lines reason from a field the loader never reads.
+
+The tool is not wrong about what it measured. `.reloc` really is absent from those
+three, and that absence really is unusual. What was wrong was the step from "no
+`.reloc` section" to "`RelocationsStripped`": EDK2 derives the second from the PE
+header bit and not from the section table, so an image can carry no relocation
+data at all without ever declaring itself non-relocatable. `has_reloc` is a fact
+about the file; `RelocationsStripped` is a fact about what the loader will do, and
+only the second one is on the load path. The tool now carries a
+`reloc_stripped` column that reads the bit, so the two cannot be conflated again;
+it comes out `False` on all 46.
+
+That also disposes of the paragraph's last line of defence. The observation that
+`StatusCodeHandlerRuntimeDxe` succeeded while `EmbeddedMonotonicCounter`,
+`RealTimeClock` and `CapsuleRuntimeDxe` failed at the same `ImageBase 0x0` was
+carried as "one variable, not two". With the premise gone there is no variable
+here at all.
+
+### The runtime-driver size penalty, which also straddles
+
+`SectionAlignment` was the one field in `tools/pe-facts.py`'s table with any
+apparent structure — `0x1000` for most drivers and `0x10000` for a family — so it
+is worth saying where that family comes from and what it costs, because the
+temptation is to read `0x10000` as "the ones that need a bigger allocation".
+
+It is not a PE property at all. It is the module type, set at link time:
+
+```
+[BuildOptions.common.EDK2.DXE_RUNTIME_DRIVER]
+  *_CLANGPDB_*_DLINK_FLAGS = /ALIGN:0x10000
+```
+
+(`work/uefi/Mu-Silicium/Silicon/Silicium/SiliciumPkg/SiliciumPkg.dsc.inc`.) Every
+module class that file names is linked with an explicit `/ALIGN`: `0x10000` for
+`DXE_RUNTIME_DRIVER`, `0x1000` for `DXE_CORE`, `DXE_DRIVER`, `UEFI_DRIVER` and
+`UEFI_APPLICATION`. So the `0x10000` family is the modules whose `MODULE_TYPE` is
+`DXE_RUNTIME_DRIVER` — which is *nearly* the same set as the modules whose PE
+header says `Subsystem 12`, and the next paragraph measures the difference rather
+than assuming it away. What matters here is the cost, and it is in
+`CoreLoadPeImage`:
+
+```c
+    if (Image->ImageContext.SectionAlignment > EFI_PAGE_SIZE) {
+      Size = (UINTN)Image->ImageContext.ImageSize + Image->ImageContext.SectionAlignment;
+    } else {
+      Size = (UINTN)Image->ImageContext.ImageSize;
+    }
+    Image->NumberOfPages = EFI_SIZE_TO_PAGES (Size);
+```
+
+so a runtime driver requests `ImageSize + 0x10000` and a boot-services driver
+requests `ImageSize` — a 64 KiB padding charge on top of a 64 KiB alignment
+requirement.
+
+**Measured over the 46 in promotion order, the runtime set straddles the result
+just as every other candidate does.** The eight drivers with `SectionAlignment
+0x10000` are `ReportStatusCodeRouterRuntimeDxe` (s), `StatusCodeHandlerRuntimeDxe`
+(s), `RuntimeDxe` (s), `VariableRuntimeDxe` (L), `ResetSystemRuntimeDxe` (L),
+`EmbeddedMonotonicCounter` (L), `RealTimeClock` (L) and `CapsuleRuntimeDxe` (L) —
+`sssLLLLL`. Three succeed and five fail at the same alignment and the same size
+penalty. Ten drivers carry PE `Subsystem 12`
+(`EFI_IMAGE_SUBSYSTEM_EFI_RUNTIME_DRIVER`) — the eight above plus `EnvDxe` and
+`SdccDxe`, whose INFs say `MODULE_TYPE = DXE_DRIVER` and which are therefore
+linked at `/ALIGN:0x1000` despite the runtime subsystem in the PE, a disagreement
+between the two header-derived facts that is worth knowing about before either is
+used as a proxy for the other. That ten-driver set gives `ssssLLLLLL`.
+`ImageCodeMemoryType` follows `Subsystem` and not `SectionAlignment`, so it is the
+second partition that decides the memory type — and neither partition, and neither
+field, is the split.
+
+And the penalty is small enough that it could not matter. The largest single
+request in the promoted set is 458,752 B / 112 pages, shared by
+`ReportStatusCodeRouterRuntimeDxe` and `VariableRuntimeDxe` (of which 64 KiB is
+the padding); the smallest is `PcdDxe`'s 53,248 B / 13 pages. The cumulative
+figure is **1,562 pages = 6,397,952 B = 6.10 MiB** — the same total the exhaustion
+argument measures, now split **575 pages across the 19 `s` and 987 pages across
+the 27 `L`** against a 35.4 MiB `Conv` region. The alignment padding is 0.4 MiB
+across the whole set and cannot carry a 6.1 MiB demand past 35.4 MiB.
+
+**One more way the runtime path could have gone wrong, and it is off on this
+build.** On AArch64 `RUNTIME_PAGE_ALLOCATION_GRANULARITY` is `0x10000` by default,
+and `CoreInternalAllocatePages` would then require every runtime allocation to be
+64 KiB-aligned *and* round `NumberOfPages` up to a multiple of 16 — a much sharper
+requirement than the 4 KiB one, and one that could plausibly fail intermittently
+on a fragmented heap. It does not apply here, because `SiliciumPkg.dsc.inc:14`
+defines the escape hatch:
+
+```
+  *_CLANGPDB_AARCH64_CC_FLAGS = -D __DEPRECATED_AARCH64_4K_RUNTIME_GRANULARITY
+```
+
+`gauguin.dsc` has no `[BuildOptions]` section of its own; its only `!include` is
+`BitraPkg/BitraPkg.dsc.inc`, which includes `QcomPkg/QcomPkg.dsc.inc`, which
+includes `SiliciumPkg/SiliciumPkg.dsc.inc` — so this one line is where the flag
+comes from and it is in the chain. With it, `MdePkg/Include/AArch64/ProcessorBind.h`
+takes the `0x1000` branch and `Alignment` in `CoreInternalAllocatePages` is
+`0x1000` for every memory type. `NumberOfPages` is never rounded and the
+`AllocateAddress` alignment test is trivially satisfied for anything
+page-aligned. The 64 KiB-alignment theory is dead at the source — and this
+paragraph stops being true the day that define is removed.
+
+### `ProtectUefiImage` is on the fatal path of every load, and inert on this platform
+
+`CoreLoadImageCommon` calls `ProtectUefiImage` and treats its failure as fatal:
+
+```c
+  Status = ProtectUefiImage (&Image->Info, Image->LoadedImageDevicePath);
+  if (EFI_ERROR (Status)) {
+    goto Done;
+  }
+```
+
+(`Image.c:1496`), and the `Done:` block calls `CoreUnloadAndCloseImage (Image, …)`
+— so a status out of memory protection is an `L` exactly like an allocation
+failure. `ProtectUefiImage` has its own `EFI_OUT_OF_RESOURCES` exits:
+`AllocateZeroPool` of the `IMAGE_PROPERTIES_RECORD`, and three `AllocatePool` sites
+inside `GetImageList` reached through `CreateImagePropertiesRecord`. That makes it
+a live candidate for a run of `L`s that render as Out of Resources — the status
+name on the `P2 DIAG` line.
+
+It is inert here, and the chain is short. The policy comes from
+`GetUefiImageProtectionPolicy`, whose first substantive check is
+`if (!IsEnhancedMemoryProtectionActive ()) { return DO_NOT_PROTECT; }`, and the
+settings it would otherwise consult live in `gDxeMps`, which
+`DxeMemoryProtectionHobLibConstructor` fills from the
+`gDxeMemoryProtectionSettingsGuid` HOB — **and no module in this build produces
+that HOB.** `DxeMain.inf` lists it under `## CONSUMES ## HOB`; the only other
+mention anywhere in the tree is `UefiTestingPkg`'s
+`DxeMemoryProtectionTestApp.inf`, an application that is not built. So the
+constructor takes its `else` branch and prints "Unable to fetch memory protection
+HOB. Zero-ing memory protection settings", and `ZeroMem` leaves **every field of
+`gDxeMps` zero**. With the policy zeroed the images take the `DO_NOT_PROTECT`
+branch, `ProtectUefiImage` returns `EFI_SUCCESS` for all 46, and the fatal
+`goto Done` never fires.
+
+So memory protection is not the mechanism either — but unlike the `.reloc`
+argument, this one is falsifiable from the next reading rather than only from the
+source: **if a `P2 WHY` character shows `'R'` on a driver that should have taken
+the `DO_NOT_PROTECT` branch, the zero-`gDxeMps` chain is wrong, and that is a
+finding.** `P2WhyLetter` maps `EFI_OUT_OF_RESOURCES` to `'R'` for exactly this
+kind of check.
+
+### What is left, after all of that
+
+No PE field and no header bit separates the 19 from the 27. The volume is clean at
+every layer below the promotion loop. The total demand is 6.10 MiB of a 35.4 MiB
+heap, and two drivers that make identical requests land on opposite sides. The
+runtime-driver size penalty is 0.4 MiB across the set and straddles. Memory
+protection returns success for every image. And zero `'S'` characters means no
+entry point ran at all, so nothing a driver does at start time can be the cause.
+
+What is left is state that exists only at run time: how much of the heap is
+actually free, and in what sizes, at the moment each load asks. That is what
+`P2 FREE largest=` and `P2 WHY` are for, and there is no reading of the volume on
+the host that substitutes for them.
 
 ### Eleven drivers the volume registers and the Apriori list does not name
 
@@ -2003,14 +2210,21 @@ what makes step 4.12's join either correct or shifted, and it is the one questio
 that step was unable to answer from the host. `P2 STATS discovered=` splits the
 remaining fork: near 80 means the walk saw every DRIVER file and something after
 the walk dropped 23, while near 57 means the sweep itself was cut short. `P2 WHY`
-turns the 27 `L` from a count into a mechanism, since `P2Record` renders every
-`CoreLoadImage` failure as `'L'` regardless of status.
+turns the 27 `L` from a count into a mechanism: `P2Record` writes `'L'` for every
+`CoreLoadImage` failure regardless of *which* error it was, so the letters are the
+only signal that separates a load that ran out of memory (`'R'`) from one the PE
+loader rejected (`'E'`) — and, because memory protection was measured to be inert
+on this build, an `'R'` on a driver the policy should have skipped is itself a
+finding.
 
 The `P2 FREE largest=` line comes with them and is the same measurement step 4.12
 was going to take: it either confirms the 6.10 MiB-vs-35.4 MiB load-order
-allocation arithmetic or falsifies it. The `P2 STATS` line's `apriori=` denominator
-is no longer load-bearing — the `AprioriEntryCount` fork it was going to split was
-settled from the host — but `entries=` supersedes it anyway, from the device.
+allocation arithmetic or falsifies it. **That arithmetic is now the only candidate
+standing** — every static property of the 46 has been measured and straddles, so
+`P2 FREE` and `P2 WHY` between them are the whole of what is left to read on the
+load-failure side. The `P2 STATS` line's `apriori=` denominator is no longer
+load-bearing — the `AprioriEntryCount` fork it was going to split was settled from
+the host — but `entries=` supersedes it anyway, from the device.
 
 Then, once DXE reaches BDS, **remove the whole `P2BRINGUP` block** and regenerate
 the patch with `tools/regen-mu-basecore-patch.sh --regen`.
@@ -2027,13 +2241,21 @@ except inside the running firmware.
 
 ### What this step cost, and what it bought
 
-Eleven host-side hypotheses were tested and ten were killed, which is a poor ratio
-for a step and the reason it is worth writing down. The one that survived is
-narrower than any of them: the 23 missing `mDiscoveredList` entries, and the 3 of
-27 reloc-less images. What the step bought is that both are now questions about a
-single known mechanism rather than about the volume, the checksums, the file table,
-the Apriori array, the PE headers, the heap size, the DEPEX graph, or the loader's
-address selection — all seven of which have been measured and are clean.
+Eleven host-side hypotheses were tested and eleven were killed, which is a poor
+ratio for a step and the reason it is worth writing down. The last two died later
+than the rest and are recorded above: the `.reloc`-absence mechanism, which was
+carried as "partial, for 3 of the 27" through this step and turns out to be no
+mechanism at all because `RelocationsStripped` comes from a header bit the three
+images do not set; and memory protection, which is on the load's fatal path but
+returns success for every image on this build. What is left of the step's
+conclusion is the *other* puzzle, and it is untouched: the 23 Apriori entries that
+matched no driver, so that the 46 promoted entries are not the array's first 46.
+That one is still open, it is a question about list state, and `P2 WALK` is the
+probe for it. The load failures are now a question about runtime free space, with
+no host-side reading left that could decide them: the volume, the checksums, the
+file table, the Apriori array, the PE headers, the module memory types, the
+alignment granularity, the heap size, the DEPEX graph and the loader's address
+selection have all been measured and are all clean.
 
 ## Step 4.13 — The instrument that reads it for you
 
@@ -2109,11 +2331,13 @@ Three lines were added, all from inside the same `P2BRINGUP` block, all printed 
   so it matches nothing on *every* boot, and reporting it would put a permanent
   false miss at 0 and hide the real one.
 - **`P2 WHY [...]`** — one character per `SEQ` character, aligned with it.
-  `P2Record` collapses every failure to `'L'`, which says *that* 27 loads failed
-  and not *why*; `'R'` (`EFI_OUT_OF_RESOURCES`), `'N'` (`EFI_NOT_FOUND`), `'X'`
-  (`EFI_SECURITY_VIOLATION`) and `'U'` (`EFI_UNSUPPORTED`) have no mechanism in
-  common, and the existing retracted-mechanism list is largely about telling them
-  apart. `'s'` is success.
+  `P2Record` writes `'L'` for *every* load failure, which says *that* 27 loads
+  failed and not *why*; `'R'` (`EFI_OUT_OF_RESOURCES`), `'N'` (`EFI_NOT_FOUND`),
+  `'X'` (`EFI_SECURITY_VIOLATION`) and `'U'` (`EFI_UNSUPPORTED`) have no mechanism
+  in common, and the existing retracted-mechanism list is largely about telling
+  them apart. `'s'` is success. (A *start* failure is a separate letter, `'S'`, in
+  `SEQ` itself — see the phase split above; `WHY` is what distinguishes the 27
+  load failures from each other.)
 
 ### The reading, and it is now a steady state rather than a race
 

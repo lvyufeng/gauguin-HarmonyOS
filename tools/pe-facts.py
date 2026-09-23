@@ -21,14 +21,24 @@ every size field - `s` and `L` values overlap in range.  Everything else is
 except for the Runtime family at 0x10000, which straddles the boundary in both
 directions.  Concretely: `WatchdogTimer` fails at 20,580 B while `NpaDxe`
 succeeds at 81,966 B, and `PdcDxe` and `ShmBridgeDxe` make the identical
-36,864-byte request with opposite results.  The one field with any signal at all
-is the presence of `.reloc`, and it is a partial mechanism, not the answer:
-three of the 27 failures (`EmbeddedMonotonicCounter`, `RealTimeClock`,
-`CapsuleRuntimeDxe`) have no `.reloc` and `ImageBase 0x0`, so
-`CoreLoadPeImage` takes the `AllocateAddress`-at-zero path with no
-`AllocateAnyPages` fallback and `CoreInternalAllocatePages` rejects `Start == 0`
-with `EFI_NOT_FOUND` - while one of the 19 successes
-(`StatusCodeHandlerRuntimeDxe`) is in the same state.
+36,864-byte request with opposite results.  `SectionAlignment` is not a PE fact
+either - it is the module type, because `SiliciumPkg.dsc.inc` links
+`DXE_RUNTIME_DRIVER` with `/ALIGN:0x10000` and everything else with
+`/ALIGN:0x1000` - and the eight drivers in that family come out `sssLLLLL`, so it
+straddles too, with a 64 KiB size penalty (`ImageSize + SectionAlignment` in
+`CoreLoadPeImage`) that totals 0.4 MiB across the set.
+
+The one field that used to be reported here as a partial mechanism - the absence
+of `.reloc` from three of the 27 - is **not** one, and the reason is worth keeping
+because the mistake is easy to repeat.  "Relocations stripped" is not
+`reloc_size == 0`: `PeCoffLoaderGetImageInfo` (`BasePeCoff.c:660`) sets
+`ImageContext->RelocationsStripped` from `IMAGE_FILE_RELOCS_STRIPPED`, which is
+`Characteristics` bit 0, and that bit is clear on all 80 DRIVER files in this
+volume.  So every promoted image takes the `AllocateAnyPages` fallback and none
+of them reaches the page-0 `AllocateAddress` path.  `has_reloc` is a fact about
+the file; `reloc_stripped` is what the loader does, and only the second is on the
+load path.  Both columns are printed, from their own sources, so the two cannot be
+conflated again.
 
 The PE is located through the FFS file's EFI_SECTION_PE32 (type 0x10) and then
 through `e_lfanew` at 0x3C. Scanning the file body for the literal `PE\\0\\0`
@@ -65,7 +75,7 @@ FIELDS = [
     "SizeOfUninitializedData", "AddressOfEntryPoint", "BaseOfCode", "ImageBase",
     "SectionAlignment", "FileAlignment", "SizeOfImage", "SizeOfHeaders",
     "Subsystem", "DllCharacteristics", "SizeOfStackReserve", "SizeOfHeapReserve",
-    "NumberOfRvaAndSizes", "reloc_size", "has_reloc", "sections",
+    "NumberOfRvaAndSizes", "reloc_size", "has_reloc", "reloc_stripped", "sections",
 ]
 
 
@@ -115,7 +125,14 @@ def parse_pe(body):
     if e + 24 > len(body) or body[e:e + 4] != b"PE\0\0":
         return None
     machine, nsec = struct.unpack_from("<HH", body, e + 4)
-    optsz, chars = struct.unpack_from("<HH", body, e + 20)
+    # COFF header: Machine(2) NumberOfSections(2) TimeDateStamp(4) PointerToSymbolTable(4)
+    # NumberOfSymbols(4) SizeOfOptionalHeader(2) Characteristics(2).  The two
+    # fields read here are 18 and 20 bytes past the signature, not 16 and 18 -
+    # reading them two bytes early yields SizeOfOptionalHeader in the
+    # `Characteristics` column, which is 0x00F0 on every driver and looks like a
+    # field that is constant when it is in fact a different field.
+    optsz, = struct.unpack_from("<H", body, e + 20)
+    chars, = struct.unpack_from("<H", body, e + 22)
     o = e + 24
     if o + optsz > len(body):
         return None
@@ -171,6 +188,12 @@ def parse_pe(body):
         "NumberOfRvaAndSizes": nrva,
         "reloc_size": reloc_size,
         "has_reloc": reloc_size > 0,
+        # What `PeCoffLoaderGetImageInfo` actually sets, and it is not `has_reloc`.
+        # `IMAGE_FILE_RELOCS_STRIPPED` is bit 0 of Characteristics; on this volume
+        # it is clear on all 80 DRIVER files, so every promoted image is loaded
+        # with `AllocateAnyPages` and the page-0 `AllocateAddress` path in
+        # `CoreLoadPeImage` is taken by none of them.
+        "reloc_stripped": (chars & 0x0001) != 0,
         "sections": ",".join(sects),
     }
 
@@ -286,6 +309,48 @@ def main():
     print(f"\npromoted DRIVERs resolved: {n_s} s, {n_l} L")
     print(f"no .reloc among the L: {reloc_l}")
     print(f"no .reloc among the s: {reloc_s}")
+
+    # The two facts that were conflated. `has_reloc == False` is a property of the
+    # section table; `reloc_stripped` is the one `CoreLoadPeImage` branches on, and
+    # it comes from a PE header bit.
+    strip_l = [r[1] for r in rows.values() if r[0] == "L" and r[2]["reloc_stripped"]]
+    strip_s = [r[1] for r in rows.values() if r[0] == "s" and r[2]["reloc_stripped"]]
+    print(f"RelocationsStripped (Characteristics bit 0) among the L: {strip_l}")
+    print(f"RelocationsStripped (Characteristics bit 0) among the s: {strip_s}")
+    if not strip_l and not strip_s:
+        print("  -> every promoted image takes the AllocateAnyPages branch; the "
+              "page-0\n     AllocateAddress path is taken by none of them, so "
+              '"no .reloc" above\n     is not a mechanism for any of the 27')
+
+    # The exact request, in promotion order: `CoreLoadPeImage` adds SectionAlignment
+    # to ImageSize when it exceeds a page, then rounds to pages. This is the number
+    # CoreAllocatePages is asked for, not SizeOfImage.
+    print(f"\n{'res':>3} {'name':40} {'SizeOfImage':>11} {'saln':>8} "
+          f"{'req bytes':>10} {'pages':>6} {'cum pages':>10} {'cum bytes':>10}")
+    cum, cum_s, cum_l = 0, 0, 0
+    for k, ch in enumerate(args.seq):
+        gs = apriori[k + 1] if k + 1 < len(apriori) else None
+        if gs not in rows:
+            continue
+        _, name, pe = rows[gs]
+        req = pe["SizeOfImage"] + (pe["SectionAlignment"]
+                                   if pe["SectionAlignment"] > 0x1000 else 0)
+        pg = -(-req // 0x1000)
+        cum += pg
+        if ch == "s":
+            cum_s += pg
+        else:
+            cum_l += pg
+        print(f"{ch:>3} {name:40} {pe['SizeOfImage']:>11} "
+              f"{pe['SectionAlignment']:>#8x} {req:>10} {pg:>6} {cum:>10} "
+              f"{cum * 0x1000:>10}")
+    print(f"\ntotal: {cum} pages = {cum * 0x1000} B "
+          f"({cum * 0x1000 / (1024 * 1024):.2f} MiB)")
+    print(f"  s: {cum_s} pages = {cum_s * 0x1000} B")
+    print(f"  L: {cum_l} pages = {cum_l * 0x1000} B")
+    print("against the DXE heap, which is the only EfiConventionalMemory region "
+          "on this\nplatform: {\"DXE Heap\", 0x9B800000, 0x02360000, Conv, "
+          "WRITE_BACK_XN} = 35.4 MiB")
 
 
 if __name__ == "__main__":
