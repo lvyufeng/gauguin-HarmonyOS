@@ -147,6 +147,13 @@ Watch the screen. Note in one line what appears and whether it ever changes.
 
 ## Step 1b — If the reset does not give you an answering fastboot
 
+**Step 4.7 has since been run once and this step's premise did not hold.** ABL's
+own log shows it loading `boot`, applying the overlay and reaching EBS on every
+Mission Mode boot, with an all-zero `misc`, so what the user saw was ABL's own
+fallback rather than a refusal of the image. The section is kept because the wedge
+it describes is real and has been hit; read 4.7 before concluding it has happened
+again.
+
 It may not, and the reason matters: **`boot` currently holds the P2 UEFI image.**
 A reset makes ABL try that image again, so if attempting it is what wedges ABL,
 the reset reproduces the wedge — and repeating the reset is a loop, not a
@@ -586,6 +593,57 @@ One thing this log cannot do, recorded so it is not read as a signal: the
 read is whole-partition because the phone boots in orange state, so ~256 ms is the
 cost of 128 MB and not a fingerprint of our 1 MB image (`docs/07` has the source
 for that).
+
+## Step 4.7 — What the 2026-09-23 session actually found
+
+Recorded because it moves this runbook's default reading, and because one of its
+two results contradicts what step 1b assumed.
+
+**ABL hands the payload control.** The first `logfs` read that ever succeeded
+(TWRP route, `dd` of the partition) shows two Mission Mode slots — `pureason`
+`0x40041` and `0x80001` — both with the full path:
+
+```
+Load Image boot total time: 257 ms
+Load Image dtbo total time: 67 ms
+Apply Overlay total time: 252 ms
+Update Device Tree total time: 53 ms
+Shutting Down UEFI Boot Services: 4272 ms
+Start EBS        [ 4272]
+```
+
+So the second row of step 4.6's table is not what happened, and neither is the
+third. There is no `Apply Overlay` error and no `DTB offset` error: ABL loads the
+image, applies the vendor overlay, rewrites the tree and reaches EBS. The
+`avb_vbmeta_image.c:206: Hash does not match` line above it is the unlocked
+bootloader's signature and appears on every boot of this phone.
+
+**`misc` is clean.** All 4096 bytes zero, identical to the P0 dump. No bootloader
+control block was ever written, so nothing *told* ABL to enter fastboot — the
+fastboot the user saw was ABL's own fallback, not a commanded mode. Step 2's
+check is answered: look at `misc` once and stop suspecting it.
+
+**The image in `boot` was stale, by exactly the two things the P2 builder gates
+on.** The payload's gzip stream is byte-identical to the one
+`tools/build-p2-payloads.sh` produces today — same `BootShim.bin`, same
+`SILICIUM_UEFI.fd` (`md5 9c104725…`) — and the only difference is the device tree
+glued after it:
+
+| | glued DTB | `__symbols__` | ramoops node |
+|---|---|---|---|
+| as found in `boot` | 71,737 B | absent | `ramoops@ffc00000` |
+| current build | 87,594 B | present | `ramoops@d0000000` |
+
+That is a one-variable experiment that was never run: every payload this phone
+has booted carried a tree with no `/__symbols__` and the inherited `ramoops`
+node, which are precisely the two faults `build-p2-payloads.sh` was written to
+catch. So "our firmware runs and does nothing" has not yet been tested — what has
+been tested is "a payload with a broken tree runs and does nothing".
+
+It is also a reason to read the glued DTB, not the header, when asking what is on
+the phone: `dtb 0` in the header is normal for this shape (the tree is appended to
+the kernel blob, and `docs/07` has why ABL can still find it), so the header alone
+cannot tell a stale tree from a current one.
 
 ## Step 5 — Leave it bootable
 
