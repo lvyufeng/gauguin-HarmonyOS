@@ -268,6 +268,57 @@ absent = [i for i, g in enumerate(apriori) if by_guid.get(g) is None]
 print(f"Apriori entries with no file in the volume: {absent}")
 
 # ---------------------------------------------------------------------------
+# The Apriori section as the device reads it, and a replay of the promotion
+# loop over this volume.
+#
+# This is the half of the measurement that the device cannot make about itself:
+# `Fv->ReadSection` hands the dispatcher a buffer and a size, and everything
+# downstream is `size / 16` entries.  So the three numbers below - the section's
+# byte count, an additive checksum over those bytes, and the first and last GUID
+# - are printed here for comparison against the panel's `P2 APRI` lines, which
+# the firmware now prints from exactly these values.  Two readings of the same
+# section out of the same image agree or they do not, and a disagreement is a
+# finding rather than a rounding error: the SEQ line is only `entries`
+# characters long, so "46 characters" has two entirely different explanations -
+# 46 entries scanned with every one matched, or 70 scanned with 46 matched - and
+# only `entries` and `miss` tell them apart.
+#
+# The replay below is the prediction for the second explanation: with the volume
+# as this tool just walked it, every one of the 70 GUIDs is present as a type
+# 0x07 file - except entry 0, which is DxeCore and matches nothing by
+# construction, because the DXE_CORE branch of the walk fills in
+# gDxeCoreLoadedImage->FilePath instead of calling CoreAddToDriverList. The
+# firmware's own replay skips index 0 for exactly that reason, so this does too;
+# otherwise both would report a miss at 0 on every boot and hide the one being
+# looked for. So the prediction is: matched 1..69, miss none. A panel reading of
+# fewer entries is a shorter read; entries=70 with a miss is a shorter
+# discovered list.
+# ---------------------------------------------------------------------------
+print()
+print("=== The Apriori section, as the device reads it ===")
+ap_sum = 0
+for b in payload:
+    ap_sum = (ap_sum * 31 + b) & 0xFFFFFFFF
+print(f"  bytes {len(payload)}  entries {len(payload) // 16}  sum {ap_sum:#x}")
+print(f"  first {apriori[0]}  last {apriori[-1]}")
+
+ap_drivers = {fvinv.guid_str(g) for g, t, *_ in files if t == 0x07}
+matched = [i for i, g in enumerate(apriori) if g in ap_drivers]
+miss = next((i for i in range(1, len(apriori)) if apriori[i] not in ap_drivers), None)
+print(f"  replay of the promotion loop over this volume (index 0 skipped): "
+      f"matched {matched[0]}..{matched[-1]} of {len(apriori)} entries, "
+      f"miss {miss if miss is not None else 'none'}")
+if len(matched) == len(apriori) - 1 and miss is None:
+    print("  -> over THIS volume entries 1..69 all match, so a panel reading of\n"
+          "     fewer entries is a shorter read, and entries=70 with a miss is a\n"
+          "     shorter discovered list - the one thing that would be neither is\n"
+          "     this volume plus a device that sees different GUIDs in it")
+else:
+    print(f"  -> {len(apriori) - 1 - len(matched)} entries match no DRIVER file "
+          f"here; the first is\n     ap{miss} {apriori[miss]} "
+          f"({nm(apriori[miss])}), and the panel's miss GUID should be this one")
+
+# ---------------------------------------------------------------------------
 # The join. ap0 is DxeCore and is never in mDiscoveredList (the DXE_CORE branch
 # of the walk only fills gDxeCoreLoadedImage->FilePath), so SEQ[0] is ap1.
 # ---------------------------------------------------------------------------

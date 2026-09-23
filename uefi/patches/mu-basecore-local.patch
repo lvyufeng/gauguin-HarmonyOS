@@ -273,10 +273,10 @@ index 39668123..8405bc31 100644
  #define  USB_INTERFACE_SIGNATURE  SIGNATURE_32 ('U', 'S', 'B', 'I')
  #define  USB_BUS_SIGNATURE        SIGNATURE_32 ('U', 'S', 'B', 'B')
 diff --git a/MdeModulePkg/Core/Dxe/Dispatcher/Dispatcher.c b/MdeModulePkg/Core/Dxe/Dispatcher/Dispatcher.c
-index d7c7147e..2c62ff53 100644
+index d7c7147e..dbc256f4 100644
 --- a/MdeModulePkg/Core/Dxe/Dispatcher/Dispatcher.c
 +++ b/MdeModulePkg/Core/Dxe/Dispatcher/Dispatcher.c
-@@ -60,6 +60,128 @@ EFI_LOCK  mDispatcherLock = EFI_INITIALIZE_LOCK_VARIABLE (TPL_HIGH_LEVEL);
+@@ -60,6 +60,215 @@ EFI_LOCK  mDispatcherLock = EFI_INITIALIZE_LOCK_VARIABLE (TPL_HIGH_LEVEL);
  //
  BOOLEAN  gDispatcherRunning = FALSE;
  
@@ -344,6 +344,50 @@ index d7c7147e..2c62ff53 100644
 +STATIC UINTN     mP2WalkErr[8]  = { 0 };
 +STATIC EFI_GUID  mP2WalkLast[8];
 +
++//
++// P2BRINGUP: the Apriori file as the firmware itself read it, and what the
++// promotion loop did with it. The loop's behaviour is fully determined by three
++// values the source cannot state: the size ReadSection returned, the entry count
++// divided out of it, and how far down the array the matches ran. That third one
++// is the whole disagreement - a SEQ of 46 characters is either 46 entries
++// scanned and every one matched, or 70 scanned and 46 matched, and the two are
++// indistinguishable from the SEQ line alone.
++//
++// `bytes` and `sum` are compared against the same section read out of the same
++// image on the host, which tools/fv-census.py prints, so a device reading that
++// disagrees with the host is visible as two numbers and not as an argument.
++// `miss` is the first entry after 0 that matched no discovered driver and
++// first/last bound the run that did match: a contiguous first..last with
++// miss == last + 1 says the array or the discovered list is short, while a miss
++// between two matches says the two disagree about a single GUID.
++//
++STATIC UINTN     mP2ApriBytes      = 0;                  // SizeOfBuffer from ReadSection
++STATIC UINTN     mP2ApriEntries    = 0;                  // SizeOfBuffer / sizeof (EFI_GUID)
++STATIC UINT32    mP2ApriSum        = 0;                  // sum*31+byte over the buffer as read
++STATIC EFI_GUID  mP2ApriFirst;
++STATIC EFI_GUID  mP2ApriLast;
++STATIC UINTN     mP2ApriMatchFirst = (UINTN)-1;          // (UINTN)-1 = no entry matched
++STATIC UINTN     mP2ApriMatchLast  = 0;
++STATIC UINTN     mP2ApriMiss       = (UINTN)-1;          // (UINTN)-1 = no entry > 0 missed
++STATIC EFI_GUID  mP2ApriMissGuid;
++
++//
++// P2BRINGUP: why each load failed, one character per Apriori entry and aligned
++// with mP2AprioriRes. P2Record collapses every CoreLoadImage failure to 'L',
++// which says *that* 27 loads failed and not why - and why is the remaining
++// question, because EFI_OUT_OF_RESOURCES, EFI_NOT_FOUND and
++// EFI_SECURITY_VIOLATION have no mechanism in common. The letters are status
++// classes:
++//
++//   's' EFI_SUCCESS           'S' EntryPoint failed   '?' never reached
++//   'R' OUT_OF_RESOURCES      'N' NOT_FOUND
++//   'X' SECURITY_VIOLATION    'D' DEVICE_ERROR
++//   'E' LOAD_ERROR            'P' INVALID_PARAMETER
++//   'U' UNSUPPORTED           'O' anything else
++//
++STATIC CHAR8     mP2ApriWhy[P2BRINGUP_APRIORI_MAX];
++STATIC CHAR8     mP2WhyLine[P2BRINGUP_APRIORI_MAX + 8];
++
 +STATIC
 +UINTN
 +P2LargestAlloc (
@@ -368,10 +412,52 @@ index d7c7147e..2c62ff53 100644
 +}
 +
 +STATIC
++CHAR8
++P2WhyLetter (
++  IN EFI_STATUS  Status
++  )
++{
++  if (Status == EFI_SUCCESS) {
++    return 's';
++  }
++
++  if (Status == EFI_OUT_OF_RESOURCES) {
++    return 'R';
++  }
++
++  if (Status == EFI_NOT_FOUND) {
++    return 'N';
++  }
++
++  if (Status == EFI_SECURITY_VIOLATION) {
++    return 'X';
++  }
++
++  if (Status == EFI_DEVICE_ERROR) {
++    return 'D';
++  }
++
++  if (Status == EFI_LOAD_ERROR) {
++    return 'E';
++  }
++
++  if (Status == EFI_INVALID_PARAMETER) {
++    return 'P';
++  }
++
++  if (Status == EFI_UNSUPPORTED) {
++    return 'U';
++  }
++
++  return 'O';
++}
++
++STATIC
 +VOID
 +P2MarkSeq (
-+  IN EFI_GUID  *Guid,
-+  IN CHAR8     Ch
++  IN EFI_GUID    *Guid,
++  IN CHAR8       Ch,
++  IN EFI_STATUS  Status
 +  )
 +{
 +  UINTN  Index;
@@ -379,6 +465,7 @@ index d7c7147e..2c62ff53 100644
 +  for (Index = 0; Index < mP2Apriori && Index < P2BRINGUP_APRIORI_MAX; Index++) {
 +    if (CompareGuid (&mP2AprioriGuid[Index], Guid)) {
 +      mP2AprioriRes[Index] = Ch;
++      mP2ApriWhy[Index]    = P2WhyLetter (Status);
 +      return;
 +    }
 +  }
@@ -399,13 +486,13 @@ index d7c7147e..2c62ff53 100644
 +    mP2DiagCount++;
 +  }
 +
-+  P2MarkSeq (Guid, (Phase == 'L') ? 'L' : 'S');
++  P2MarkSeq (Guid, (Phase == 'L') ? 'L' : 'S', Status);
 +}
 +
  //
  // Module globals to manage the FwVol registration notification event
  //
-@@ -483,6 +605,8 @@ CoreDispatcher (
+@@ -483,6 +692,8 @@ CoreDispatcher (
              DriverEntry->Initialized = TRUE;
            }
  
@@ -414,21 +501,21 @@ index d7c7147e..2c62ff53 100644
            DriverEntry->Scheduled = FALSE;
            RemoveEntryList (&DriverEntry->ScheduledLink);
  
-@@ -519,6 +643,13 @@ CoreDispatcher (
+@@ -519,6 +730,13 @@ CoreDispatcher (
  
          Status = CoreStartImage (DriverEntry->ImageHandle, NULL, NULL);
  
 +        if (EFI_ERROR (Status)) {
 +          P2Record (&DriverEntry->FileName, 'S', Status);
 +        } else {
-+          P2MarkSeq (&DriverEntry->FileName, 's');
++          P2MarkSeq (&DriverEntry->FileName, 's', EFI_SUCCESS);
 +          mP2Started++;
 +        }
 +
          REPORT_STATUS_CODE_WITH_EXTENDED_DATA (
            EFI_PROGRESS_CODE,
            (EFI_SOFTWARE_DXE_CORE | EFI_SW_PC_INIT_END),
-@@ -896,6 +1027,8 @@ CoreAddToDriverList (
+@@ -896,6 +1114,8 @@ CoreAddToDriverList (
  
    CoreReleaseDispatcherLock ();
  
@@ -437,7 +524,7 @@ index d7c7147e..2c62ff53 100644
    return EFI_SUCCESS;
  }
  
-@@ -1309,6 +1442,16 @@ CoreFwVolEventProtocolNotify (
+@@ -1309,6 +1529,16 @@ CoreFwVolEventProtocolNotify (
                                    &Attributes,
                                    &Size
                                    );
@@ -454,15 +541,34 @@ index d7c7147e..2c62ff53 100644
          if (!EFI_ERROR (GetNextFileStatus)) {
            if (Type == EFI_FV_FILETYPE_DXE_CORE) {
              //
-@@ -1412,6 +1555,7 @@ CoreFwVolEventProtocolNotify (
+@@ -1412,6 +1642,26 @@ CoreFwVolEventProtocolNotify (
                          );
      if (!EFI_ERROR (Status)) {
        AprioriEntryCount = SizeOfBuffer / sizeof (EFI_GUID);
 +      mP2AprioriCount   = MAX (mP2AprioriCount, AprioriEntryCount);
++
++      //
++      // P2BRINGUP: what was actually read, and what it adds up to on the device.
++      // tools/fv-census.py prints the same three numbers for the same section out
++      // of the same image, so the two are comparable by inspection: if the panel
++      // says 736 bytes where the host says 1120, the read is the mechanism and
++      // nothing downstream of it needs explaining.
++      //
++      mP2ApriBytes   = SizeOfBuffer;
++      mP2ApriEntries = AprioriEntryCount;
++      mP2ApriSum     = 0;
++      for (Index = 0; Index < SizeOfBuffer; Index++) {
++        mP2ApriSum = mP2ApriSum * 31 + ((UINT8 *)AprioriFile)[Index];
++      }
++
++      if (AprioriEntryCount > 0) {
++        CopyGuid (&mP2ApriFirst, &AprioriFile[0]);
++        CopyGuid (&mP2ApriLast, &AprioriFile[AprioriEntryCount - 1]);
++      }
      } else {
        AprioriEntryCount = 0;
      }
-@@ -1433,6 +1577,12 @@ CoreFwVolEventProtocolNotify (
+@@ -1433,11 +1683,43 @@ CoreFwVolEventProtocolNotify (
            DriverEntry->Scheduled = TRUE;
            InsertTailList (&mScheduledQueue, &DriverEntry->ScheduledLink);
            CoreReleaseDispatcherLock ();
@@ -475,20 +581,202 @@ index d7c7147e..2c62ff53 100644
            DEBUG ((DEBUG_DISPATCH, "Evaluate DXE DEPEX for FFS(%g)\n", &DriverEntry->FileName));
            DEBUG ((DEBUG_DISPATCH, "  RESULT = TRUE (Apriori)\n"));
            break;
-@@ -1486,11 +1636,103 @@ CoreDisplayDiscoveredNotDispatched (
+         }
+       }
++
++      //
++      // P2BRINGUP: which entries matched and which did not. A `for` that falls
++      // out through its own condition leaves Link at the head, which is the only
++      // way to tell "matched nothing" from "matched something" once the loop is
++      // over - and the index of the first entry that matched nothing is the
++      // answer to whether the array or the discovered list is the short one.
++      //
++      // Index 0 is skipped because it matches nothing by construction: it is
++      // gDxeCoreFileName, and the DXE_CORE branch of the walk fills in
++      // gDxeCoreLoadedImage->FilePath instead of calling CoreAddToDriverList, so
++      // the core is never in mDiscoveredList. Reporting it would put a miss at 0
++      // on every boot and hide the miss that is being looked for.
++      //
++      if (Link == &mDiscoveredList) {
++        if ((Index > 0) && (mP2ApriMiss == (UINTN)-1)) {
++          mP2ApriMiss = Index;
++          CopyGuid (&mP2ApriMissGuid, &AprioriFile[Index]);
++        }
++      } else {
++        if (mP2ApriMatchFirst == (UINTN)-1) {
++          mP2ApriMatchFirst = Index;
++        }
++
++        mP2ApriMatchLast = Index;
++      }
+     }
+ 
+     //
+@@ -1470,6 +1752,149 @@ CoreInitializeDispatcher (
+   PERF_FUNCTION_END ();
+ }
+ 
++//
++// P2BRINGUP: the digest, in the order it has to be read - what was read, what
++// matched, what the batch did, and how much memory was left while it did it.
++// Kept as its own function because it is printed repeatedly (see the caller) and
++// because these are the lines the sessions are decided on, so they should be one
++// unit of code rather than a tail of a longer dump. It recomputes the not-loaded
++// count rather than taking it, so that it has no precondition beyond DXE having
++// dispatched.
++//
++STATIC
++VOID
++P2Digest (
++  VOID
++  )
++{
++  LIST_ENTRY             *Link;
++  EFI_CORE_DRIVER_ENTRY  *DriverEntry;
++  UINTN                  Index;
++  UINTN                  SeqLen;
++  UINTN                  NotLoaded;
++
++  NotLoaded = 0;
++  for (Link = mDiscoveredList.ForwardLink; Link != &mDiscoveredList; Link = Link->ForwardLink) {
++    DriverEntry = CR (Link, EFI_CORE_DRIVER_ENTRY, Link, EFI_CORE_DRIVER_ENTRY_SIGNATURE);
++    if (DriverEntry->ImageHandle == NULL) {
++      NotLoaded++;
++    }
++  }
++
++  //
++  // The Apriori file as the firmware read it. Every line below is a consequence
++  // of these three numbers, and none of them had been measured on the device:
++  // `entries` is AprioriEntryCount, and the SEQ line is exactly `entries`
++  // characters long, so a SEQ of 46 means either 46 entries were scanned and all
++  // matched, or 70 were scanned and 46 matched. `miss` separates the two, and
++  // `bytes`/`sum` say whether the buffer ReadSection handed back is the same
++  // 1120-byte section tools/fv-census.py reads out of the same image.
++  //
++  DEBUG ((
++    DEBUG_ERROR,
++    "P2 APRI bytes=%d entries=%d sum=%x\n",
++    mP2ApriBytes,
++    mP2ApriEntries,
++    (UINTN)mP2ApriSum
++    ));
++  DEBUG ((
++    DEBUG_ERROR,
++    "P2 APRI first=%g last=%g\n",
++    &mP2ApriFirst,
++    &mP2ApriLast
++    ));
++  if (mP2ApriMatchFirst == (UINTN)-1) {
++    DEBUG ((DEBUG_ERROR, "P2 APRI matched=none (no entry matched a discovered driver)\n"));
++  } else {
++    DEBUG ((
++      DEBUG_ERROR,
++      "P2 APRI matched=%d..%d\n",
++      mP2ApriMatchFirst,
++      mP2ApriMatchLast
++      ));
++  }
++
++  //
++  // The two readings this line exists to separate. `entries` is how many the
++  // device scanned; `miss` is the first entry after 0 that matched nothing. A
++  // short read shows up as entries well under 70 with no miss at all, because a
++  // truncated array cannot miss an entry it does not contain - while scanning
++  // all 70 and matching only a prefix shows up as entries=70 with a miss at the
++  // first entry past that prefix. Those are different faults with different
++  // fixes and the SEQ line alone cannot tell them apart.
++  //
++  if (mP2ApriMiss == (UINTN)-1) {
++    DEBUG ((DEBUG_ERROR, "P2 APRI miss=none\n"));
++  } else {
++    DEBUG ((
++      DEBUG_ERROR,
++      "P2 APRI miss=%d %g\n",
++      mP2ApriMiss,
++      &mP2ApriMissGuid
++      ));
++  }
++
++  //
++  // The batch, one character per Apriori entry, in the order it was dispatched.
++  // The first character that is not 's' is where the batch stopped producing
++  // working drivers; `miss` above says whether anything after that was even
++  // considered.
++  //
++  SeqLen = mP2Apriori;
++  if (SeqLen > P2BRINGUP_APRIORI_MAX) {
++    SeqLen = P2BRINGUP_APRIORI_MAX;
++  }
++
++  if (SeqLen == 0) {
++    DEBUG ((DEBUG_ERROR, "P2 SEQ (no Apriori entries were promoted)\n"));
++  } else {
++    for (Index = 0; Index < SeqLen; Index++) {
++      mP2SeqLine[Index] = mP2AprioriRes[Index];
++      mP2WhyLine[Index] = mP2ApriWhy[Index];
++    }
++
++    mP2SeqLine[SeqLen] = '\0';
++    mP2WhyLine[SeqLen] = '\0';
++    DEBUG ((DEBUG_ERROR, "P2 SEQ [%a]\n", mP2SeqLine));
++    DEBUG ((DEBUG_ERROR, "P2 WHY [%a]\n", mP2WhyLine));
++  }
++
++  DEBUG ((
++    DEBUG_ERROR,
++    "P2 STATS discovered=%d apriori=%d/%d started=%d diag=%d noload=%d\n",
++    mP2Discovered,
++    mP2Apriori,
++    mP2AprioriCount,
++    mP2Started,
++    mP2DiagCount,
++    NotLoaded
++    ));
++
++  //
++  // What the volume walk itself returned, one line per entry in mDxeFileTypes,
++  // followed by the largest allocation the page allocator will still satisfy.
++  // The walk lines answer "did discovery stop short, or was there simply nothing
++  // left to promote": seen is how many files the walk was handed, iter how often
++  // it was asked, and last the file it ended on.
++  //
++  for (Index = 0; Index < sizeof (mP2WalkSeen) / sizeof (mP2WalkSeen[0]); Index++) {
++    if (mP2WalkIter[Index] == 0) {
++      continue;
++    }
++
++    DEBUG ((
++      DEBUG_ERROR,
++      "P2 WALK t=%d seen=%d iter=%d last=%g\n",
++      Index,
++      mP2WalkSeen[Index],
++      mP2WalkIter[Index],
++      &mP2WalkLast[Index]
++      ));
++  }
++
++  DEBUG ((DEBUG_ERROR, "P2 FREE largest=%d pages\n", P2LargestAlloc ()));
++}
++
+ //
+ // Function only used in debug builds
+ //
+@@ -1486,11 +1911,71 @@ CoreDisplayDiscoveredNotDispatched (
  {
    LIST_ENTRY             *Link;
    EFI_CORE_DRIVER_ENTRY  *DriverEntry;
 +  UINTN                  Index;
-+  UINTN                  SeqLen;
 +  UINTN                  NotLoaded;
 +  UINTN                  Shown;
 +
 +  //
 +  // P2BRINGUP: the caps keep this dump from scrolling the lines that matter off
-+  // the one screen the framebuffer console keeps. The last two lines are the
-+  // part to read - SEQ is the whole Apriori batch as a string of results, in the
-+  // order the dispatcher ran them, and STATS is the totals.
++  // the one screen the framebuffer console keeps, and the digest that follows is
++  // the part to read - it is repeated, so it is what the screen ends up holding.
++  // The per-driver lines here name a few of the undispached entries; the digest's
++  // NOLOAD total counts all of them and its SEQ/WHY lines say what happened to
++  // each Apriori entry in order.
 +  //
 +  NotLoaded = 0;
 +  Shown     = 0;
@@ -510,8 +798,8 @@ index d7c7147e..2c62ff53 100644
 +          DriverEntry->Untrusted
 +          ));
 +      }
-+    }
-+  }
+     }
+   }
 +
 +  DEBUG ((DEBUG_ERROR, "P2 NOLOAD total=%d shown=%d\n", NotLoaded, Shown));
 +
@@ -526,60 +814,27 @@ index d7c7147e..2c62ff53 100644
 +  }
 +
 +  //
-+  // The Apriori batch, one character per entry, in the order it was dispatched.
-+  // The first character that is not 's' is where the batch stopped producing
-+  // working drivers - everything before it ran, everything after it did not.
++  // P2BRINGUP: everything from here down is the digest, and it is printed again
++  // and again rather than once. The framebuffer console has no scrollback -
++  // AdvanceNewLine clears the whole screen once the cursor passes the last row -
++  // so a reading of this data is a race against the wipe, and the last three
++  // sessions were each decided by whether the right line happened to be
++  // photographed before something else scrolled it away. Repeating it turns the
++  // race into a steady state: after the first wipe the panel holds nothing but
++  // copies of the digest, so whatever is on the screen whenever someone looks is
++  // the reading.
 +  //
-+  SeqLen = mP2Apriori;
-+  if (SeqLen > P2BRINGUP_APRIORI_MAX) {
-+    SeqLen = P2BRINGUP_APRIORI_MAX;
++  // The loop is bounded, so this still falls through into the assert that
++  // follows instead of becoming a hang, and the pause is CoreStall's, which
++  // returns quietly when there is no Metronome. P2Digest only reads state, so
++  // repeating it cannot change what it reports.
++  //
++  P2Digest ();
++
++  for (Index = 0; Index < 40; Index++) {
++    CoreStall (300000);
++    P2Digest ();
 +  }
-+
-+  if (SeqLen == 0) {
-+    DEBUG ((DEBUG_ERROR, "P2 SEQ (no Apriori entries were promoted)\n"));
-+  } else {
-+    for (Index = 0; Index < SeqLen; Index++) {
-+      mP2SeqLine[Index] = mP2AprioriRes[Index];
-     }
-+
-+    mP2SeqLine[SeqLen] = '\0';
-+    DEBUG ((DEBUG_ERROR, "P2 SEQ [%a]\n", mP2SeqLine));
-   }
-+
-+  DEBUG ((
-+    DEBUG_ERROR,
-+    "P2 STATS discovered=%d apriori=%d/%d started=%d diag=%d noload=%d\n",
-+    mP2Discovered,
-+    mP2Apriori,
-+    mP2AprioriCount,
-+    mP2Started,
-+    mP2DiagCount,
-+    NotLoaded
-+    ));
-+
-+  //
-+  // What the volume walk itself returned, one line per entry in mDxeFileTypes,
-+  // followed by the largest allocation the page allocator will still satisfy.
-+  // The walk lines are the answer to "did discovery stop short, or was there
-+  // simply nothing left to promote": seen is the number of files the walk was
-+  // handed and last is the last one it saw.
-+  //
-+  for (Index = 0; Index < sizeof (mP2WalkSeen) / sizeof (mP2WalkSeen[0]); Index++) {
-+    if (mP2WalkIter[Index] == 0) {
-+      continue;
-+    }
-+
-+    DEBUG ((
-+      DEBUG_ERROR,
-+      "P2 WALK t=%d seen=%d iter=%d last=%g\n",
-+      Index,
-+      mP2WalkSeen[Index],
-+      mP2WalkIter[Index],
-+      &mP2WalkLast[Index]
-+      ));
-+  }
-+
-+  DEBUG ((DEBUG_ERROR, "P2 FREE largest=%d pages\n", P2LargestAlloc ()));
  }
 diff --git a/SecurityPkg/Library/AuthVariableLib/AuthService.c b/SecurityPkg/Library/AuthVariableLib/AuthService.c
 index 7f7c91e9..aa8632ad 100644

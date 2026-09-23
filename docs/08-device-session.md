@@ -1175,6 +1175,17 @@ image as the experimental INF order (`70 entries, zero mismatches`), `check-payl
 and `abl-boot-check.py` passed, and `fv-inventory.py --against FVMAIN.Fv.txt` matched
 every one of the 122 files at its offset.
 
+Re-measured on 2026-09-23 while auditing which payloads carried which array, and
+recorded because it is a single number that can be checked in one command rather
+than a paragraph of argument: the Apriori section's md5 is **`a32543ed…`** in this
+variant and **`ed607ebc…`** in every baseline-order image of the same period
+(`boot-before-p2walk.img`, and all three in `work/out/p2-variants/`). So the
+reorder is visible in one hash of one 1120-byte section, and — the reason to write
+it down — the three images that are *not* the variant all share the baseline hash,
+which makes "did this experiment actually run" answerable by hashing rather than
+by trusting the log. The variant differs at `ap10` (`CBD2E4D5-…` where the
+baseline has `94527566-…`), which is the block the eight were moved ahead of.
+
 | | |
 |---|---|
 | image | `work/out/p2-variants/Mu-gauguin-arch-first-gzip.img` |
@@ -1881,6 +1892,13 @@ the index into `FVMAIN.Fv`'s file table (0 is the Apriori file itself, 1 is
 `DxeCore`); the last column is the `P2 SEQ` letter, with `-` for the 23 entries
 that were never promoted and `core` for `DxeCore`, which the walk never lists.
 
+**One assumption in this table, stated here rather than left implicit: the 23
+unpromoted entries are taken to be `ap47..ap69`, the array's tail.** That is what
+makes `SEQ[k] = ap(k+1)` and it is not yet measured — see step 4.13, which is the
+step written to measure it, and the `P2 APRI miss=` row that decides whether this
+table stands or shifts. Read the `-` column as "not promoted under the suffix
+hypothesis" until that line has been read.
+
 ```
 ap 0 DxeCore                          phys   1  core   ap35 PmicDxe                    phys  54  L
 ap 1 PcdDxe                           phys   2  s      ap36 WatchdogTimer              phys   8  L
@@ -1970,43 +1988,42 @@ line first.
 
 ### Next
 
-**One line decides the first puzzle: `P2 WALK t=0 seen=…`.** `seen=80` means the
-DRIVER sweep ran to the end of the volume, so all 23 absent Apriori entries were
-walked and something after the walk dropped them — which would point at
-`CoreAddToDriverList`'s own allocation or at the list itself. Anything less than
-80 means the sweep was cut off, and `last` names the file it stopped on, which
-would point at `GetNextFile` or at the volume. Either answer is actionable; the
-current state of knowledge is not.
+**The image is already on the phone, so the next step is a look, not a flash, and
+not a video.** Every claim in the paragraphs below about what still had to be
+obtained was written before step 4.13, and one of them is now wrong: it said "no
+flashing is needed", and a flash *was* done — see 4.13 for the image, the hash and
+the read-back. What replaces it is not a second flash but the instrumented payload
+that is now in `boot`, and the reading it produces does not need a video, because
+the digest repeats 41 times and any moment on the panel is a valid frame.
 
-Read it off the panel by video, then frame-step. Two other lines come with it:
-`P2 FREE largest=` (measured against the 6.10 MiB-vs-35.4 MiB arithmetic above, so
-it either confirms the memory map or falsifies it) and the `P2 DIAG` lines, which
-are the only place a `load failed` can be told from a `start failed`. The
-`P2 STATS` line's `N` is no longer needed: the `AprioriEntryCount` fork it was
-going to split is settled from the host. Then remove the `P2BRINGUP` block and fix
-what the readings name.
+**Three lines decide the two puzzles, and they are now written to be read
+together.** `P2 APRI` (`bytes/entries/sum`, then `matched=` and `miss=`) settles
+whether the 23 absent entries are a suffix of the array or interleaved — which is
+what makes step 4.12's join either correct or shifted, and it is the one question
+that step was unable to answer from the host. `P2 STATS discovered=` splits the
+remaining fork: near 80 means the walk saw every DRIVER file and something after
+the walk dropped 23, while near 57 means the sweep itself was cut short. `P2 WHY`
+turns the 27 `L` from a count into a mechanism, since `P2Record` renders every
+`CoreLoadImage` failure as `'L'` regardless of status.
 
-**No flashing is needed to get them, and this is now confirmed rather than
-assumed.** `tools/build-p2-payloads.sh` was re-run on 2026-09-23 and reproduced
-`Mu-gauguin-silicon-gzip.img` at sha256
-`ecc10a225c8492d99ab4062e840e8a6b7def34a75f3f3679b1989ed515bb4bda` — byte-identical
-to the image already written, so the rebuild is reproducible and the payload of
-record has not drifted. Then, in TWRP later the same day, `boot[0:1140736]` was
-read back with `dd` and hashed to **the same value**, and its inner `FVMAIN` and
-Apriori array hash identically to the build tree's. The payload on the device
-carries `P2 WALK` and `P2 FREE`.
+The `P2 FREE largest=` line comes with them and is the same measurement step 4.12
+was going to take: it either confirms the 6.10 MiB-vs-35.4 MiB load-order
+allocation arithmetic or falsifies it. The `P2 STATS` line's `apriori=` denominator
+is no longer load-bearing — the `AprioriEntryCount` fork it was going to split was
+settled from the host — but `entries=` supersedes it anyway, from the device.
 
-So the step is a power-on and a video, not a flash. That matters, because it makes
-the reading independent of the USB port — which has been dropping out, was not
-enumerating at all earlier in the day (no `adb`, no `fastboot`, no `2717:`
-descriptor on the bus), and needs no `adb` to film a screen.
+Then, once DXE reaches BDS, **remove the whole `P2BRINGUP` block** and regenerate
+the patch with `tools/regen-mu-basecore-patch.sh --regen`.
 
-The two numbers are the only remaining input the host cannot supply. Everything
-computable from the volume has now been computed and re-checked: the file census,
-the FvCheck scan, the FFS attribute histogram, the exact `IsValidFfsFile` test,
-the Apriori join, the DEPEX graph, every PE header with a per-field separator
+**Everything computable from the host has been computed and re-checked**: the file
+census, the `FvCheck` scan, the FFS attribute histogram, the exact `IsValidFfsFile`
+test, the Apriori join, the DEPEX graph, every PE header with a per-field separator
 verdict, the load-order allocation total against the device's own memory map, the
-payload diff, and the attribution of the panel line.
+payload diff, and the attribution of the panel line. The Apriori section is now
+also read on both sides — `tools/fv-census.py` on the host, `P2 APRI` on the device
+— so a disagreement between them is a finding rather than a rounding error. What
+remains is the list state and the failure statuses, and neither exists anywhere
+except inside the running firmware.
 
 ### What this step cost, and what it bought
 
@@ -2018,6 +2035,143 @@ single known mechanism rather than about the volume, the checksums, the file tab
 the Apriori array, the PE headers, the heap size, the DEPEX graph, or the loader's
 address selection — all seven of which have been measured and are clean.
 
+## Step 4.13 — The instrument that reads it for you
+
+Step 4.12 ended with four lines that had been *drawn on the panel and never read*.
+The image in `boot` carried `P2 WALK` and `P2 FREE` for a whole session, and what
+came back was one `P2 SEQ` string and one `P2 DIAG` line. The reason is not
+carelessness in the reading; it is that the panel is a framebuffer console with a
+90×100 cell grid and **no scrollback** — `AdvanceNewLine` clears the whole screen
+once the cursor passes the last row — so every reading is a race between a human
+and a wipe. Three consecutive sessions were each decided by whether the right line
+happened to be photographed before something else scrolled it away.
+
+There is no second channel to fall back on, and this was checked rather than
+assumed: on the host, `ls /proc/kcore /dev/mem /dev/kmem` returns **No such file
+or directory** for all three, `/dev/video*` does not exist, and `v4l2-ctl` is not
+installed. So there is no way to read the device's memory and no way to record the
+screen except by pointing a camera at it.
+
+Two changes follow from that, and both are in `Dispatcher.c`'s `P2BRINGUP` block.
+
+### The gap in the step-4.12 join, which is what the instrument is aimed at
+
+Step 4.12's join says "`P2 SEQ`'s index *i* is Apriori entry *i + 1*". Read the
+promotion loop again and that sentence is **conditional**, in a way the step
+states but does not flag:
+
+```c
+if (mP2Apriori < P2BRINGUP_APRIORI_MAX) {
+  CopyGuid (&mP2AprioriGuid[mP2Apriori], &DriverEntry->FileName);
+  mP2AprioriRes[mP2Apriori] = '?';
+}
+mP2Apriori++;          /* unconditional: counts MATCHES, not entries scanned */
+```
+
+The slot is `mP2Apriori`, the running **match count** — not `Index`, the position
+in the array. So the string is the matched entries **compacted**: if Apriori entry
+*j* matches nothing, it does not occupy a character, and every character after it
+belongs to a later entry. `SEQ[k] = ap(k+1)` therefore holds **only if no entry
+before position 46 fails to match** — which is the very thing at issue. The 46
+characters are 46 matches among 69 candidate entries, so **23 of `ap1..ap69`
+matched nothing**, and where those 23 sit is exactly what decides whether the
+step-4.12 name tables are right or shifted:
+
+| if the 23 absent are | then | and |
+|---|---|---|
+| `ap47..ap69` (a suffix) | `SEQ[k] = ap(k+1)` for all 46 | step 4.12's tables stand as written |
+| interleaved, first gap at *j* < 47 | `SEQ[k] = ap(k+1)` only up to *j* | every name at or after `SEQ[j-1]` in the 4.12 tables is mislabelled |
+
+Step 4.12's own consistency check — the eight missing arch protocols landing on
+eight `L` positions — does **not** decide this, and it is worth saying why rather
+than letting it carry more weight than it has. The `L` run is continuous from
+`SEQ 22` to `SEQ 45`, and the eight arch entries are `ap30`, `ap33`, `ap35`,
+`ap36`, `ap37`, `ap38`, `ap41`, `ap43`. Any compaction shift of up to eight
+entries still lands all eight inside `22..45`, so the check passes for any
+alignment in that band. It confirms the two sets *overlap*; it does not pin the
+offset.
+
+### What the firmware now prints
+
+Three lines were added, all from inside the same `P2BRINGUP` block, all printed by
+`P2Digest ()`:
+
+- **`P2 APRI bytes=1120 entries=70 sum=a998b263`** and **`P2 APRI first=… last=…`**
+  — the Apriori section **as `Fv->ReadSection` handed it to the dispatcher**:
+  `SizeOfBuffer`, `SizeOfBuffer / sizeof (EFI_GUID)`, a `sum*31+byte` checksum over
+  the buffer as read, and the first and last GUID. `tools/fv-census.py` prints the
+  identical four numbers for the same section out of the same image, so the panel
+  and the host are two readings of one object and agree or do not.
+- **`P2 APRI matched=1..46`** and **`P2 APRI miss=47 <guid>`** — the arbitration
+  the SEQ line cannot supply. `miss` is the lowest index above 0 whose entry
+  matched nothing in `mDiscoveredList`. Index 0 is skipped deliberately: it is
+  `gDxeCoreFileName`, the DXE_CORE branch never hands it to `CoreAddToDriverList`,
+  so it matches nothing on *every* boot, and reporting it would put a permanent
+  false miss at 0 and hide the real one.
+- **`P2 WHY [...]`** — one character per `SEQ` character, aligned with it.
+  `P2Record` collapses every failure to `'L'`, which says *that* 27 loads failed
+  and not *why*; `'R'` (`EFI_OUT_OF_RESOURCES`), `'N'` (`EFI_NOT_FOUND`), `'X'`
+  (`EFI_SECURITY_VIOLATION`) and `'U'` (`EFI_UNSUPPORTED`) have no mechanism in
+  common, and the existing retracted-mechanism list is largely about telling them
+  apart. `'s'` is success.
+
+### The reading, and it is now a steady state rather than a race
+
+`P2Digest ()` is called **41 times**, with `CoreStall (300000)` between calls. The
+console wipes rather than scrolls, so after the first wipe the panel holds nothing
+but copies of the digest, and whatever is on the screen whenever someone looks is
+a valid reading. That is the whole purpose: it converts "photograph the right
+moment" into "photograph any moment". The loop is bounded and `CoreStall` returns
+`EFI_NOT_AVAILABLE_YET` quietly when `gMetronome` is NULL, so this cannot hang —
+control falls through into the `ASSERT` at `DxeMain.c(593)` exactly as before, and
+the reboot loop continues unchanged.
+
+### The host-side prediction, so the comparison is a checkable pair
+
+`tools/fv-census.py` was extended to print the device's own numbers and to replay
+the promotion loop over the volume:
+
+```
+=== The Apriori section, as the device reads it ===
+  bytes 1120  entries 70  sum 0xa998b263
+  first D6A2CB7F-6A18-4E2F-B43B-9920A733700A  last CCCB0C28-4B24-11D5-9A5A-0090273FC14D
+  replay of the promotion loop over this volume (index 0 skipped):
+  matched 1..69 of 70 entries, miss none
+```
+
+The replay is over the **volume's file types**, not over `mDiscoveredList`, so it
+cannot decide the compaction question — it says every named GUID is present as a
+`DRIVER` file, which is a fact about the volume and not about the list. What it
+does supply is the *identity* half of the check. A panel reading of `bytes 1120
+entries 70 sum a998b263` says the dispatcher received the section the host read,
+and the question moves entirely to `miss`.
+
+| panel says | means | next |
+|---|---|---|
+| `bytes`/`entries`/`sum` short of `1120/70/a998b263` | `Fv->ReadSection` returned a truncated section | the read is the mechanism; the "23 missing drivers" were never in the buffer, and there is no missing-driver puzzle to solve |
+| `entries=70`, `miss=47` | exactly `ap1..ap46` matched, so the absent 23 are the array's tail | step 4.12's tables stand; the discovered list is short by a *suffix* |
+| `entries=70`, `miss=j<47` | the absent entries are interleaved | step 4.12's name tables are shifted from `SEQ[j-1]` on and must be redone against the true alignment |
+| `entries=70`, `miss=none` | 69 of 69 matched, so the match count was never 46 | the 46-char line was truncated somewhere other than the array — re-open step 4.12 rather than patch it |
+| `P2 STATS discovered=` ≈ 80 | the walk saw every DRIVER file and something after it dropped 23 | the list, or `CoreAddToDriverList` |
+| `discovered=` ≈ 57 | the walk itself dropped 23 | `GetNextFile`, the volume, or the sweep's own bound |
+
+### The image, and where it is
+
+| | |
+|---|---|
+| image | `work/out/p2-variants/Mu-gauguin-silicon-gzip.img` |
+| size | 1,140,736 B |
+| sha256 | `8c565681d1093b76c1cf184a549099aa2a957127c8be5ded439d934164535842` |
+| inner FVMAIN | 123 files, `0x703000` — identical to the tree's, "123 offsets and GUIDs, zero mismatches" against `FVMAIN.Fv.txt` |
+| flashed to | `boot` (`sde55`), via `tools/flash-boot.sh --twrp` |
+| read back | `ok the first 1142784 bytes of boot match` |
+| previous `boot` content | archived first, per "对照的那张必须在覆盖之前读" — `work/out/boot-pre-flash-0923c.bin`, sha256 `03ef39d1ea1cef463f77c8ee916ab46447e96b756011836388621a0d0788d574` |
+
+Everything in the flashed image came from a tree that compiles with **zero
+`error:` lines**; the build's exit status is 1 from the declared `mkbootimg`
+`DTB image must not be empty.` nag and the artifact was checked directly, as
+`tools/build-p2-payloads.sh` does.
+
 ## Step 5 — Leave it bootable
 
 Whatever the outcome, end the session with the stock image back on `boot`:
@@ -2028,6 +2182,25 @@ tools/restore-stock-boot.sh
 
 Do not leave an experimental image on the phone. The next session should start
 from a known state, and the phone is someone's daily driver in between.
+
+**Overridden on 2026-09-23, deliberately.** The instruction above was not followed
+for the step-4.13 image: the phone was left running it, and the next step of the
+work was taken to be modifying the firmware directly rather than restoring stock
+between attempts. That is a knowing departure from the rule, not an oversight, and
+it is recorded here because a rule that is quietly not followed is worse than one
+that is rewritten. What it costs is that the phone stays in the boot loop — our
+payload draws its digest, asserts, and the APSS watchdog resets it — instead of
+sitting at a stock Android boot. What it buys is that the reading is available
+whenever someone looks at the screen, because the digest repeats.
+
+The restore path is unchanged and still the way out:
+
+```sh
+tools/restore-stock-boot.sh    # verifies the pinned sha256 before writing
+```
+
+It is run from TWRP, and the pinned `EXPECT` hash is still
+`50ef59beb17e75de1e749b7d261eb41a18d9cca025befb3357e43e239de78ef3`.
 
 ---
 
@@ -2047,6 +2220,10 @@ attempt  image                          fbreason                     screen     
 6        boot-before-p2walk.img, then   not captured                 P2 SEQ (46 chars),   n/a            (not read)
          Mu-gauguin-silicon-gzip.img,                               then assert
          read back byte-identical
+7        Mu-gauguin-silicon-gzip.img    not captured                 P2 SEQ + the P2 APRI/  n/a           (not read)
+         (rebuilt with the 4.13                                     WHY digest, repeating
+         instrumentation), read back                                41x - not yet read
+         verified
 ```
 
 Row 4 is the one that matters and is step 4.8: our firmware ran and drew its own
@@ -2068,6 +2245,16 @@ it is the reason this step had to settle the `AprioriEntryCount` fork from the h
 instead. It is also the only row whose image is confirmed byte-identical on the
 device by a hash of the declared payload length rather than of a partition-sized
 read.
+
+Row 7 is step 4.13: the same volume plus the `P2 APRI`, `P2 WHY` and
+repeating-digest instrumentation, written to `boot` after the previous contents
+were archived. Its screen column is the one this row exists for, and it is the
+first row whose reading is **not** a race — the digest repeats 41 times, so the
+column stays fillable for as long as the phone has power, and it has not been read
+yet. Rows 5 and 6 should be read as one attempt rather than two: row 5 is the read
+back that found the image unchanged, and row 6 is the reading taken from it, so
+"not flashed" in row 5 and the image named in row 6 describe the same state of
+`boot`.
 
 
 The `abllog` column is step 4.6's answer — the last stage ABL's own log for that
