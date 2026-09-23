@@ -73,7 +73,7 @@ map and the restore procedure.
 |---|---|---|---|
 | **P0** | Device survey + full partition backup + XBL driver inventory | every partition dumped; DXE set identified | ✅ done |
 | **P1** | Mainline Linux on gauguin (`gauguin.dts` + kernel + `fastboot boot`) | framebuffer up, UFS mounted, USB console | **gate not observed** — image builds, `fastboot boot` was refused |
-| **P2** | UEFI skeleton (`Silicon/Qualcomm/BitraPkg` + `Platforms/Xiaomi/gauguinPkg`) | UEFI Shell on screen, UFS enumerates | **gate open** — package builds, image written to `boot` and byte-verified, never observed to run |
+| **P2** | UEFI skeleton (`Silicon/Qualcomm/BitraPkg` + `Platforms/Xiaomi/gauguinPkg`) | boot manager draws on screen, UFS enumerates as a block device | **runs** — the image with the current device tree was written to `boot` and our firmware **executes**: the panel fills with its own DEBUG stream (`SerialPortLib` is the framebuffer in a DEBUG build) and then stops on `ASSERT [DxeCore] DxeMain.c(593)`, one architectural protocol short of handing off to BDS. Three earlier attempts stopped before reaching our code because the tree in the image had no `/__symbols__`. See `docs/08` step 4.8 |
 | **P3** | UEFI with full driver set + ACPI tables | Windows installer boots off USB | not started |
 | **P4** | Windows 11 ARM64 deployment | Windows desktop on the device | not started |
 | **P5** | Hardware enablement in Windows | touch / Wi-Fi / GPU / audio one by one | not started |
@@ -81,7 +81,9 @@ map and the restore procedure.
 **Read the state from this table, not from the commit log.** Every commit so far
 is a checkpoint inside P2; none is a completed phase. `docs/00-plan.md` has the
 per-phase detail, and `docs/08-device-session.md` has the exact sequence for the
-next time the phone is in hand — which is what is currently blocking.
+next time the phone is in hand. What is currently blocking is one line of text on
+the phone's panel — the name of the architectural protocol DXE could not find,
+printed a few lines above the assert — and step 4.8 of `docs/08` says which line.
 
 P0 result: all 38 partition images dumped and size-verified against the GPT; **86
 signed AArch64 DXE drivers** and Qualcomm's own `uefiplat.cfg` recovered from the

@@ -9,14 +9,15 @@ observed on hardware, not when the code compiles.
 
 ## Where things actually stand (2026-09-23)
 
-Nothing below is "done" except P0, and no gate has been observed on hardware
-except P0's. This table is the honest state; the sections under it are the plan.
+Nothing below is "done" except P0, and the only gate observed on hardware is
+P0's plus the first half of P2's (see its row). This table is the honest state;
+the sections under it are the plan.
 
 | phase | gate | state |
 |---|---|---|
 | **P0** survey + backup | partitions dumped and verified; no existing port | **done** — 74 partitions carved and signature-checked, `boot`/`abl`/`recovery` hashes match the device, 86 XBL drivers recovered, and `git ls-files Silicon/Qualcomm` confirms no SM7225 package upstream |
 | **P1** mainline kernel | device boots mainline and prints something | **not done** — `work/out/boot-pstore.img` is built, reproducible (`make_boot_image.py --kernel`), and carries both channels a device with no UART needs: the panel itself (`simple-framebuffer` + `simpledrm` + fbcon, so the boot log is photographed off the screen) and pstore (`console-ramoops-0`, readable from Android after a warm reboot). The earlier `fastboot boot` was refused with `Failed to load/authenticate boot image` on the RAM path, and the partition path has never been tried |
-| **P2** UEFI skeleton | the boot manager draws on the phone's screen and UFS appears as a block device | **gate open** — platform package built, image written to `boot` and verified byte-for-byte, **never observed to execute an instruction**. The gate said "reaches a shell" until the volume was inventoried and the shell turned out to be absent from *every* platform in the tree, `suryaPkg` included — see `docs/07`, so it would not have distinguished our firmware from a working one. The image that was written could not have executed either: the device tree inside it was stale — no `/__symbols__` at all — and ABL refuses the vendor overlay over that, before any of our code is reached. A second reason was given at the time and has since been retracted (`docs/07`). Both the cause and the replay that found it are fixed offline, and the next attempt is the port's first |
+| **P2** UEFI skeleton | the boot manager draws on the phone's screen and UFS appears as a block device | **half met, and it is the half that decides viability** — **our firmware executes on this phone**. The image carrying the current device tree was written to `boot`, and on the reboot the panel filled with our own output, ending in `ASSERT [DxeCore] DxeMain.c(593)`. That text can only come from us: `DxeMain.c:593` is our line, and in a DEBUG build `SerialPortLib` is bound to `FrameBufferSerialPortLib`, so every `DEBUG ()` string is drawn into the framebuffer — which is why the firmware can talk while there is no shell, no boot-manager menu and no UART. (It also means text on the panel is not evidence that BDS ran.) What remains is the second half: DXE stops because at least one *architectural protocol* was never installed, and the name of the first missing one is printed two lines above the assert, on a screen that is legible by design (`GetFontScale ()` gives 10×24 glyphs, ~90×100 of them) and is wiped only when it scrolls. `docs/08` step 4.8 has the reading, and the dep chain that narrows it. The three earlier attempts stopped before any of our code for a reason now fixed: the tree in the image had no `/__symbols__`, so ABL refused the vendor overlay (`docs/07`). The gate said "reaches a shell" until the volume was inventoried and the shell turned out to be absent from *every* platform in the tree, `suryaPkg` included, so it would not have distinguished our firmware from a working one |
 | **P3** ACPI | Windows installer boots and sees UFS | not started — `AcpiTableUpdate` is a deliberate no-op |
 | **P4** Windows | desktop appears | not started — destroys `userdata` |
 | **P5** peripherals | touch, Wi-Fi, GPU, audio | not started |
@@ -26,10 +27,25 @@ phase state from this table, not from the commit titles.
 
 ### The one thing blocking progress
 
-The phone needs a **physical reset** — hold the power button ~20s, then a normal
-power-on with no keys held. The full sequence for that session, with what each
-outcome means and which payload to try next, is
-[`08-device-session.md`](08-device-session.md). The pieces it uses:
+It is no longer a physical reset — that was the previous entry, and the reset
+happened. What blocks progress now is **one line of text on the phone's screen**:
+the name of the first architectural protocol DXE could not find, which
+`CoreDisplayMissingArchProtocols ()` printed at `DxeMain.c:568`, two or three
+lines above the assert. The phone is a distance away and holds that screen until
+the next reset, so reading it costs nothing and every alternative costs a build
+and a flash cycle. `docs/08` step 4.8 has what to look for and the dependency
+chain that narrows the thirteen candidates.
+
+If the screen cannot be read, the fallback is a firmware change rather than a
+guess: make the missing-protocol report unconditional, or print it a second time
+after the assert. That is a rebuild —
+`./build_uefi.py -d gauguin -r DEBUG -c` in `work/uefi/Mu-Silicium`, then
+`tools/build-p2-payloads.sh`, then `tools/flash-boot.sh` — and it should be one
+cycle that answers the question whether or not anyone can read the panel.
+
+The pieces a device session uses — the full sequence, with what each outcome
+means and which payload to try next, is
+[`08-device-session.md`](08-device-session.md):
 
 1. `tools/fastboot-capture.sh` — first thing it asks is `oem fbreason`, which
    reports why ABL entered fastboot and can say `Reason:LoadImageAndAuth Fail`
@@ -39,8 +55,9 @@ outcome means and which payload to try next, is
    which classifies *which* silence it is — a reply left unread (recoverable by
    draining the endpoint), a download left waiting (recoverable in principle),
    or a fastboot thread stuck behind a still-live USB stack (not recoverable;
-   power button). The current state is the third, and it also means ABL is
-   still resident, so the silence is not evidence our image ran.
+   power button). That was the state before the payload of step 4.8 ran; it is
+   not the state now, and the difference is worth keeping straight, because it
+   looked the same from the host both times.
    Note that `oem fbreason` and `oem uefilog` are commands **this phone's**
    ABL has and a Mu-Silicium-built one does not (`docs/07`), so their absence
    is not by itself a wedged fastboot.
@@ -104,8 +121,13 @@ outcome means and which payload to try next, is
    All three are built by `tools/build-p2-payloads.sh`, and the earlier build
    of the pair — made by hand, never flashed — could not have run at all: it
    carried a stale device tree with no `/__symbols__`, so ABL would have refused
-   the vendor overlay (`docs/07`). The image that *is* in `boot` is
-   `Mu-Silicium/Mu-gauguin.img`, and it carries the same stale tree.
+   the vendor overlay (`docs/07`). What was in `boot` when the first attempt was
+   made was the same shape as the third image — v1, page 2048, tree after the
+   gzip stream — and carried that same stale tree, 71,737 bytes of it against
+   the current build's 87,594; both images hold a *byte-identical* firmware
+   (`SILICIUM_UEFI.fd` `md5 9c104725…`), so the tree is the only variable
+   between them and step 4.8 is a clean one-variable experiment. `boot` now
+   holds `Mu-gauguin-silicon-gzip.img`, `sha256 816b1d41…`.
 
 Those pieces are backed by the offline tools below, which exist because a device
 cycle is expensive and a bad image costs a physical reset. Every defect this
@@ -249,6 +271,12 @@ Approach, mirroring what Mu-Silicium does for other SoCs:
 UFS as a block device. If this fails, stop and reconsider — everything downstream depends
 on it.
 
+**Status:** the first half of the gate is met and the second is not. Our firmware runs
+and draws its own DEBUG stream on the panel — the whole of `docs/08` step 4.8 — and
+then halts in `DxeMain` because an architectural protocol is missing. The boot manager
+is not reached, so nothing is listed yet. Read the gate as "runs" (answered yes) and
+"hands off to BDS" (open).
+
 The gate originally said "`fastboot boot` shows the UEFI Shell". That was wrong twice
 over, and `docs/07` has the evidence: this platform boots via `fastboot flash boot` and
 not `fastboot boot` (different ABL code paths), and **no Mu-Silicium phone platform ships
@@ -260,7 +288,12 @@ provide, and what the gate now asks for, is `BootManagerMenuApp` drawing on the 
 **Risk:** **high, and this is the real wall.** No Bitra-family device has ever had a UEFI
 port. The signed blobs are unlikely to load cleanly into a different DXE core on the first
 attempt; expect a long debugging loop, and serial output is essential (the device has no
-exposed UART — plan on the UEFI `ULogDxe` log buffer or on-screen debug).
+exposed UART — plan on the UEFI `ULogDxe` log buffer or on-screen debug). That is how it
+went, and the on-screen half is the half that worked: the DEBUG build's console *is* the
+framebuffer, so the firmware's own `DEBUG ()` strings are readable off the panel with no
+UART and no shell. What it does not give is scrollback — the console clears itself when
+it runs off the bottom — and it is write-only, so nothing can be read back after the
+fact.
 
 ---
 

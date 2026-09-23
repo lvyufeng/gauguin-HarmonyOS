@@ -624,15 +624,27 @@ fastboot the user saw was ABL's own fallback, not a commanded mode. Step 2's
 check is answered: look at `misc` once and stop suspecting it.
 
 **The image in `boot` was stale, by exactly the two things the P2 builder gates
-on.** The payload's gzip stream is byte-identical to the one
-`tools/build-p2-payloads.sh` produces today — same `BootShim.bin`, same
-`SILICIUM_UEFI.fd` (`md5 9c104725…`) — and the only difference is the device tree
-glued after it:
+on.** What is byte-identical between it and the image
+`tools/build-p2-payloads.sh` produces today is the **decompressed** payload — the
+same `BootShim.bin` and the same `SILICIUM_UEFI.fd`, `md5
+9c1047255a580b6b2f67a88e55b3287b`, checked against
+`Build/gauguinPkg/DEBUG_CLANGPDB/FV/SILICIUM_UEFI.fd` and equal to it — and the
+only difference is the device tree appended after it:
 
-| | glued DTB | `__symbols__` | ramoops node |
-|---|---|---|---|
-| as found in `boot` | 71,737 B | absent | `ramoops@ffc00000` |
-| current build | 87,594 B | present | `ramoops@d0000000` |
+| | gzip stream | decompressed payload | appended DTB | `__symbols__` | ramoops node |
+|---|---|---|---|---|---|
+| as found in `boot` | 1,046,331 B | 3,145,840 B `6c87b01e…` | 71,737 B | absent | `ramoops@ffc00000` |
+| current build | 1,046,305 B | 3,145,840 B `6c87b01e…` | 87,594 B | present | `ramoops@d0000000` |
+
+The *streams* are not byte-identical — they differ by 26 bytes and the two kernel
+blobs differ by 67,229 because `kernel_size` covers the tree as well — so an
+earlier draft of this paragraph, and the commit message for `10ebfa3`, which said
+"the payload's gzip stream is byte-identical", overstated it. The measurement is
+that the same 3,145,840 bytes were fed to two different compressors. The
+conclusion is unaffected and is in fact tighter than the loose wording was: the
+firmware itself is *provably* the same code on both sides, so the difference
+between the phone's behaviour and the current build's is attributable to the tree
+and to nothing else.
 
 That is a one-variable experiment that was never run: every payload this phone
 has booted carried a tree with no `/__symbols__` and the inherited `ramoops`
@@ -640,10 +652,84 @@ node, which are precisely the two faults `build-p2-payloads.sh` was written to
 catch. So "our firmware runs and does nothing" has not yet been tested — what has
 been tested is "a payload with a broken tree runs and does nothing".
 
-It is also a reason to read the glued DTB, not the header, when asking what is on
-the phone: `dtb 0` in the header is normal for this shape (the tree is appended to
-the kernel blob, and `docs/07` has why ABL can still find it), so the header alone
-cannot tell a stale tree from a current one.
+It is also a reason to read the appended DTB, not the header, when asking what is
+on the phone: `dtb 0` in the header is normal for this shape (the tree follows the
+gzip stream inside the kernel blob, and `docs/07` has why ABL can still find it),
+so the header alone cannot tell a stale tree from a current one. Reading it is a
+`zlib` call and a `find`, not a guess — which is how the tables above were filled
+in.
+
+## Step 4.8 — The first execution (2026-09-23, later the same day)
+
+The one-variable experiment of step 4.7 was finally run, and it produced the
+result the whole phase was waiting for.
+
+`work/out/p2-variants/Mu-gauguin-silicon-gzip.img` —
+`sha256 816b1d418365ac7beb209e34c5b801ebeeb90bbaedfe8d48e1811e510dcef137` — was
+written to `boot` over TWRP and read back byte-for-byte before the reboot.
+
+**Our firmware executes.** The panel comes up full of text, and the last line of
+it is:
+
+```
+ASSERT [DxeCore] DxeMain.c(593): !(((RETURN_STATUS)(Status)) >= 0x80000000000000ULL)
+```
+
+Both halves of that sentence are load-bearing. The text is ours because of how the
+volume is built: in a DEBUG build `SiliciumPkg.dsc.inc` binds `SerialPortLib` to
+`SiliciumPkg/Library/FrameBufferSerialPortLib`, so every `DEBUG ()` string in the
+firmware is drawn glyph by glyph into the framebuffer. It needs no UART, no shell
+and no boot-manager menu — which also means **text on the panel is not evidence
+that BDS ran**, only that DXE got far enough to print. And `DxeMain.c(593)` is our
+line: in this tree it is `ASSERT_EFI_ERROR (Status)`, immediately after
+`Status = CoreAllEfiServicesAvailable ()` at line 582 of
+`Mu_Basecore/MdeModulePkg/Core/Dxe/DxeMain/DxeMain.c`. A stock or vendor image
+cannot print that string.
+
+So the tree is what was blocking step 4.7, and P2's central question — does our
+UEFI run at all on this board — is answered **yes**.
+
+**What it is stopped on.** `CoreAllEfiServicesAvailable ()` walks `mArchProtocols[]`
+in `DxeProtocolNotify.c` and returns `EFI_NOT_FOUND` at the **first** entry whose
+`Present` is FALSE. The order is: Security, CPU, Metronome, Timer, Bds, Watchdog
+Timer, Runtime, Variable, Variable Write, Capsule, Monotonic Counter, Reset, Real
+Time Clock. So at least one of those was never installed — and the assert, being
+on the first one, does not say how many or which.
+
+**The name is almost certainly already on the screen, one or two lines above.**
+`CoreDisplayMissingArchProtocols ()` runs at `DxeMain.c:568` and prints, for each
+missing entry, `"<name> Arch Protocol not present!!"`; `CoreDisplayDiscoveredNotDispatched ()`
+runs at 576 and lists the drivers that were found and never dispatched. Both are
+inside `DEBUG_CODE_BEGIN ()`, which is compiled in when
+`PcdDebugPropertyMask` has `DEBUG_PROPERTY_DEBUG_CODE_ENABLED` (0x04) set — DEBUG
+has `0x2F`, and the `0x00` at `SiliciumPkg.dsc.inc:411` is a per-module override
+for `ReportStatusCodeRouterRuntimeDxe`, not for DxeCore. `ASSERT_DEADLOOP_ENABLED`
+(0x20) is also set, so the machine halts there rather than rebooting — the screen
+stays as it was left.
+
+**Read the screen before anything else.** The fourteen lines above the assert
+narrow this from thirteen candidates to one. Useful facts for whoever is holding
+the phone:
+
+- The font is legible by design: `GetFontScale ()` divides the shorter panel
+  dimension by 426, so 1080×2400 gives scale 2 — 5×16 glyphs drawn at 10×24,
+  about 90 columns × 100 rows of ordinary terminal text.
+- The console **wipes itself when it scrolls past the last row**
+  (`AdvanceNewLine`), so only the final screenful survives. The assert is the last
+  line of it, which puts the two most informative blocks inside the visible page.
+- There is no host channel to fall back on: with this firmware running the phone
+  enumerates on USB as nothing at all — `lsusb` shows no new device, no
+  `/dev/ttyACM*`, and `adb`/`fastboot` are both empty.
+
+All thirteen arch-protocol providers are in the volume, verified by GUID against
+`Guid.xref`, so this is a dispatch or initialisation failure, not a packaging one.
+The dependency chain worth knowing before the screen is read: `ArmGicDxe` depexes
+on `gEfiCpuArchProtocolGuid` and produces `gHardwareInterruptProtocolGuid`;
+`TimerDxe` depexes on *that*; `WatchdogTimer` depexes on
+`gEfiTimerArchProtocolGuid`; `RealTimeClockRuntimeDxe` and `CapsuleRuntimeDxe`
+depex on the Variable protocols. A single failure early in that chain takes two
+or three names off the list at once, which is why the name matters more than the
+count.
 
 ## Step 5 — Leave it bootable
 
@@ -664,11 +750,20 @@ For each attempt, one line — the phone is at a distance and memory is not a
 channel:
 
 ```
-attempt  image                          fbreason                     screen            pstore         abllog
--------  -----------------------------  ---------------------------  ----------------  ------         ------
-1        (as found)                     LoadImageAndAuth Fail        logo, then fastboot  n/a         UEFILOG0: Start EBS
-2        work/out/boot-pstore-raw-*.img ...
+attempt  image                          fbreason                     screen               pstore         abllog
+-------  -----------------------------  ---------------------------  -------------------  ------         ------
+1        (as found)                     LoadImageAndAuth Fail        logo, then fastboot  n/a            UEFILOG0: Start EBS
+2        work/out/boot-pstore-raw-*.img (never flashed; `fastboot boot` refused on the RAM path)
+3        as found in `boot`             not captured                 logo only            n/a            UEFILOG0: Start EBS
+4        Mu-gauguin-silicon-gzip.img    not captured                 text, then assert    n/a            (not read)
 ```
+
+Row 4 is the one that matters and is step 4.8: our firmware ran and drew its own
+DEBUG stream on the panel, ending in `ASSERT [DxeCore] DxeMain.c(593)`. Rows 1–3
+each stop before that point — 1 and 3 because the tree in the image was stale,
+which is what step 4.7 found and row 4 fixes. The reason `fbreason` is "not
+captured" for 3 and 4 is that reading it needs a host channel to fastboot, and
+neither boot ended in fastboot.
 
 The `abllog` column is step 4.6's answer — the last stage ABL's own log for that
 boot reached. It is the one column that is filled in whether or not the payload

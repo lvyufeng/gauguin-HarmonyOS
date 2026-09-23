@@ -305,12 +305,17 @@ is why it is not being done now:
 The shell is therefore recorded as a decision to make after the first execution,
 not as a repair to make now. Nothing in the P2 gate depends on it.
 
-**Not verified — and this is the whole of the P2 gate:**
+**Was not verified when this was written, and is now verified the other way:**
 
-- **The firmware has never run.** It has never been loaded by a bootloader and
-  it has never executed an instruction. Everything above is static inspection
-  of a build product. Enumerating the volume proves the software is *in* the
-  image; it says nothing about whether the image is reached.
+- **The firmware has run.** At the time, it had never been loaded by a bootloader
+  and never executed an instruction — everything above was static inspection of a
+  build product, and enumerating the volume proved the software was *in* the image
+  without saying anything about whether the image was reached. It has since been
+  reached: the payload carrying the current device tree was written to `boot`, and
+  the panel came up full of our own `DEBUG ()` output, ending in
+  `ASSERT [DxeCore] DxeMain.c(593)` — a line of our source. `docs/08` step 4.8 has
+  the record. The conclusion below, that enumerating a volume is not evidence the
+  build works, still stands and is what made the distinction worth drawing.
 
 - **The `boot` path and the `fastboot boot` path are different code.** This is
   not a caveat, it is a reason for optimism that deserves to be stated with the
