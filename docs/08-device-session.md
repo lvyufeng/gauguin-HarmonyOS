@@ -2809,6 +2809,142 @@ lines all saying `Out of Resources` is one finding; the same `x27` spread across
 `Guid.xref` on the host maps them back to names, and `tools/pe-facts.py` says what
 is peculiar about each one.
 
+## Step 4.17 — The SEQ's length was a coincidence, and its letters say so
+
+This step changes no firmware. It finishes reading the line that has been read off
+the panel three times — the 46-character `P2 SEQ` — and it ends by withdrawing a
+conclusion that the host-side tooling had recorded.
+
+That conclusion was: `len(P2 SEQ)` is `mP2Apriori`, the number of Apriori entries
+that got promoted, so 46 characters means 46 promotions; the `miss` decoder band
+that yields exactly 46 promotions is `miss=14 PlatformInfoDxeDriver`; therefore the
+discovery walk stopped at physical 49 or 50 and was cut short. That reasoning uses
+the SEQ's **length**. It never looks at its **letters** — at which driver sits in
+each slot and what the panel says that driver's own result was — and that is the
+check that kills it.
+
+### The two stops the length allows, and what each of them predicts
+
+46 promotions is reachable from exactly two stops on this volume, physical 49
+(`seen=48`) and physical 50 (`seen=49`, where `seen` counts only files of the walk's
+type, `EFI_FV_FILETYPE_DRIVER`). Both predict the same string, because the file
+between them is not an Apriori name:
+
+```
+predicted  sssssssssssssssssLLLLLLLLLLLLLLLLLLLLLLLLL????
+observed   ssssssssssssssssssLLLsLLLLLLLLLLLLLLLLLLLLLLLL
+```
+
+Seventeen leading `s` and then all `L`, against the panel's eighteen leading `s`, a
+lone `s` at slot 21, and `L` everywhere else. Two slots disagree, and each
+disagreement is a driver that the stop would have moved into a position where its
+own measured result contradicts the panel:
+
+| slot | a stop at 49 or 50 promotes | its own result | the panel shows | which is |
+|---|---|---|---|---|
+| 17 | `RpmhDxe` (ap19, physical 33) | `L` | `s` | `NpaDxe` (ap18, physical 30) |
+| 21 | `DiskIoDxe` (ap24, physical 35) | `L` | `s` | `ShmBridgeDxe` (ap22, physical 74) |
+
+Slot 17 shifts because `PlatformInfoDxeDriver` (ap14) lives at physical 52 — the
+lowest Apriori-named file above the stop — so a stop drops it out of the list and
+every later slot holds the next driver instead. That is the mechanism the length
+argument was resting on, and it is also what refutes it.
+
+**Slot 21 is the one that settles it, because `ShmBridgeDxe` sits at physical 74.**
+No stop below 74 can promote it, yet the panel's slot 21 is its `s`. Every driver a
+stop at 49 or 50 *can* promote into that slot — `DiskIoDxe`, at physical 35, and the
+rest of the run between — has an observed result of `L`. So neither stop is
+available, and
+
+> no stop on this volume produces the observed SEQ, so those 46 characters are not a
+> stopped discovery walk.
+
+The two images agree on all of it. `work/out/p2-silicon-gzip-preread-0923d.img` (step
+4.13, the one on the phone) and the current step-4.16 build give byte-identical
+analysis from `=== The Apriori section` onward; 122 of the 123 files sit at the same
+offset with the same GUID, and the one that differs is `DxeCore` (physical index 1),
+whose size moved from 170544 to 172592.
+
+### The fork that replaces the stop, and the one number that names it
+
+With the stop gone, the 23 absent Apriori entries were either never asked for, or
+were asked for by a walk that cannot lose a file it was handed. `P2 APRI` has two
+admissible readings and each produces the observed SEQ exactly; the length
+fingerprint is what tells them apart, and they point at different code:
+
+| `P2 APRI` | what has to be true |
+|---|---|
+| `bytes=1120 entries=70 sum=a998b263` | the array was read whole and 23 of its names matched nothing — a premise is wrong, because `CoreAddToDriverList` inserts every driver the walk returns into `mDiscoveredList` unconditionally (`Dispatcher.c:1142-1190`) |
+| `bytes=752 entries=47 sum=b4ba9d75` | the Apriori section came back 368 bytes short of its 1120; `unhit` is then 1, `miss` is none, the promotion loop never looks past ap46, and the observed SEQ is the string it must print |
+
+`P2 STATS apriori=46/70` or `apriori=46/47` says the same thing in one number.
+`mP2AprioriCount` is `MAX (mP2AprioriCount, AprioriEntryCount)` — the largest Apriori
+file size ever *seen* — so the denominator is the fork, and that is the reason to
+read that line first.
+
+Neither branch explains the 27 failures. Every one of them — ap19, ap20, ap21 and
+ap23..ap46 — is inside the first 46, so it is promoted either way. `P2 ERR` is the
+line that answers the 27. These 46 characters answer a different question: *why the
+batch is 46 long*.
+
+### The tail shape, which the SEQ cannot argue for or against
+
+The `bytes=1120` branch above is the one reading that fits the SEQ with no stop at
+all: `ap1..ap46` promoted and `ap47..ap69` not, printed as `P2 APRI matched=1..46
+unhit=24 miss=47`. It is worth recording why the SEQ cannot be used as evidence for
+it — the reason being that a hypothesis stated as "these 46 were promoted" produces
+those 46 characters *by construction*, since the SEQ is generated from the promotion
+result and not from the walk. What would make the shape a measurement rather than a
+restatement is the missing set being contiguous in Apriori index (47..69) while
+being scattered in physical order:
+
+```
+ap47:58 ap48:57 ap49:56 ap50:55 ap51:62 ap52:63 ap53:64 ap54:65 ap55:66
+ap56:67 ap57:68 ap58:53 ap59:59 ap60:51 ap61:60 ap62:69 ap63:70 ap64:72
+ap65:61 ap66:14 ap67:20 ap68:21 ap69:22
+```
+
+ap66 `SimpleTextInOutSerial` is at physical 14 and ap69 `GraphicsConsoleDxe` at 22,
+both far below the last promoted file. That is what makes the shape unproducible by
+a stop, and it is also what leaves `miss=47` — not a cut walk, which would report one
+miss — as the thing to look for.
+
+### What this makes `P2 WALK` say
+
+With every stop refuted, the five `P2 WALK` lines stop being a fork of the SEQ and
+become a prediction the volume can be held to:
+
+```
+P2 WALK t=0 seen=80 iter=81 last=EBF342FE-B1D3-4EF8-957C-8048606FF671
+```
+
+That `last=` is the last *driver* file and not the volume's last file. The walk is
+type-filtered — `Type = mDxeFileTypes[Index]` is re-set before every `GetNextFile`
+and `mP2WalkLast` is copied only on a successful return — so the seven
+FREEFORM/PAD/DXE_CORE files after physical 115 are never returned at t=0 and never
+update it. `iter=81` is `seen + 1` on the pass that ends by running out of files,
+which is the pass a complete walk ends on. The other four lines are the control:
+`t=3` should read `seen=1 iter=2 last=D6A2CB7F-6A18-4E2F-B43B-9920A733700A` (the one
+DXE_CORE file) and `t=1`, `t=2`, `t=4` should each read `seen=0 iter=1` with an all
+zero GUID, since this volume has no file of those types at all.
+
+| | |
+|---|---|
+| image | **none** — this step changes no firmware, and the phone still carries step 4.13's `8c565681d1093b76c1cf184a549099aa2a957127c8be5ded439d934164535842` |
+| changed | `tools/fv-census.py`, and nothing else |
+| reproducible from | `b3faf21` carries the earlier half (the length band and the two candidate stops); the content check, the fork and the walk prediction land with this step |
+| what it refutes | the cut walk at physical 49/50, which is a fifth retraction in the same line as the four in `work/out/retracted/README.md` (that file is host-only — `work/` is ignored — which is why the finding is recorded here, in a file that reaches the remote) |
+
+### What to read, and it is the same list
+
+Nothing here changes what the phone should be asked. `P2 ERR` is still the line that
+answers the 27; `P2 APRI`'s `bytes=`/`entries=`/`sum=` and `P2 STATS`'s second number
+are now a decided pair rather than a range (`entries=70 sum=a998b263` with
+`apriori=46/70`, or `entries=47 sum=b4ba9d75` with `apriori=46/47`); `unhit` must be
+1 or 24 and must satisfy `apriori + unhit = entries`; and the five `P2 WALK` lines
+above are now predictions that can be wrong, which is more than could be said for
+them while the stop was still standing.
+
 ## Step 5 — Leave it bootable
 
 Whatever the outcome, end the session with the stock image back on `boot`:
