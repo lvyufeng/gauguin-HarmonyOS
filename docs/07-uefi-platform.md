@@ -2249,3 +2249,127 @@ Which is the property that makes this channel the one to reach for. `docs/08`
 step 4.5 reads the *payload's* log and needs the payload to have panicked and
 rebooted itself; `docs/08` step 4.6 reads *ABL's* log and needs only a block
 device.
+
+## P3 groundwork: which SoC's ACPI tables gauguin can use, decided on the GICC geometry
+
+The P2 platform ships no ACPI tables on purpose (see "The ACPI tables are absent
+by choice" above), so P3 has to produce them, and the first question is which of
+`Silicium-ACPI`'s 18 Qualcomm table sets is close enough to be worth adapting.
+`Platforms/Realme/bitra/AcpiTables.inf` answers the question the obvious way — it
+is the only Bitra-family platform file in the tree and it references the **Kona**
+set — and that answer is wrong for this device. The measurement below is why.
+
+**What the APIC table has to get right is the GICC geometry.** Every GICC subtable
+carries the PPI INTIDs for the PMU and the virtual timer and the base address of
+that core's redistributor frame, and a wrong one is not a degraded boot but an
+interrupt controller the OS cannot bring up. Gauguin's own device tree states its
+three values, and they are not negotiable:
+
+| | gauguin (`Resources/DTBs/gauguin.dts`) | as INTID |
+|---|---|---|
+| `pmu { interrupts = <0x01 0x05 0x08> }` | `0x05` | **21** (0x15) |
+| `timer { … 0x01 0x02 0xff08 … }` | `0x02` | **24** (0x18) |
+| `interrupt-controller@17a00000` … `reg = <… 0x00 0x17a60000 0x00 0x100000>` | `0x17a60000` | GICR base |
+
+with `uefiplat.cfg:81-84` confirming the same map from the other direction (GICD
+`0x17A00000` len `0x170000`, GICR `0x17A60000` len `0x100000`, QTIMER `0x17C00000`
+len `0x110000`) and `BitraPkg.dsc.inc:45-52` pinning them as PCDs
+(`PcdGicDistributorBase|0x17A00000`, `PcdGicRedistributorsBase|0x17A60000`,
+`PcdArmArchTimerSecIntrNum|17`, `PcdArmArchTimerIntrNum|18`).
+
+**All 18 sets, read out of `Decompiled/APIC.dsl`.** Columns are the GICC subtable's
+length, and the per-core PMU INTID, virtual-timer INTID and redistributor base;
+`stride` is the step between consecutive cores:
+
+| SoC set | GICC subtables | len | PMU | vtimer | GICR base | stride |
+|---|---|---|---|---|---|---|
+| Blackbolt | 8 | 82 | 22 | 25 | 0x17B00000 | 0x20000 |
+| Cedros | 8 | 80 | 23 | 25 | — | — |
+| Divar | 8 | 82 | 22 | 25 | 0x0F300000 | 0x20000 |
+| Hana | 8 | 80 | **21** | **24** | — | — |
+| Kailua | 8 | 80 | 23 | 25 | 0x17180000 | 0x40000 |
+| Kamorta | 8 | 82 | 22 | 25 | 0x0F300000 | 0x20000 |
+| Kodiak | 8 | 82 | 23 | 25 | 0x17A60000 | 0x20000 |
+| **Kona** | 8 | 80 | 23 | 25 | — | — |
+| Lahaina | 8 | 80 | 23 | 25 | — | — |
+| **Moorea** | 8 | 82 | **21** | **24** | **0x17A60000** | **0x20000** |
+| **Napali** | 8 | 82 | **21** | **24** | **0x17A60000** | **0x20000** |
+| Nazgul | 8 | 82 | 22 | 25 | 0x17B00000 | 0x20000 |
+| Nicobar | 8 | 82 | 22 | 25 | 0x0F300000 | 0x20000 |
+| Palawan | 8 | 82 | 23 | 25 | 0x17180000 | 0x40000 |
+| Palima | 8 | 82 | 23 | 25 | 0x17180000 | 0x40000 |
+| **Rennell** | 8 | 82 | **21** | **24** | **0x17A60000** | **0x20000** |
+| Starlord | 8 | 82 | 22 | 25 | 0x17B00000 | 0x20000 |
+| Waipio | 8 | 82 | 23 | 25 | 0x17180000 | 0x40000 |
+
+**Exactly three sets reproduce gauguin — Moorea, Napali and Rennell — and every
+other one fails on at least one field.** Hana and Lahaina get PMU and vtimer right
+only where they are wrong elsewhere; Kodiak has the right GICR base and the wrong
+INTIDs; the rest miss both. **Kona, the set the only Bitra-family platform file
+uses, matches nothing**: it carries no redistributor base at all (`GICR base —`)
+and INTIDs 23/25 where gauguin needs 21/24. A Kona APIC is therefore not a starting
+point that needs correcting, it is a different interrupt layout.
+
+**Moorea is the one to take, and there is a second, independent reason.** Moorea is
+the set used by `Platforms/Xiaomi/surya` — and surya is this project's own reference
+platform: `tools/make_uefi_platform.py` rewrites `suryaPkg/Include/APRIORI.inc` to
+point at `Binaries/gauguin/`, and it is also the source of seven of the eight MDP
+stream IDs this port hands `ArmSmmuDetach` (see "The MDP stream IDs … are **not**
+verified" above). So the tables come from the platform this port is already built
+on rather than from a stranger, and Moorea's set is
+`{APIC, FACP, GTDT}` — which is also the right *shape*: Rennell's set adds
+`MCFG`, and gauguin has no PCIe to describe.
+
+**The set decides APIC/FACP/GTDT. It does not decide the DSDT, and the DSDT is
+where gauguin actually differs.** `Platforms/Realme/bitra` ships its own
+`DSDT.aml` alongside the borrowed Kona set, and reading it is exactly what shows
+the boundary: bitra's `Device (UFS0)` declares its interrupt as
+
+```
+0x00000129,        /* bitra DSDT, _CRS */
+```
+
+and gauguin's device tree declares the same controller as
+
+```
+interrupts = <0x00 0x109 0x04>;    /* gauguin dts, ufshc */
+```
+
+`0x129` is 297 and `0x109` is 265. Borrowing bitra's DSDT would hand Windows an
+interrupt number 32 above the one this hardware raises, on the device the whole
+ported OS lives on — which is the kind of error that survives all the way to a
+storage timeout rather than to an assert. So the DSDT has to be written from
+gauguin's own device tree, and `Platforms/Realme/bitra/DSDT.aml` is a worked
+example of the form, not a source of values.
+
+**What exists and what is missing, so the next session starts from the right
+place.** Present: the table sets above, `iasl` at `/usr/bin/iasl`, and 20 platform
+`AcpiTables.inf` files to copy the shape from — all of them
+`FILE_GUID = 7E374E25-8E01-4FEE-87F2-390C23C606CD`,
+`MODULE_TYPE = USER_DEFINED`, `INF_VERSION = 0x00010005`. Missing, all four of them:
+
+1. `gauguin/AcpiTables.inf` plus a `.dsl`/`.asl` DSDT and SSDT — the only new
+   content; the APIC/FACP/GTDT come from `Moorea/`.
+2. The `INF RuleOverride = ACPITABLE gauguin/AcpiTables.inf` line at
+   `gauguin.fdf:73`, which is present and commented out.
+3. A `[Components]` section in `gauguin.dsc` — **the file has none at all**, so
+   adding the table module is not a one-line insert.
+4. `BitraPkg/Library/AcpiTableUpdateLib/AcpiTableUpdate.c`, whose `UpdateAcpiTables ()`
+   is the deliberate no-op with the P3 TODO. This is where gauguin's own
+   corrections get applied over the borrowed tables.
+
+**A trap in reading these files, because it produced a confident wrong answer
+first.** The GICC subtable is labelled `Subtable Type : 0B [Generic Interrupt
+Controller]`; a parser that looks for "GIC CPU Interface" — the name the ACPI spec
+and most prose use — matches no subtable in any of the 18 files and reports *every*
+SoC as having no GICC. The first pass of this comparison did exactly that, and the
+table above is the corrected one.
+
+| | |
+|---|---|
+| sets examined | 18 (`Silicium-ACPI/Silicon/Qualcomm/*/Decompiled/APIC.dsl`) |
+| sets matching gauguin | **3** — Moorea, Napali, Rennell |
+| set chosen | **Moorea** (`Platforms/Xiaomi/surya` uses it) |
+| set `Platforms/Realme/bitra` uses | Kona — matches nothing |
+| DSDT | must be written for gauguin; bitra's has UFS at 297, gauguin's is 265 |
+| next step | `gauguin/AcpiTables.inf` + DSDT, then 1–4 above |

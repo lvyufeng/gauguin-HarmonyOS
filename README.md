@@ -74,7 +74,7 @@ map and the restore procedure.
 | **P0** | Device survey + full partition backup + XBL driver inventory | every partition dumped; DXE set identified | ✅ done |
 | **P1** | Mainline Linux on gauguin (`gauguin.dts` + kernel + `fastboot boot`) | framebuffer up, UFS mounted, USB console | **gate not observed** — image builds, `fastboot boot` was refused |
 | **P2** | UEFI skeleton (`Silicon/Qualcomm/BitraPkg` + `Platforms/Xiaomi/gauguinPkg`) | boot manager draws on screen, UFS enumerates as a block device | **runs** — the image with the current device tree was written to `boot` and our firmware **executes**: the panel fills with its own DEBUG stream (`SerialPortLib` is the framebuffer in a DEBUG build) and then stops on `ASSERT [DxeCore] DxeMain.c(593)`, one architectural protocol short of handing off to BDS. Three earlier attempts stopped before reaching our code because the tree in the image had no `/__symbols__`. See `docs/08` step 4.8 for that, and step 4.9 for the eight missing protocols and the instrumentation that names the driver |
-| **P3** | UEFI with full driver set + ACPI tables | Windows installer boots off USB | not started |
+| **P3** | UEFI with full driver set + ACPI tables | Windows installer boots off USB | **groundwork** — the ACPI table set is decided (Moorea, on the GICC geometry; Kona, which the only Bitra-family platform file uses, matches nothing) and the DSDT's one known device-specific correction is identified (UFS at INTID 265, not bitra's 297). No tables built yet — `docs/07` has the decision and the four things still missing |
 | **P4** | Windows 11 ARM64 deployment | Windows desktop on the device | not started |
 | **P5** | Hardware enablement in Windows | touch / Wi-Fi / GPU / audio one by one | not started |
 
@@ -95,7 +95,13 @@ which one: one character per Apriori entry, in the order the dispatcher ran them
 load. `docs/08` step 4.9 has the line and how to read it.
 
 The instrumentation is written into `boot` and was booted on 2026-09-23; the
-reading is outstanding. The depex reading of the same evidence is dead —
+reading is outstanding. A later attempt to read it off a photograph of the panel
+established only that the photograph is not the panel — near-black is 0.16% of the
+frame and no 64×64 block anywhere is darker than 30% of full scale, where a
+framebuffer console would make near-black dominate — so the control string still
+has not been captured. `docs/08` step 4.11 has the measurements, and `boot` was
+re-read and verified to still hold the same image, so re-taking the reading needs
+no flash. The depex reading of the same evidence is dead —
 four of the eight are `[Depex] TRUE` and the other four need only Timer and
 Variable, all installed well before them — so what is left is that something in
 the middle of the batch breaks shared state and returns success anyway, which no

@@ -887,7 +887,7 @@ Guid; EFI_STATUS Status; CHAR8 Phase;}`, `mP2Diag[64]`, `P2Record ()` — wired 
 `CoreAddToDriverList` (`mP2Discovered`), the Apriori promotion (`mP2Apriori`), the
 `CoreLoadImage` failure path (`Phase 'L'`) and around `CoreStartImage`
 (`Phase 'S'`, with `mP2Started` on success). It reports from
-`CoreDisplayDiscoveredNotDispatched`, which `DxeMain.c:575` calls immediately
+`CoreDisplayDiscoveredNotDispatched`, which `DxeMain.c:576` calls immediately
 before `CoreAllEfiServicesAvailable ()` at 582 and the assert at 593 — so the
 output lands while the evidence is still the last thing on the panel:
 
@@ -1179,6 +1179,82 @@ same signal read off the assert instead of off `P2 SEQ`.
 This is still unverified on hardware. The phone was off USB for every build in
 steps 4.9 and 4.10, and nothing in either step has been run on the device.
 
+## Step 4.11 — The reading was attempted, and the photograph is not the console
+
+Steps 4.9 and 4.10 both stop waiting on the same thing: the baseline payload's
+`P2 SEQ` line off the panel. The phone came back on USB later on 2026-09-23 and
+went into TWRP, so the session's host-side checks could run again — `adb devices -l`
+filled in as `d25f844e recovery product:twrp_gauguin device:gauguin`, `lsusb` showed
+`2717:ff68`, and reading `boot` back off the device with `dd` matched
+`Mu-gauguin-silicon-gzip.img` (`09db7402…`) byte for byte. **The instrumented build
+is confirmed to be the content of the partition, so nothing has to be flashed to
+re-take the baseline.**
+
+What did not happen is the read. A photograph of the screen was taken and it is not
+the firmware console. Guessing is what this repository keeps having to unlearn, so
+the frame was measured instead, over the full 1279×2465:
+
+| | |
+|---|---|
+| mean grey | 136.6 |
+| pixels below 16 | **0.16 %** |
+| pixels below 32 | **0.19 %** |
+| pixels below 64 | 3.24 % |
+| darkest 32×32 block, mean | **49.9 / 255** |
+| darkest 64×64 block | **30.5 % of full scale** |
+| saturation max | 0.423 — one blob at the lower right and a strip down the left edge |
+
+A DEBUG build's console is `FrameBufferSerialPortLib` + `BaseDebugLibSerialPort`
+(`SiliciumPkg.dsc.inc:160-169`), so the screen it draws is **white DEBUG text on
+black across the whole panel**. A frame containing that cannot be a mid-grey
+photograph: near-black would dominate the histogram rather than be 0.16 % of it,
+and no 64-pixel block anywhere could sit at 30 % brightness. The only strongly
+coloured content — a warm, smooth gradient in the lower right, cropped out at 3×
+and looked at directly — is photographic; text is neither coloured nor smooth.
+
+So the frame is a scene, not a panel: the screen was off, or the phone was still on
+its earlier screen, or the shot was taken before the payload had drawn. The useful
+part is that this costs no host work to fix. The reading is deterministic for a
+given image, so `boot` does not have to be written again to re-take it.
+
+**Two things this project had been carrying were wrong, and both are closed now.**
+
+- **The `P2BRINGUP` call site is `DxeMain.c:576`, and it is correct.** Step 4.9
+  says 575. The call is `CoreDisplayDiscoveredNotDispatched ()` at 576, after
+  `CoreDispatcher ()` at 562 and before `Status = CoreAllEfiServicesAvailable ()`
+  at 582 — whose failure is the `ASSERT_EFI_ERROR` at 593 the panel ends on. The
+  instrument prints while the evidence it describes is still the last thing drawn,
+  which is what it was placed there to do rather than something it happens to do.
+- **The dispatch drain has no early exit, so the eight have three fates, not four.**
+  Reading `Dispatcher.c:523-664` end to end: a started entry leaves the queue with
+  `Initialized = TRUE` and `Scheduled = FALSE` and is never re-added, and the only
+  `continue` in the loop (582) skips `CoreStartImage` for that one entry without
+  ending the loop. Nothing breaks out; the `do { … } while (ReadyToRun)` at 664 is
+  reached. So each of the eight is (a) scheduled and never promoted — a `?` in
+  `P2 SEQ`; (b) promoted and `CoreLoadImage` failed — an `L` at line 572; or
+  (c) promoted, loaded, and `CoreStartImage` returned an error — an `S` at line 611.
+  There is no fourth way, and in particular no silent drop.
+
+**Two traps to carry, because between them they have now cost time twice.** Both
+defeat the obvious command and both produce a confident wrong answer:
+
+- The payload holds `FVMAIN` **compressed** inside `FVMAIN_COMPACT`, so grepping
+  the `.img` or the `.fd` for a `DEBUG ()` format string finds nothing and reads as
+  "the instrumentation is not in the build". It is. Reach it through
+  `fv-inventory.py`'s `fvmain_of_fd ()` / `unpack ()`.
+- The payload's gzip stream has the **DTB appended**, so `gzip.decompress ()`
+  raises `BadGzipFile: Not a gzipped file (b'\xd0\r')` on a file whose first four
+  bytes at 0x800 are a valid `1f 8b 08 00`. Inflate one member instead:
+  `zlib.decompressobj (16 + zlib.MAX_WBITS)`, then `decompress (blob) + flush ()`.
+
+**The order of operations is unchanged and the baseline is still first.** In TWRP,
+`Reboot → System`, wait for the assert, then photograph the whole panel square-on
+and filling the frame — that screen is the last thing drawn and it stays up. Read
+`P2 SEQ […]` first, then `P2 STATS …`, then the `P2 DIAG` lines above them. Only
+after that string is written down does `Mu-gauguin-arch-first-gzip.img` go on, and
+its three lines are read the same way. **The baseline is the control and it cannot
+be recovered once the variant has overwritten `boot`.**
+
 ## Step 5 — Leave it bootable
 
 Whatever the outcome, end the session with the stock image back on `boot`:
@@ -1204,14 +1280,18 @@ attempt  image                          fbreason                     screen     
 2        work/out/boot-pstore-raw-*.img (never flashed; `fastboot boot` refused on the RAM path)
 3        as found in `boot`             not captured                 logo only            n/a            UEFILOG0: Start EBS
 4        Mu-gauguin-silicon-gzip.img    not captured                 text, then assert    n/a            (not read)
+5        (not flashed - same as row 4)  not captured                 not the panel        n/a            (not read)
 ```
 
 Row 4 is the one that matters and is step 4.8: our firmware ran and drew its own
 DEBUG stream on the panel, ending in `ASSERT [DxeCore] DxeMain.c(593)`. Rows 1–3
 each stop before that point — 1 and 3 because the tree in the image was stale,
-which is what step 4.7 found and row 4 fixes. The reason `fbreason` is "not
-captured" for 3 and 4 is that reading it needs a host channel to fastboot, and
-neither boot ended in fastboot.
+which is what step 4.7 found and row 4 fixes. Row 5 is the attempt to read row 4
+back: `boot` was re-read and verified to still hold the same instrumented image, so
+no flash was needed and none was done, and the photograph that came back was
+measured and is not the panel — step 4.11 has the numbers. The reason `fbreason` is
+"not captured" for 3–5 is that reading it needs a host channel to fastboot, and none
+of those boots ended in fastboot.
 
 The `abllog` column is step 4.6's answer — the last stage ABL's own log for that
 boot reached. It is the one column that is filled in whether or not the payload
