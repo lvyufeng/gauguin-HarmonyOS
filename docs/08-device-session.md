@@ -24,7 +24,13 @@ ls -la work/out/boot-pstore-*.img                     # P1's kernel, six shapes
 ls -la work/out/p2-variants/Mu-gauguin-stock-*.img   # the two P2 variants
 tools/restore-stock-boot.sh --check                  # must print "ok"
 tools/flash-boot.sh                                  # usage line, exits 1 - it is executable
+tools/pull-bootloader-log.sh /tmp/bllog-baseline     # step 4.6's tool; reads the P0 dump
 ```
+
+That last one is worth running before the phone is touched at all: with no device
+attached it falls through to the P0 dump and prints the baseline (all five slots
+reaching `Start EBS`), which is both a check that the tool works and the thing
+step 4.6's answer is read against. `docs/07` has the format.
 
 `ls` proves a file is there, not that it is current. Both sets are rebuilt in one
 command each — `tools/build-p1-payloads.sh` and `tools/build-p2-payloads.sh` — and
@@ -211,6 +217,13 @@ The script also dumps `oem uefilog` / `lkmsg` / `lpmsg`, `oem device-info`,
 `getvar all`, and `slot-unbootable` / `slot-retry-count`. Read every file it
 wrote before moving on; the whole point of capturing them together is that a
 later command may not answer.
+
+**If it does not answer — or before bothering it at all — go to step 4.6.** ABL
+writes a log of every boot to the `logfs` partition regardless of whether its
+fastboot is alive, and that log is where a refusal by ABL records itself. Note
+that `oem uefilog` has never actually returned anything on this phone (the one
+attempt was made when ABL was already silent), so it is the `dd` route in step 4.6
+that has evidence behind it.
 
 ## Step 3 — Establish whether the phone can boot anything we produce
 
@@ -504,6 +517,50 @@ build of ours from an earlier attempt, not this one. Then read for `UFS`,
 stops. That output is what P1's gate is actually asking for, and it is also the
 input to P2.
 
+## Step 4.6 — Read ABL's log, which does not depend on the payload
+
+Step 4.5 reads the *payload's* log and needs three things to have gone right: the
+payload reached a console, it panicked, and the device honoured a warm reset.
+This step reads *ABL's* log and needs one thing: a block device. Do it on every
+session, whether or not step 4.5 produced anything, because it answers the
+question the payload's own log cannot — **what did ABL do with the image we
+gave it.**
+
+```sh
+tools/pull-bootloader-log.sh
+```
+
+It tries `fastboot oem uefilog`, then `dd` of `/dev/block/by-name/logfs` over adb
+— which is the TWRP route, and TWRP does not go through ABL — then falls back to
+the P0 dump as the baseline. It ends by reading whatever it got with
+`tools/read-logfs.py`, which prints each slot's stage table and marks the last
+stage reached. Of the three, the `dd` route is the one with evidence behind it:
+`oem uefilog` has been attempted once and returned nothing (`docs/07`).
+
+Read the answer like this. Every boot of this phone before any of this work
+reached `Start EBS`, so **the baseline is "everything", and the comparison is
+exact** (the five slots, their stage tables and their `pureason` values are in
+`docs/07`):
+
+| what the new slot shows | meaning |
+|---|---|
+| reaches `Start EBS`, like all five baseline slots | ABL completed and handed over. The `Cmdline:` line is the one to compare: it is composed by ABL and printed by ABL, so it says which boot image was actually loaded |
+| stops after `Load Image boot`, with an `Apply Overlay` or `DTB offset` error | **the payload was reached and ABL refused it**, and the error text is which of the two refusals it was (both are in the ABL string table, `docs/07`) |
+| stops after `Load Image boot`, with no stage after it | ABL tried the image and got no further — the case step 1b describes as "the image in `boot` is implicated in the wedge" |
+| no new slot at all, ring unchanged | that boot produced no completed log. The inferred reading is that ABL never shut its boot services down (`save logfs files` is a shutdown-time write, `docs/07`), which would make the fastboot a *failed boot* rather than a refused one — but this row is inference from the ABL string table and has not been observed, so treat it as a lead, not an answer: step 1b's TWRP route and step 2's `misc` check are what actually settle it |
+
+The `pureason` value is how a slot is matched to the physical session, not a
+verdict on it (`docs/07` has what the five baseline values look like). It is also
+worth knowing ABL writes the same value into the device tree — so a payload that
+can print anything at all can read the reason recorded for the boot it is running
+in from `/proc/device-tree/chosen/pureason`, with no host involved at all.
+
+One thing this log cannot do, recorded so it is not read as a signal: the
+`Load Image boot total time` it prints **is the same whatever is in `boot`**. The
+read is whole-partition because the phone boots in orange state, so ~256 ms is the
+cost of 128 MB and not a fingerprint of our 1 MB image (`docs/07` has the source
+for that).
+
 ## Step 5 — Leave it bootable
 
 Whatever the outcome, end the session with the stock image back on `boot`:
@@ -523,12 +580,16 @@ For each attempt, one line — the phone is at a distance and memory is not a
 channel:
 
 ```
-attempt  image                          fbreason                     screen            pstore
--------  -----------------------------  ---------------------------  ----------------  ------
-1        (as found)                     LoadImageAndAuth Fail        Redmi logo, then fastboot   n/a
+attempt  image                          fbreason                     screen            pstore         abllog
+-------  -----------------------------  ---------------------------  ----------------  ------         ------
+1        (as found)                     LoadImageAndAuth Fail        logo, then fastboot  n/a         UEFILOG0: Start EBS
 2        work/out/boot-pstore-raw-*.img ...
 ```
 
+The `abllog` column is step 4.6's answer — the last stage ABL's own log for that
+boot reached. It is the one column that is filled in whether or not the payload
+ran, so it is the column worth not leaving blank.
+
 That table is the entire output of a session. Everything else is in the files
-`fastboot-capture.sh` wrote, and — if step 4a ran — in the pstore ring, which is
-gone the moment the power button is held.
+`fastboot-capture.sh` and `pull-bootloader-log.sh` wrote, and — if step 4a ran —
+in the pstore ring, which is gone the moment the power button is held.

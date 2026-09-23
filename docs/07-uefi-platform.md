@@ -2042,3 +2042,149 @@ state the phone is actually stuck in (`docs/07`, "But that is not what the phone
 is stuck in") has ABL resident and its command loop stalled — which is ABL's own
 failure, not ours. The P2 gate is still open, and the next attempt tests the port
 for the first time rather than re-testing it.
+
+
+### ABL keeps a log of every boot, and it needs neither the screen nor the payload
+
+The two channels the project has been leaning on both fail at exactly the moment
+they are needed. The screen needs the payload to have got as far as a console, and
+pstore needs it to have got as far as a *panic* and a warm reboot. Neither can
+answer the question a refused payload raises, which is not "what did our code do"
+but "**what did ABL do with what we gave it**" — and ABL writes that down every
+boot, to a partition, in plain text, whether or not anything of ours ever runs.
+
+`logfs` is a FAT12 volume holding a ring of five 32 KiB files, `UEFILOG0.TXT`
+through `UEFILOG4.TXT`. ABL writes the current slot as it shuts its boot services
+down. Measured on this device, from the P0 dump
+(`~/backup/gauguin/images/part-logfs.img`, taken before anything was ever
+flashed):
+
+```
+5 live entries, 250 deleted
+4096-byte sectors, 1 sector/cluster, 1 reserved, 2 FATs, 512 root entries
+UEFILOG0.TXT  32,768 bytes   Start EBS   pureason = 0x40081   312 lines
+UEFILOG1.TXT  32,768 bytes   Start EBS   pureason = 0x80040   286 lines
+UEFILOG2.TXT  32,768 bytes   Start EBS   pureason = 0x80080   306 lines
+UEFILOG3.TXT  32,768 bytes   Start EBS   pureason = 0x40001   284 lines
+UEFILOG4.TXT  32,768 bytes   Start EBS   pureason = 0x40081   304 lines
+```
+
+(Line counts are non-blank lines, which is what `tools/read-logfs.py` reports.)
+
+**Which slot is newest is read off the directory, not assumed.** The live entries
+sit at directory indices 2, 4, 6, 8 and 10 in the order 4, 3, 2, 1, 0, and the 250
+deleted entries beside them repeat that same descending cycle. Directory entries
+append in write order, so the name written *last* is `UEFILOG0.TXT` — which is why
+0 is the newest, and why `tools/read-logfs.py` prints it first. The 250 deleted
+entries are 50 complete cycles of the five names, so the ring has already been
+overwritten about fifty times and still holds five boots. **Every one of the five
+reached `Start EBS`**, i.e. completed handover — which is what makes it a
+baseline. The question about a new session is always "does its slot look like
+these, and if not, where does it stop", and the first line that differs is the
+answer.
+
+The log covers ABL's whole life, in order, and each stage answers a different
+question:
+
+| line in the log | what it settles |
+|---|---|
+| `UEFI Ver : 5.0.210418.BOOT.XF.3.3-00285-BITRALAZ-4` | which ABL this is — the build string the whole ABL analysis in this document is against |
+| `DisplayDxe: MDPPLATFORM_PANEL_J17_TIANMA_NT36672C_LCD_DSC_VIDEO` | the panel, so "the screen stayed black" can be separated from "the backlight was never told" |
+| `PON Reason is 129 cold_boot:1`, `KeyPress:0, BootReason:32` | which kind of boot this was — the number that makes a power-button reset distinguishable from a clean one |
+| `Load Image vbmeta` / `boot` / `dtbo total time: N ms` | the boot image path was **entered**, and all three partitions were read |
+| `Apply Overlay total time: N ms` | the vendor overlay was merged into **the tree we shipped** — the stage that refused every P2 image built so far |
+| `Cmdline: …` | the command line ABL actually composed, not the one we asked for |
+| `pureason = 0x…` | which boot this slot *is* — a power-on reason, not a verdict (below) |
+| `Shutting Down UEFI Boot Services: N ms` → `Start EBS` | handover happened |
+
+Two lines deserve a warning attached, because both look like better evidence than
+they are.
+
+**`Load Image boot total time` does not tell you which image was in `boot`.** It
+looks like it should: Android's `boot` is ~64 MB and contains ~1 MB. But the
+number comes from `AvbReadFromPartition` (`avb_ops.c:308`), and the size it reads
+is decided *before* the transfer — `image_size = hash_desc.image_size`, except
+that `if (allow_verification_error)` it is overwritten with
+`get_size_of_partition()` (`avb_slot_verify.c:173-175`, with the comment saying
+so: *"just load the entire partition"*, because `fastboot flash boot` with a
+bigger image is a normal workflow). This phone boots in **orange** state with
+verification errors allowed — the log says so two lines later, `boot state is:
+orange(1)`, and `fatal error is not set` — so the read is always the whole
+partition and always costs about the same. All five baseline slots: 256, 256, 255,
+256, 255 ms. It is a fixed cost, not a signature.
+
+**`pureason` identifies the boot; it does not grade it.** The five baseline slots
+carry 0x40081, 0x80040, 0x80080, 0x40001 and 0x40081, and the shape of each is
+the `PON Reason is N` printed earlier in the same slot plus high bits (`PON
+Reason is 129` with `pureason = 0x40081`; `PON Reason is 64` with 0x80040). So it
+is a power-on reason recorded through to the end of the log — useful for matching
+a slot to a physical session and for noticing that two boots were the same kind —
+and **not** a statement about whether the boot succeeded, which is what the stage
+table is for. It is also **not only a log line**: the phone's ABL string table
+(`work/abl_pe.bin`, at `0xb814b`) has `"pureason = 0x%x"` immediately followed by
+`"pureason"` and `"ERROR: Cannot update chosen node [pureason] ..."`, next to the
+same pair for `linux,initrd-end`. So ABL writes it into the device tree as well,
+under `/chosen` — which means a payload that can print anything at all can read
+the reason recorded for *this* boot from `/proc/device-tree/chosen/pureason`,
+without a host, without adb, and without the log partition.
+(`UpdateDeviceTree.c:775-843` in the vendored source shows the same mechanism for
+`bootargs`, `rng-seed`, `kaslr-seed` and `linux,initrd-*`; `pureason` is not in
+that copy — see below — but the mechanism is the same one.)
+
+**The refusal itself lands in this log.** `Apply Overlay`
+(`0xb6bca`), `DTB offset is NULL` (`0xb6e4f`) and `Appended Soc Device Tree`
+(`0xb69bf`) are all strings in the phone's ABL PE, so the failure mode that
+refused both P2 payloads (`docs/07`, above) is written down at the time it
+happens. That is the whole point: a refused payload produces a **silent phone and
+a loud log**, and until now the project had no way to read the second one.
+
+Three ways in, and the tools pick whichever answers:
+
+```sh
+tools/pull-bootloader-log.sh          # tries all three in order, then reads it
+tools/read-logfs.py work/bllog-.../logfs.img -o work/bllog-.../slots
+tools/read-logfs.py work/bllog-.../slots/UEFILOG0.TXT --full
+```
+
+| route | needs | reaches |
+|---|---|---|
+| `fastboot oem uefilog` | ABL's fastboot answering | **unexercised on this phone** — see below |
+| `dd if=/dev/block/by-name/logfs` | TWRP (no root needed) or Android with `su` | the partition — the last boot that completed a shutdown. **This is the route that has been used** |
+| the P0 dump | nothing | the baseline, and it is the only route that always works |
+
+The command name is confirmed from the phone's ABL, not guessed: `oem uefilog`
+sits at `0xbe309` in a NUL-separated table with `oem fbreason`, `oem lkmsg`,
+`oem lpmsg`, `oem mtdoops`, `oem edl`, `oem uart-enable` and `oem poweroff`, and
+the backing protocol is visible too — `gLogFsProtocol save logfs files failed:%d`
+next to `gLogFsProtocol get logfs files failed:%d`, and `Failed to save logfs
+files` next to `Failed to get logfs files`. There is no usage string anywhere in
+the PE, so what arguments the command takes is **not knowable from the binary**;
+the tool calls it bare, which is the only form that can be justified from what is
+there.
+
+**What that route returns is not knowable from the binary either, and it has
+never run.** `save` and `get` being separate calls is consistent with a live
+in-memory buffer that `oem uefilog` dumps — which would be the only way to read a
+boot that never reached the shutdown that writes the file — and equally consistent
+with `save` having already put the text on the partition and `get` reading it
+back out. `work/fb-uefilog.txt` is **0 bytes**: it was created by a session where
+ABL had already stopped answering, so the command has been attempted exactly once
+and returned nothing. Recorded because a route described here as the fastest one
+would otherwise be read as one that works, and it is the only one of the three
+with no evidence behind it.
+
+**The vendored ABL is a reduced copy, and that bounds what can be asked of a
+Mu-Silicium build.** `work/ref/mu_qcommodulepkg` has 66 `.c` files and its
+`FastbootLib/FastbootCmds.c` registers six commands — `enable-charger-screen`,
+`disable-charger-screen`, `off-mode-charge`, `select-display-panel`,
+`device-info`, `display-cmdline`. The phone's own ABL registers all of those
+*plus* `fbreason`, `lkmsg`, `lpmsg`, `uefilog`, `mtdoops`, `edl`, `uart-enable`
+and `poweroff`. So `oem fbreason` and `oem uefilog` are commands the **stock** ABL
+answers and a Mu-Silicium-built one would not, which is worth knowing before
+reading a missing answer as a wedged transport — and it is a second, independent
+reason the logfs partition route matters: it does not go through ABL at all.
+
+Which is the property that makes this channel the one to reach for. `docs/08`
+step 4.5 reads the *payload's* log and needs the payload to have panicked and
+rebooted itself; `docs/08` step 4.6 reads *ABL's* log and needs only a block
+device.

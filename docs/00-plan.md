@@ -41,15 +41,30 @@ outcome means and which payload to try next, is
    or a fastboot thread stuck behind a still-live USB stack (not recoverable;
    power button). The current state is the third, and it also means ABL is
    still resident, so the silence is not evidence our image ran.
-2. `tools/restore-stock-boot.sh` — the A/B control: put the stock `boot` back
+   Note that `oem fbreason` and `oem uefilog` are commands **this phone's**
+   ABL has and a Mu-Silicium-built one does not (`docs/07`), so their absence
+   is not by itself a wedged fastboot.
+2. `tools/pull-bootloader-log.sh` + `tools/read-logfs.py` — the device's third
+   log channel, and the only one that does not depend on the payload running.
+   ABL writes a log of every boot into the `logfs` partition: a FAT12 volume
+   holding a ring of five 32 KiB `UEFILOG*.TXT` files, read here as a stage
+   table with the last stage reached marked. Baseline, from the P0 dump: all
+   five recorded boots reached `Start EBS`, i.e. handed over — so a slot that
+   stops earlier is the answer, and `Apply Overlay` / `DTB offset is NULL` are
+   both in ABL's own string table, meaning a refusal is written down even
+   though the phone says nothing. Routes: `fastboot oem uefilog` (never yet
+   returned anything here), `dd` of `/dev/block/by-name/logfs` from TWRP or
+   root Android, or the P0 dump. `docs/07` has the format; `docs/08` step 4.6
+   has how to read an answer.
+3. `tools/restore-stock-boot.sh` — the A/B control: put the stock `boot` back
    and see whether Android returns.
-3. `tools/flash-boot.sh` — the one command that writes a payload to `boot`, over
+4. `tools/flash-boot.sh` — the one command that writes a payload to `boot`, over
    whichever route answers. It exists because step 1b can make the fastboot route
    unreachable (the image in `boot` wedging ABL, so a reset reproduces the wedge)
    and TWRP is then not a fallback but the only way in; it also reads the
    partition back and compares the hash, so "the write landed" is established
    rather than assumed.
-4. `work/out/boot-pstore.img` and its five siblings `-raw`, `-raw-txt`,
+5. `work/out/boot-pstore.img` and its five siblings `-raw`, `-raw-txt`,
    `-raw-noefi`, `-gz-noefi`, `-gz-fixedsz` — P1's mainline kernel in the six
    shapes that differ on the properties separating our images from the one the
    phone boots (raw vs compressed, EFI-stub form of the arm64
@@ -77,7 +92,7 @@ outcome means and which payload to try next, is
    the two failures this bring-up is most likely to hit (an oops in a probe, and a
    spin waiting on a clock or regulator that never comes ready) — otherwise both
    end in a kernel that neither prints nor reboots, and the ring is never read.
-5. `work/out/p2-variants/Mu-gauguin-stock-{none,gzip}.img` — two stock-shaped
+6. `work/out/p2-variants/Mu-gauguin-stock-{none,gzip}.img` — two stock-shaped
    builds, one per surviving candidate (uncompressed vs gzip kernel). Each pairs
    with a P1 variant on the compression property, which is what makes the pair —
    and not the individual attempt — the thing to read: see step 4b/4c in the
@@ -92,9 +107,9 @@ outcome means and which payload to try next, is
    the vendor overlay (`docs/07`). The image that *is* in `boot` is
    `Mu-Silicium/Mu-gauguin.img`, and it carries the same stale tree.
 
-Those pieces are backed by four offline tools, which exist because a device cycle
-is expensive and a bad image costs a physical reset. Every defect this project has
-found in a payload was found by one of them rather than by the phone:
+Those pieces are backed by the offline tools below, which exist because a device
+cycle is expensive and a bad image costs a physical reset. Every defect this
+project has found in a payload was found by one of them rather than by the phone:
 
 - `tools/abl-boot-check.py` — replays ABL's decision path over a built image and
   says whether *this phone* would take it: the arm64 header check, the
@@ -128,6 +143,12 @@ found in a payload was found by one of them rather than by the phone:
 - `tools/build-p1-payloads.sh` / `tools/build-p2-payloads.sh` — the two payload
   sets, each ending in both checkers so a payload that fails one never reaches
   anyone.
+- `tools/read-logfs.py` — reads the bootloader's own per-boot log out of the
+  `logfs` partition, from a raw image, an extracted slot, or a `oem uefilog`
+  dump, and prints it as a stage table with the last stage reached marked. It is
+  the one reader here that is aimed at the device rather than at a file we built,
+  and it is offline in the sense that matters for the current blocker: the P0
+  dump answers it with no phone at all.
 
 The reference for all of these is Qualcomm's own `QcomModulePkg` (the ABL
 source), vendored at `work/ref/mu_qcommodulepkg` from
