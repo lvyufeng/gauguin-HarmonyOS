@@ -1385,18 +1385,78 @@ mapped back through the array, and landing on `L`.
 can produce it are `CoreLoadImageCommon`'s `AllocateZeroPool` of the
 `LOADED_IMAGE_PRIVATE_DATA` and `CoreLoadPeImage`'s page allocation. So this is not
 27 drivers deciding they do not support this platform, and it is not 27 dependency
-failures: it is 27 loads that could not get memory, in a row.
+failures: it is 27 loads that each returned a status that *renders* as Out of
+Resources, in a row. Which of those two allocation sites produced it, and why an
+identical request two positions later succeeded, is the open question — the
+section below narrows it.
+
+### What the host can rule out, and it is more than expected
+
+Three of the obvious readings of "27 loads in a row ran out of memory" were
+checked against the built volume and do not hold. They are recorded because each
+one is the first thing anyone will reach for next time.
+
+**Ruled out: the PE images.** All 80 drivers were parsed out of `FVMAIN.Fv` and
+compared on `ffs size, pe size, NumberOfSections, SizeOfOptionalHeader,
+Characteristics, SizeOfImage, SizeOfHeaders, SizeOfCode, SizeOfInitializedData,
+SizeOfUninitializedData, AddressOfEntryPoint, BaseOfCode, ImageBase,
+SectionAlignment, FileAlignment, Subsystem, DllCharacteristics, SizeOfStackReserve,
+SizeOfHeapReserve, NumberOfRvaAndSizes, .reloc-directory size`, plus the section
+name/characteristics layout. **Not one of them separates the two sets.** Everything
+has `ImageBase 0x0`; nothing is reloc-stripped (`Characteristics` bit 0 clear on all
+80); `SectionAlignment` is `0x1000` except for the Runtime family at `0x10000`, and
+that family straddles the boundary in both directions — `ReportStatusCodeRouterRuntimeDxe`,
+`StatusCodeHandlerRuntimeDxe` and `RuntimeDxe` succeed at `0x10000` while
+`CapsuleRuntimeDxe`, `EmbeddedMonotonicCounter`, `RealTimeClock`,
+`ResetSystemRuntimeDxe` and `VariableRuntimeDxe` fail at the same value. The section
+layout is `{.text,.data,.reloc}` or `{.text,.rdata,.data,.pdata,.reloc}` on both
+sides. There is nothing to see in the binaries.
+
+**Ruled out, and this is the sharp one: plain exhaustion.** Summing
+`SizeOfImage` (plus `SectionAlignment` where it exceeds a page) over the 46 loads in
+queue order gives **6.10 MB total**, spread over 46 images. And the two drivers on
+either side of the boundary have the *same* `SizeOfImage`: `PdcDxe` is `36,864`
+and is an `L` at queue position 19; `ShmBridgeDxe` is `36,864` and is an `s` at
+queue position 21. A loader that could not satisfy a 36,864-byte request at
+position 19 satisfied an identical one two positions later. Whatever is happening,
+it is not "the heap filled up".
+
+**Ruled out: depex arity.** 53 of the 80 drivers have no `DXE_DEPEX` section at
+all and 25 of the 27 that have one are the bare `(TRUE)`. The only real dependency
+in the entire volume is `883CC780-0281-F0F6-A313-4A26F03EF2E0`, required by
+`WatchdogTimer` and `RealTimeClockRuntimeDxe` and **defined nowhere in the tree** —
+a second missing-provider signal, but not this one, because both of those fail as
+`L` before any depex is evaluated.
 
 **Settled: the boundary is in the Apriori array's index, not in the volume's
 physical file order.** Step 4.9's discussion, and the reading it was built on,
 treated the stop as a position in the volume — an earlier draft of this step
 claimed a "physical file 49/50" cutoff and had to drop it. It cannot be right:
-Apriori entry 22 (`ShmBridgeDxe`) is at **physical index 74** and *is* promoted and
+Apriori entry 22 (`ShmBridgeDxe`) is at **physical index 72** and *is* promoted and
 started, while entries 66–69 (`SimpleTextInOutSerial`, `ConPlatformDxe`,
-`ConSplitterDxe`, `GraphicsConsoleDxe`) sit at **physical indices 14, 20, 21 and
-22** and are *not* promoted at all. No walk-order cutoff produces that set. What
+`ConSplitterDxe`, `GraphicsConsoleDxe`) sit at **physical indices 12, 18, 19 and
+20** and are *not* promoted at all. No walk-order cutoff produces that set. What
 the promoted set is, exactly, is Apriori entries **1 through 46, contiguous** — and
 nothing about a contiguous Apriori-index prefix follows from where the files live.
+
+**Re-derived from the volume, and the argument is stronger than the two
+counterexamples above.** Mapping all 46 `SEQ` positions through
+`Apriori[k + 1]` onto the volume's physical file order gives:
+
+```
+SEQ k      0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15 16 17 18 19 20 21 22 …
+phys idx  22  8  9  2  1 23 15 24 26 37 41 25 50 40 27 29 28 31 32 38 72  4 33 …
+letter     s  s  s  s  s  s  s  s  s  s  s  s  s  s  s  s  s  s  L  L  L  s  L …
+```
+
+The last `s` before the run of `L`s is `NpaDxe` at physical **28**; the first `L`
+is `RpmhDxe` at physical **31**. But five `s` entries sit *after* physical 31 —
+`DALSys` (37), `HALIOMMU` (40), `HWIODxeDriver` (41), `PlatformInfoDxeDriver`
+(50) and `ShmBridgeDxe` (72) — and they are the ones that make a walk-order or
+load-order cutoff impossible: if the loader had stopped being able to load at
+physical 31, it could not have loaded physical 72 afterwards. It is not the
+counterexample, it is one of five, and the Apriori index is the only ordering in
+which the boundary is a clean prefix.
 
 **Not settled: why promotion stops at 46.** The loop iterates
 `Index < AprioriEntryCount` and appends on a match, so a contiguous prefix ending
@@ -1421,9 +1481,14 @@ whether a round trip is worth it:
   `mDxeFileTypes`, printed from counters incremented inside the discovery walk. The
   DRIVER pass is `t=0`, and because each type gets its own `Key = 0` walk it is one
   complete, independent sweep. `seen` is how many files `GetNextFile` handed back,
-  `iter` how many times it was called, `last` the last GUID it saw. **`seen ≈ 73`
-  means the walk finished; `seen ≈ 47` means it was cut off**, and `last` names
-  where.
+  `iter` how many times it was called, `last` the last GUID it saw. **`seen = 80`
+  means the walk finished; anything less means it was cut off**, and `last` names
+  where. **80 is measured, not assumed:** the built `FVMAIN.Fv` holds exactly 80
+  files of type `0x07` and 0 of every other type in `mDxeFileTypes` — the
+  histogram over all 123 files is `{0x02: 37, 0x05: 1, 0x07: 80, 0x09: 5}`, so the
+  `t=1..4` passes print `seen=0` and the DRIVER pass is the only one that says
+  anything. (An earlier draft of this bullet said `seen ≈ 73`. It was a guess off
+  the Apriori array's length, and the array is not the volume.)
 - `P2 FREE largest=<n> pages` — the largest allocation `CoreAllocatePages` will
   still satisfy at the moment the assert fires, found by a shrinking ladder
   (4096, 1024, 256, 64, 16, 4, 1 pages) that allocates and immediately frees. This
@@ -1455,22 +1520,52 @@ GUIDs, zero mismatches each).
 
 `boot` was read back with `dd` before being overwritten, and the image pulled off
 the device was taken apart to check that the reading could have come from it: its
-kernel blob inflates to 3,145,840 B, its inner `FVMAIN` holds a `DxeCore` of
-170,032 B carrying `P2 SEQ` / `P2 STATS` / `P2 NOLOAD` / `P2 DIAG` and *not*
-`P2 WALK` / `P2 FREE`, and its Apriori array is 70 GUIDs with md5
-`ed607ebccf3c61aa02d15f4b727baf85`. **That md5 is identical to the freshly built
-volume's**, so the array the join above was computed against is the array the
-device actually ran — the mapping does not need a caveat about which build drew the
-screen.
+kernel blob inflates to 3,145,840 B, its inner `FVMAIN` holds a `DxeCore` carrying
+`P2 SEQ` / `P2 STATS` / `P2 NOLOAD` / `P2 DIAG` and *not* `P2 WALK` / `P2 FREE`,
+and its Apriori array is 70 GUIDs. That last check is what licenses the join above:
+the array the join was computed against is the array the device actually ran, so
+the mapping needs no caveat about which build drew the screen.
 
-What that readback also closes is the discrepancy carried since step 4.10: the
-build tree's `APRIORI.inc` had been regenerated with the *Qualcomm* display driver
-at slot 60, and the flashed array has `DCFD1E6D-788D-4FFC-8E1B-CA2F75651A92`
-(`SimpleFbDxe`) there instead. The two now agree, because
-`tools/make_uefi_platform.py --display` **defaults to `simple`**: a default is what
-a plain regeneration produces, and it has to be the configuration that has been on
-the device. `DisplayDxe` is a bring-up step of its own, taken once DXE reaches BDS,
-not something that should happen by omitting a flag.
+**And the readback was taken again on 2026-09-23, after the re-flash, because the
+question it answers had changed from "what drew this screen" to "is the payload
+that can answer the next question actually on the device". It is:**
+
+| | |
+|---|---|
+| `boot[0:1140736]` read back in TWRP | sha256 `ecc10a225c8492d99ab4062e840e8a6b7def34a75f3f3679b1989ed515bb4bda` |
+| payload of record | sha256 `ecc10a225c8492d99ab4062e840e8a6b7def34a75f3f3679b1989ed515bb4bda` |
+| inner `FVMAIN` on device | sha256 `2995a6d0c1e62ceb…`, 123 files, 7,352,320 B |
+| inner `FVMAIN` in the build tree | identical |
+| Apriori array on device | 70 GUIDs, md5 `4fef65c55ac6d83cbfa14996e4b1b0dd` |
+| Apriori array in the build tree | identical |
+
+Byte-for-byte. **The payload on the device carries `P2 WALK` and `P2 FREE`**, so
+the three readings step 4.12's "Next" asks for are obtainable by a reboot — no
+flash, no TWRP round trip, and no dependence on the USB port, which at the time of
+writing is not enumerating at all.
+
+Two traps in taking that readback, because the first attempt produced a confident
+wrong answer:
+
+- **`head -c 2097152 file | sha256sum` is not the same comparison as
+  `dd bs=4096 count=512 | sha256sum`** when the file is shorter than 2,097,152
+  bytes. The local payload is 1,140,736, so `head -c` silently returns the whole
+  file and the sha covers 1,140,736 bytes; the device `dd` returns a full 2 MB with
+  the partition's stale tail behind it. Comparing those two hashes is comparing two
+  different lengths, and it reads as "the device holds something else". Hash the
+  **declared payload length** on both sides.
+- The stale tail is real and harmless: `boot` is 128 MB and the payload is 1.1 MB,
+  so everything past byte 1,140,736 is whatever the previous image left there. Only
+  the written prefix means anything.
+
+The other thing the earlier readback closed is the discrepancy carried since step
+4.10: the build tree's `APRIORI.inc` had been regenerated with the *Qualcomm*
+display driver at slot 60, and the flashed array has
+`DCFD1E6D-788D-4FFC-8E1B-CA2F75651A92` (`SimpleFbDxe`) there instead. The two now
+agree, because `tools/make_uefi_platform.py --display` **defaults to `simple`**: a
+default is what a plain regeneration produces, and it has to be the configuration
+that has been on the device. `DisplayDxe` is a bring-up step of its own, taken once
+DXE reaches BDS, not something that should happen by omitting a flag.
 
 ### A tool fix this forced
 
@@ -1506,12 +1601,76 @@ Recorded because both were written with confidence and both are now replaced:
   `tools/apriori-order.py` remain the right tooling for a reordering experiment;
   this is simply not a reordering problem.
 
+### The panel line the user read, and where it could and could not have come from
+
+The device-side report that started this step was
+`UFS Sleep callback registration failed`. That string is in the built volume — but
+**neither of the two drivers that could print it ran.** `grep` for it over
+`Binaries/` finds it in `UFSDxe.efi` (whose literal is
+`UFS Sleep callback registration failed, Status = 0x%lx`, at file offset `0x1431c`)
+and, for gauguin, **only** there — gauguin's `SdccDxe.efi` does not carry it at all,
+unlike most other device profiles. `RpmhDxe.efi` carries the parallel literal
+`Rpmh Sleep callback registration failed, Status = 0x%lx` at `0x0a65d`. In the
+reading, `UFSDxe` is SEQ 27 and `RpmhDxe` is SEQ 18 — **both `L`**. An `L` is
+written on `CoreLoadImage`'s error path, before `CoreStartImage`, so neither
+`DriverEntry` ever executed and neither `DEBUG` call was reachable.
+
+Both are thin wrappers over the same protocol:
+
+```
+adrp x9, 0x19000
+ldr  x8, [x9, #0x740]   ; gKernel
+cbz  x8, 0x6348
+ldr  x10, [x8, #0x40]   ; gKernel->MpCpu
+ldr  x2, [x10, #0x58]   ; MpCpu->RegisterPwrTransitionNotify
+br   x2
+mov  x0, #-0x7ffffffffffffffd   ; EFI_UNSUPPORTED  (gKernel == NULL)
+```
+
+so the failure is `EFI_UNSUPPORTED` because `gKernel` is NULL. `gKernel` is the
+`EFI_KERNEL_PROTOCOL` installed against `gEfiKernelProtocolGuid`
+(`B5062BE7-170B-4A32-BE21-689262FF4399`, `QcomPkg.dec:94`) — and **30 drivers'
+PE bodies reference that GUID while nothing in the tree installs it.** There is no
+`QcomKernelDxe`; `EFI_KERNEL_PROTOCOL` blobs are linked against a provider that
+this firmware is missing. That is a real, named, missing dependency and it is worth
+chasing on its own, but **it is not the source of the panel line**: the two drivers
+that would have printed it never loaded.
+
+**Where the line probably came from.** The device's own `xbl_dxe_fv.bin` — the DXE
+volume ABL carries — contains `UFS Sleep callback registration failed`,
+`Rpmh Sleep callback registration failed` **and** the bare
+`Sleep callback registration failed` substring. So the line is plausibly ABL's own
+output, printed before our payload is ever entered, or output from an earlier
+payload. Either way it should not be read as a fault *of this firmware*, and the
+step-4.10 hypothesis built on it should not be revived without re-attributing the
+line first.
+
 ### Next
 
 Read `P2 WALK t=0 seen=…` and `P2 STATS … apriori=46/N` off the panel (video, then
 frame-step). `N` splits the promotion question; `seen` splits "the walk ended" from
 "the walk was cut off"; `P2 FREE largest=` says whether memory was the constraint.
 Then remove the `P2BRINGUP` block and fix what the three numbers name.
+
+**No flashing is needed to get them, and this is now confirmed rather than
+assumed.** `tools/build-p2-payloads.sh` was re-run on 2026-09-23 and reproduced
+`Mu-gauguin-silicon-gzip.img` at sha256
+`ecc10a225c8492d99ab4062e840e8a6b7def34a75f3f3679b1989ed515bb4bda` — byte-identical
+to the image already written, so the rebuild is reproducible and the payload of
+record has not drifted. Then, in TWRP later the same day, `boot[0:1140736]` was
+read back with `dd` and hashed to **the same value**, and its inner `FVMAIN` and
+Apriori array hash identically to the build tree's. The payload on the device
+carries `P2 WALK` and `P2 FREE`.
+
+So the step is a power-on and a video, not a flash. That matters, because it makes
+the reading independent of the USB port — which has been dropping out, was not
+enumerating at all earlier in the day (no `adb`, no `fastboot`, no `2717:`
+descriptor on the bus), and needs no `adb` to film a screen.
+
+The three numbers are the only remaining input the host cannot supply. Everything
+computable from the volume has now been computed: the file census, the Apriori
+join, the DEPEX graph, every PE header, the load-order allocation total, and the
+attribution of the panel line. What is left is one measurement.
 
 ## Step 5 — Leave it bootable
 
