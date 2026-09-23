@@ -297,10 +297,10 @@ index 39668123..8405bc31 100644
  #define  USB_INTERFACE_SIGNATURE  SIGNATURE_32 ('U', 'S', 'B', 'I')
  #define  USB_BUS_SIGNATURE        SIGNATURE_32 ('U', 'S', 'B', 'B')
 diff --git a/MdeModulePkg/Core/Dxe/Dispatcher/Dispatcher.c b/MdeModulePkg/Core/Dxe/Dispatcher/Dispatcher.c
-index d7c7147e..aca3092d 100644
+index d7c7147e..0a4b183f 100644
 --- a/MdeModulePkg/Core/Dxe/Dispatcher/Dispatcher.c
 +++ b/MdeModulePkg/Core/Dxe/Dispatcher/Dispatcher.c
-@@ -60,6 +60,276 @@ EFI_LOCK  mDispatcherLock = EFI_INITIALIZE_LOCK_VARIABLE (TPL_HIGH_LEVEL);
+@@ -60,6 +60,277 @@ EFI_LOCK  mDispatcherLock = EFI_INITIALIZE_LOCK_VARIABLE (TPL_HIGH_LEVEL);
  //
  BOOLEAN  gDispatcherRunning = FALSE;
  
@@ -395,6 +395,7 @@ index d7c7147e..aca3092d 100644
 +STATIC EFI_GUID  mP2ApriLast;
 +STATIC UINTN     mP2ApriMatchFirst = (UINTN)-1;          // (UINTN)-1 = no entry matched
 +STATIC UINTN     mP2ApriMatchLast  = 0;
++STATIC UINTN     mP2ApriUnhit      = 0;                  // entries that matched no discovered driver
 +STATIC UINTN     mP2ApriMiss       = (UINTN)-1;          // (UINTN)-1 = no entry > 0 missed
 +STATIC EFI_GUID  mP2ApriMissGuid;
 +
@@ -577,7 +578,7 @@ index d7c7147e..aca3092d 100644
  //
  // Module globals to manage the FwVol registration notification event
  //
-@@ -483,6 +753,8 @@ CoreDispatcher (
+@@ -483,6 +754,8 @@ CoreDispatcher (
              DriverEntry->Initialized = TRUE;
            }
  
@@ -586,7 +587,7 @@ index d7c7147e..aca3092d 100644
            DriverEntry->Scheduled = FALSE;
            RemoveEntryList (&DriverEntry->ScheduledLink);
  
-@@ -519,6 +791,13 @@ CoreDispatcher (
+@@ -519,6 +792,13 @@ CoreDispatcher (
  
          Status = CoreStartImage (DriverEntry->ImageHandle, NULL, NULL);
  
@@ -600,7 +601,7 @@ index d7c7147e..aca3092d 100644
          REPORT_STATUS_CODE_WITH_EXTENDED_DATA (
            EFI_PROGRESS_CODE,
            (EFI_SOFTWARE_DXE_CORE | EFI_SW_PC_INIT_END),
-@@ -896,6 +1175,8 @@ CoreAddToDriverList (
+@@ -896,6 +1176,8 @@ CoreAddToDriverList (
  
    CoreReleaseDispatcherLock ();
  
@@ -609,7 +610,7 @@ index d7c7147e..aca3092d 100644
    return EFI_SUCCESS;
  }
  
-@@ -1309,6 +1590,16 @@ CoreFwVolEventProtocolNotify (
+@@ -1309,6 +1591,16 @@ CoreFwVolEventProtocolNotify (
                                    &Attributes,
                                    &Size
                                    );
@@ -626,7 +627,7 @@ index d7c7147e..aca3092d 100644
          if (!EFI_ERROR (GetNextFileStatus)) {
            if (Type == EFI_FV_FILETYPE_DXE_CORE) {
              //
-@@ -1412,6 +1703,26 @@ CoreFwVolEventProtocolNotify (
+@@ -1412,6 +1704,26 @@ CoreFwVolEventProtocolNotify (
                          );
      if (!EFI_ERROR (Status)) {
        AprioriEntryCount = SizeOfBuffer / sizeof (EFI_GUID);
@@ -653,7 +654,7 @@ index d7c7147e..aca3092d 100644
      } else {
        AprioriEntryCount = 0;
      }
-@@ -1433,11 +1744,43 @@ CoreFwVolEventProtocolNotify (
+@@ -1433,11 +1745,69 @@ CoreFwVolEventProtocolNotify (
            DriverEntry->Scheduled = TRUE;
            InsertTailList (&mScheduledQueue, &DriverEntry->ScheduledLink);
            CoreReleaseDispatcherLock ();
@@ -673,8 +674,33 @@ index d7c7147e..aca3092d 100644
 +      // P2BRINGUP: which entries matched and which did not. A `for` that falls
 +      // out through its own condition leaves Link at the head, which is the only
 +      // way to tell "matched nothing" from "matched something" once the loop is
-+      // over - and the index of the first entry that matched nothing is the
-+      // answer to whether the array or the discovered list is the short one.
++      // over.
++      //
++      // `unhit` counts them all, and it is a checksum rather than a second
++      // measurement - worth stating, because the first draft of this comment
++      // claimed more for it than the arithmetic supports. Every entry either
++      // matches a driver, and is then promoted exactly once, or matches nothing
++      // and is counted here; so `unhit` is `entries - apriori` by construction
++      // and has no freedom in it. Both terms are printed - `entries` on the
++      // P2 APRI line, `apriori` on P2 STATS - so what this buys is not a new
++      // reading but the check that the three numbers are from the same boot.
++      // That failure has already cost this project one reading.
++      //
++      // With 46 promotions `unhit` can therefore only be 1 or 24. 1 means the
++      // array that was read held 47 entries and every one past index 0 matched,
++      // so the promotions stopped where the buffer stopped. 24 means all 70
++      // entries were read, index 0 matched nothing, and ap47..ap69 did not
++      // either.
++      //
++      // The line that names the shape is `miss`, below, and it needs `entries`
++      // beside it to be read exactly. `miss=none` says every entry past 0
++      // matched, so the buffer ended at the last one that did. `miss=47` says
++      // the first 46 non-core entries matched and the 47th did not; with
++      // `entries=70` that is the whole array, and the discovered list is the one
++      // missing its tail. An index of 46 or less says an entry matched nothing
++      // where a later entry matched something, so the batch has holes and the
++      // array and the volume disagree about individual GUIDs rather than about
++      // where the list ends - a different fault with a different fix.
 +      //
 +      // Index 0 is skipped because it matches nothing by construction: it is
 +      // gDxeCoreFileName, and the DXE_CORE branch of the walk fills in
@@ -683,6 +709,7 @@ index d7c7147e..aca3092d 100644
 +      // on every boot and hide the miss that is being looked for.
 +      //
 +      if (Link == &mDiscoveredList) {
++        mP2ApriUnhit++;
 +        if ((Index > 0) && (mP2ApriMiss == (UINTN)-1)) {
 +          mP2ApriMiss = Index;
 +          CopyGuid (&mP2ApriMissGuid, &AprioriFile[Index]);
@@ -697,7 +724,7 @@ index d7c7147e..aca3092d 100644
      }
  
      //
-@@ -1470,6 +1813,210 @@ CoreInitializeDispatcher (
+@@ -1470,6 +1840,211 @@ CoreInitializeDispatcher (
    PERF_FUNCTION_END ();
  }
  
@@ -756,13 +783,14 @@ index d7c7147e..aca3092d 100644
 +    &mP2ApriLast
 +    ));
 +  if (mP2ApriMatchFirst == (UINTN)-1) {
-+    DEBUG ((DEBUG_ERROR, "P2 APRI matched=none (no entry matched a discovered driver)\n"));
++    DEBUG ((DEBUG_ERROR, "P2 APRI matched=none unhit=%d\n", mP2ApriUnhit));
 +  } else {
 +    DEBUG ((
 +      DEBUG_ERROR,
-+      "P2 APRI matched=%d..%d\n",
++      "P2 APRI matched=%d..%d unhit=%d\n",
 +      mP2ApriMatchFirst,
-+      mP2ApriMatchLast
++      mP2ApriMatchLast,
++      mP2ApriUnhit
 +      ));
 +  }
 +
@@ -908,7 +936,7 @@ index d7c7147e..aca3092d 100644
  //
  // Function only used in debug builds
  //
-@@ -1486,11 +2033,73 @@ CoreDisplayDiscoveredNotDispatched (
+@@ -1486,11 +2061,73 @@ CoreDisplayDiscoveredNotDispatched (
  {
    LIST_ENTRY             *Link;
    EFI_CORE_DRIVER_ENTRY  *DriverEntry;

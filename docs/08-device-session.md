@@ -2660,17 +2660,65 @@ ap19 and stopped, and `P2 ERR` names the cause of all 27 at once:
 | `Not Found` | the failing path is lookup, not memory | the `P2 WALK` lines and `P2 APRI miss` are the pair, and the heap is a bystander |
 | several unrelated statuses | there is no single cause | that is itself the finding, and it retires the search for one |
 
+### The `unhit` field, which is a checksum and not a measurement
+
+Step 4.15 adds one counter to the promotion loop, printed on the `P2 APRI` line as
+`matched=1..46 unhit=`. It was written to separate a batch that is a contiguous
+prefix from one with holes, and **it cannot do that.** That is worth recording
+rather than quietly leaving in the firmware, because the reason is exact and it
+leaves the field worth keeping for something else. Every Apriori entry either
+matches a driver — and is then promoted, once — or matches nothing. So
+
+```
+unhit = entries − apriori
+```
+
+identically, with no freedom in it. The counter is a spelling of two numbers that
+are already printed, not a third reading; `entries` is on the same `P2 APRI` line
+and `apriori` on `P2 STATS`. What it is worth is the check that those two lines
+came from the same boot, which is a failure mode nothing else on either line would
+reveal, and one this session has already been near — step 4.13 was written around
+the fact that no `P2 STATS` line has ever been read at all.
+
+With 46 promotions it can only be **1** or **24**:
+
+| `unhit` | with `entries=` | what it means |
+|---|---|---|
+| 1 | 47 | every entry past index 0 matched, so the buffer that was read ended at the last of them, and the promotions stopped where the buffer stopped |
+| 24 | 70 | all 70 entries were read: index 0 matched nothing, and neither did ap47..ap69 |
+
+Index 0 is counted on purpose, and it is the one place an off-by-one is easy to
+make: `DxeCore` is ap0 and is never in the discovered list by construction, so a
+whole-array read gives 1 + 23 = **24**, not 23. The `P2 APRI miss=` line is the
+one that *names* the shape, and it needs `entries` beside it to be read exactly:
+`none` is the short read, `47 AdcDxe` with `entries=70` is the whole array with
+the discovered list missing its tail, and index 46 or less is a hole — a different
+fault, where the array and the volume disagree about individual GUIDs rather than
+about where the list ends.
+
 ### The image, and where it is now
 
 | | |
 |---|---|
 | image | `work/out/p2-variants/Mu-gauguin-silicon-gzip.img` |
 | size | 1,140,736 B |
-| sha256 | `25fd2d5757b0c06544ac52ec7431ab89fb08b54180072125ef97750f93e37e85` |
+| sha256 | `5be70ecc4b2646cf9d44e3ddb6cde1cfe6a176bf38c5bd96b991ea19683cf11d` |
 | supersedes | `725c33c18df17b69f6e0e95186f2bb63b941e55b4dc4890e25ab8339c534371e` (step 4.14, preserved at `work/out/p2-4.14/Mu-gauguin-silicon-gzip.img`) |
-| difference | the digest function and one assignment per record in `DxeCore`; the other 122 files are at the same offsets, and `fv-inventory.py --against` reports "123 offsets and GUIDs, zero mismatches" |
+| difference | the digest function, one assignment per record, and one counter in the promotion loop, all in `DxeCore`; the other 122 files are at the same offsets, and `fv-inventory.py --against` reports "123 offsets and GUIDs, zero mismatches" |
 | on the phone | **no** — the phone carries the step-4.13 image, and the whole of step 4.15 is host-side work |
 | to write it | `tools/flash-boot.sh --twrp work/out/p2-variants/Mu-gauguin-silicon-gzip.img`, from TWRP |
+
+This step was built three times on the host, and only the last one counts:
+`25fd2d57…` carried `P2 ERR` without `unhit`, `f94b5157…` carried both, and
+`5be70ecc…` is the one above, in which the `unhit` comment says what the field
+actually is rather than what it was written to be. None of the three has been on
+the device — the phone still carries step 4.13's image — so overwriting the first
+two in `work/out/p2-variants/` loses nothing that any reading has to be compared
+against. The rule that a control image must be read before it is overwritten
+applies to images the device has carried, and none of these has. All three are
+reproducible from their commits (`515dc71` for the first), and the last is
+archived under `work/out/p2-4.15/` so that the next build is not overwritten in
+turn.
 
 The payload was checked against the build it claims to be, byte for byte rather
 than structurally: the gzip kernel is a 112-byte `BootShim.bin` followed by
@@ -2686,6 +2734,13 @@ read in the same photograph as `P2 STATS`. Everything else is unchanged from ste
 `P2 APRI miss=`, `P2 SEQ`, `P2 WHY`, `P2 STATS`, the five `P2 WALK` lines and
 `P2 FREE largest=` — and each frame is still held for minutes by step 4.14's
 bounded busy-wait, so the window is not the constraint any more.
+
+The three `P2 APRI` lines and `P2 STATS` are read as one group, and the numbers
+that matter are small: `entries` is the array as the firmware read it, `apriori`
+is how many of those entries were promoted, and the two must satisfy
+`apriori + unhit = entries` with `unhit` at 1 or 24. A `P2 APRI` line that
+disagrees with the `apriori=` on `P2 STATS` is two lines from different boots, and
+then the fix is to read them again rather than to explain them.
 
 ## Step 5 — Leave it bootable
 
@@ -2746,8 +2801,10 @@ attempt  image                          fbreason                     screen     
 9        Mu-gauguin-silicon-gzip.img    (not flashed)                (not read)             n/a           (not read)
          (4.15: the digest also
          groups the failure statuses
-         and names them, P2 ERR),
-         sha256 25fd2d57
+         and names them, P2 ERR, and
+         the promotion loop counts the
+         Apriori entries that matched
+         nothing), sha256 5be70ecc
 ```
 
 Row 4 is the one that matters and is step 4.8: our firmware ran and drew its own
