@@ -40,6 +40,20 @@ on all 123 files, which makes FvCheck's memory-mapped `AllocateCopyPool` branch
 dead code and puts every file through the exact `IsValidFfsFile` test (EDK2's
 `CalculateCheckSum8`, which is `(0x100 - sum) & 0xFF` and not the raw sum).
 
+The second half of the tool turns the one reading that *was* taken - the length
+of the `P2 SEQ` line - into a location. `len(P2 SEQ)` is `mP2Apriori`, the count
+of Apriori entries the walk promoted, and on a cut walk that count is a function
+of where the walk stopped. So the tool tabulates `stop -> miss -> seen -> SEQ
+len` and asks which stops can produce the 46 characters actually read off the
+panel. Measured: only physical 49 (`seen=48 iter=49`) and physical 50 (`seen=49
+iter=50`) can, both with `miss=14 PlatformInfoDxeDriver` - whereas the complete
+walk predicts a 69-character line and `seen=80 iter=81`. One photograph of `P2
+WALK t=0` therefore separates the two, which is the first time it has been
+separable from the screen alone. It also prints `sum=` at every 16-byte boundary,
+because `mP2ApriSum` is taken over `SizeOfBuffer` and so a short Apriori read
+prints the hash of a prefix: the panel's `sum=` names its own length whatever
+`bytes=` appears to say.
+
     tools/fv-census.py                      # the build tree's FVMAIN.Fv
     tools/fv-census.py <FVMAIN.Fv | .img>   # any volume or payload
 """
@@ -296,11 +310,36 @@ print(f"Apriori entries with no file in the volume: {absent}")
 # ---------------------------------------------------------------------------
 print()
 print("=== The Apriori section, as the device reads it ===")
-ap_sum = 0
-for b in payload:
-    ap_sum = (ap_sum * 31 + b) & 0xFFFFFFFF
+
+
+def apriori_sum(data, upto=None):
+    """The firmware's own `mP2ApriSum` (Dispatcher.c): ((sum * 31) + byte) over
+    exactly `SizeOfBuffer` bytes, as UINT32. Replayed, not approximated."""
+    s = 0
+    for b in (data if upto is None else data[:upto]):
+        s = (s * 31 + b) & 0xFFFFFFFF
+    return s
+
+
+ap_sum = apriori_sum(payload)
 print(f"  bytes {len(payload)}  entries {len(payload) // 16}  sum {ap_sum:#x}")
 print(f"  first {apriori[0]}  last {apriori[-1]}")
+
+# The panel's `P2 APRI bytes= entries= sum=` is the only line that says *which* of
+# two failure shapes the run has: an Apriori read that came back short, or a
+# discovered list that came up short. `mP2ApriSum` is taken over `SizeOfBuffer`,
+# so a short read prints the hash of a prefix and not of the whole array - which
+# makes `sum=` a fingerprint of the *length*, and the member of the triple least
+# likely to be misread as its neighbour (a 4 for a 7, a 6 for an 8). Printing
+# every 16-byte prefix turns the panel's value into a lookup: find it in this
+# column and it names its own length, whatever `bytes=` appears to say.
+print("  sum at every 16-byte boundary, so a panel `sum=` names its own length:")
+print("  (the panel prints `%x`, which does NOT zero-pad: read 921dcf9 as 0921dcf9)")
+for start in range(0, len(payload) // 16, 4):
+    row = []
+    for n in range(start + 1, min(start + 5, len(payload) // 16 + 1)):
+        row.append(f"{n:>3} {apriori_sum(payload, n * 16):08x}")
+    print("     " + "   ".join(row))
 
 ap_drivers = {fvinv.guid_str(g) for g, t, *_ in files if t == 0x07}
 matched = [i for i, g in enumerate(apriori) if g in ap_drivers]
@@ -372,11 +411,16 @@ print(f"  {len(notin)}: {[nm(g) for g in notin]}")
 # these eight values; the tail assumption (ap1..ap46 matched, ap47..ap69 did not)
 # is `miss=47`, which is not on the list at all - because a cut leaves a physical
 # *suffix* missing and the tail set reaches back to the console drivers.
+#
+# The `SEQ len` column is what makes the table a decoder rather than a key. `P2
+# SEQ` has been read three times and `P2 APRI miss=` never, and the length of the
+# SEQ line *is* `mP2Apriori`, i.e. the promoted count - so a `miss` value is only
+# admissible if some stop in its band also produces the SEQ length that was read.
+# The table prints the range each band can produce; the block after it does the
+# join against the length actually read off the panel.
 # ---------------------------------------------------------------------------
 print()
 print("=== The `miss` decoder: which stop position each value names ===")
-print(f"{'miss':>5}  {'names':36} {'stop in phys':>14} {'seen':>11}")
-dr = [i for i, (g, t, *_r) in enumerate(files) if t == 0x07]
 n, seen_at = 0, {}
 for i, (g, t, *_r) in enumerate(files):
     if t == 0x07:
@@ -391,9 +435,47 @@ def first_miss(stop):
     return c[0] if c else None
 
 
+def promoted(stop):
+    """How many Apriori entries match, i.e. `mP2Apriori`, and so the length of the
+    `P2 SEQ` line: the entries whose file is at or before `stop`."""
+    return sum(1 for a in range(1, len(apriori))
+               if (by_guid.get(apriori[a]) or 0) <= stop)
+
+
+NULLGUID = "0" * 32
+
+
+def walk_last(stop):
+    """What `P2 WALK last=` reads when the walk's last file was physical `stop`.
+
+    The dispatcher's walk is type-filtered (`Type = mDxeFileTypes[Index]` before
+    every GetNextFile, Dispatcher.c:1586-1602), so `mP2WalkLast` is copied only
+    on a *successful* return and is therefore the last file **of that type** the
+    walk got back - not the file at the stop position, which may be FREEFORM,
+    PAD or DXE_CORE. Those differ on exactly the read this decoder is being used
+    for: stops 49 and 50 are a driver and a driver, but the same query one file
+    later is answered by a file the type filter would never have returned.
+    `iter` is seen + 1 on a pass that ends by running out of files
+    (`EFI_NOT_FOUND`), which is the pass a cut walk ends on.
+    """
+    best = NULLGUID
+    for i in range(0, min(stop + 1, len(files))):
+        if files[i][1] == 0x07:
+            best = fvinv.guid_str(files[i][0])
+    return best
+
+
 # k runs over "the last physical file the walk looked at", not over a count, so
 # the band printed is directly comparable to `P2 WALK seen` and not a translation
 # of it. k = -1 is the degenerate case of a walk that listed nothing.
+#
+# The third column is the band's `mP2Apriori`, which is the *length of the `P2 SEQ`
+# line* - and that is the column that matters, because the SEQ line's length is a
+# reading this project has taken and `miss` is one it has not. `P2 SEQ` is built by
+# walking the Apriori array and appending one character per entry that was
+# promoted, so its length equals the promoted count, and `P2 APRI matched=..
+# unhit=N` closes the identity `promoted + unhit = entries`. That means a stop
+# position has to satisfy two panel readings at once, and most bands cannot.
 bands, prev = [], "unset"
 for k in range(-1, len(files)):
     m = first_miss(k)
@@ -402,12 +484,16 @@ for k in range(-1, len(files)):
         prev = m
     else:
         bands[-1][1] = k
+print(f"{'miss':>5}  {'names':36} {'stop in phys':>14} {'seen':>11} {'SEQ len':>11}")
 for lo, hi, m in bands:
     seen_lo = seen_at.get(lo, 0) if lo >= 0 else 0
     seen_hi = seen_at.get(hi, 0) if hi >= 0 else 0
     who = f"{m} {nm(apriori[m])}" if m is not None else "none (every entry matched)"
+    seq_lo = promoted(lo) if lo >= 0 else 0
+    seq_hi = promoted(hi)
     print(f"{str(m) if m is not None else 'none':>5}  {who:36} "
-          f"{lo:>6}..{hi:<6} {seen_lo:>4}..{seen_hi:<6}")
+          f"{lo:>6}..{hi:<6} {seen_lo:>4}..{seen_hi:<6} "
+          f"{(str(seq_lo) if seq_lo == seq_hi else f'{seq_lo}..{seq_hi}'):>11}")
 print(f"\n  known values: {sorted((b[2] for b in bands), key=lambda v: (v is None, v))}")
 print("  -> a `miss` of anything else is not a short walk at all: the device is "
       "looking at a\n     volume whose Apriori-named files sit where this one's "
@@ -417,6 +503,61 @@ print("  -> a `miss` of anything else is not a short walk at all: the device is 
 print("  -> and miss=22 ShmBridgeDxe is closed by the 5-vs-74 result above: a "
       "walk that stopped\n     before physical 74 did not load ShmBridgeDxe at "
       "74, so that row cannot be this run.")
+
+# ---------------------------------------------------------------------------
+# The join: which bands can produce the SEQ length that was actually read.
+#
+# This is the part that turns two panel readings into one answer, and it exists
+# because the SEQ length is a reading the project already has while `miss` and
+# `unhit` are ones it has never taken. `len(P2 SEQ)` is `mP2Apriori`, so the two
+# have to agree with a row of the table above; if they do not, the run is not a
+# short walk at all, and that is a result rather than a failed read.
+# ---------------------------------------------------------------------------
+print()
+print(f"=== The join against the `P2 SEQ` line actually read ({len(SEQ)} characters) ===")
+ok = [(lo, hi, m) for lo, hi, m in bands
+      if lo >= 0 and promoted(lo) <= len(SEQ) <= promoted(hi)]
+if ok:
+    print(f"  {len(ok)} band(s) can produce exactly {len(SEQ)} promotions, so a short "
+          "walk is not ruled out.\n  Each candidate stop is listed on its own line, "
+          "because `seen`, `iter` and `last` all\n  move with the stop and only one "
+          "combination is the screen:")
+    for lo, hi, m in ok:
+        stops = [k for k in range(lo, hi + 1) if promoted(k) == len(SEQ)]
+        print(f"    `miss={m} {nm(apriori[m])}`: " + " **or** ".join(
+            f"stop at physical {k} -> `P2 WALK t=0 seen={seen_at[k]} "
+            f"iter={seen_at[k] + 1} last={walk_last(k)}`" for k in stops))
+    print("  -> and the same reading fits the complete walk with no stop at all: "
+          "`seen=80`\n     `miss=none` with a 69-character SEQ line. Only one of "
+          "those two can be the\n     screen, so `P2 WALK t=0 seen` on its own "
+          "separates them - and the length\n     of the SEQ line has to match "
+          "whichever it is.")
+else:
+    print(f"  no band produces exactly {len(SEQ)} promotions, so the SEQ line "
+          "cannot be a short walk")
+print()
+_n07 = sum(1 for f in files if f[1] == 0x07)
+_last07 = max(i for i, f in enumerate(files) if f[1] == 0x07)
+print(f"  -> what a complete walk predicts instead: `P2 APRI matched=1..69 "
+      f"unhit=1 miss=none`,\n     `P2 SEQ` of 69 characters, and `P2 WALK t=0 "
+      f"seen={_n07} iter={_n07 + 1} last={walk_last(len(files) - 1)}`. That `last=` is "
+      f"the last\n     *driver* file and not the volume's last file - the walk is "
+      f"type-filtered, so the\n     {len(files) - 1 - _last07} "
+      f"FREEFORM/PAD/DXE_CORE files after physical {_last07} are never returned at t=0 "
+      f"and\n     never update `mP2WalkLast`.")
+print(f"  -> what the step-4.12 tail shape would need: ap1..ap46 promoted and "
+      f"ap47..ap69 not, i.e.\n     `P2 APRI matched=1..46 unhit=24 miss=47`. That "
+      f"pairing needs the walk to have\n     visited physical 74 (ShmBridgeDxe "
+      f"loaded) while passing over physical 14, 20,\n     21 and 22 - every one "
+      f"of them Apriori-named and every one of them below 74 - so it\n     needs "
+      f"the 23 missing files to be a set no stop position can produce.")
+missing = list(range(47, 70))
+print(f"  -> the {len(missing)} that shape would have to be missing, by physical index:")
+print("     " + " ".join(f"ap{a}:{ap_phys.get(a)}" for a in missing))
+print(f"     -> contiguous in Apriori index ({missing[0]}..{missing[-1]}), and "
+      f"scattered in physical order")
+print(f"        ({min(ap_phys[a] for a in missing)}..{max(ap_phys[a] for a in missing)}), "
+      f"which is what makes it unproducible by a cut.")
 
 # ---------------------------------------------------------------------------
 # The five `P2 WALK` lines the device should print, generated rather than
