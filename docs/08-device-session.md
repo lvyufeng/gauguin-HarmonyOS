@@ -2668,6 +2668,10 @@ attempt  image                          fbreason                     screen     
          (rebuilt with the 4.13                                     WHY digest, repeating
          instrumentation), read back                                41x - not yet read
          verified
+8        Mu-gauguin-silicon-gzip.img    (not flashed)                (not read)             n/a           (not read)
+         (rebuilt again with 4.14:
+         CoreStall's pause replaced
+         by P2Hold), sha256 725c33c1
 ```
 
 Row 4 is the one that matters and is step 4.8: our firmware ran and drew its own
@@ -2699,6 +2703,19 @@ yet. Rows 5 and 6 should be read as one attempt rather than two: row 5 is the re
 back that found the image unchanged, and row 6 is the reading taken from it, so
 "not flashed" in row 5 and the image named in row 6 describe the same state of
 `boot`.
+
+Row 8 is step 4.14 and it differs from row 7 in one function. The 41 repetitions
+were never free: the pause between them was `CoreStall`'s, and `CoreStall` waits
+through the Metronome, which is installed by `MetronomeDxe` — a driver this volume
+is being measured on. So the twelve seconds that window lasted was produced by the
+measurement, and a run in which `MetronomeDxe` did not start would have printed
+the 41 copies back to back and lost the digest entirely. Row 8 replaces that pause
+with a bounded busy-wait on a volatile counter, so the window is minutes
+regardless of what starts. **Row 8 has not been flashed**: `boot` still holds
+row 7's image, and the two differ only inside DxeCore, which is why they are kept
+side by side in `work/out/` (row 7's copy at
+`work/out/p2-silicon-gzip-preread-0923d.img`, same sha256 as what is on the
+phone) rather than overwritten.
 
 
 The `abllog` column is step 4.6's answer — the last stage ABL's own log for that
