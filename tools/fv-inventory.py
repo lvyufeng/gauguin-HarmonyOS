@@ -126,15 +126,26 @@ def fv_files(fv):
 
 
 def sections(blob):
-    """[(type, body)] for the section stream that starts `blob`."""
-    out, off = [], 0
-    while off + 4 <= len(blob):
+    """[(type, body)] for the section stream that starts `blob`.
+
+    Sections are padded to 4-byte boundaries (PI 2.3.1), so the next header is
+    at align4(off + size) and not at off + size. Stepping by `size` alone
+    drifts: the sizes are rounded up to 4 anyway for most section bodies, but
+    not for the odd-length ones, and after one odd section every following
+    header is read four bytes early - which still yields plausible-looking
+    section types, so it fails silently. Measured on FVMAIN.Fv: stepping by
+    `size` reports 83 sections across 123 files; stepping by align4 reports
+    123 files' worth, and every file gains the trailing section that the
+    unaligned walk had been losing.
+    """
+    out, off, n = [], 0, len(blob)
+    while off + 4 <= n:
         sz = blob[off] | (blob[off + 1] << 8) | (blob[off + 2] << 16)
         st = blob[off + 3]
-        if sz < 4 or off + sz > len(blob):
+        if sz < 4 or off + sz > n:
             break
         out.append((st, blob[off + 4:off + sz]))
-        off += sz
+        off = (off + sz + 3) & ~3
     return out
 
 

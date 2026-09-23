@@ -894,14 +894,16 @@ output lands while the evidence is still the last thing on the panel:
 ```
 P2 NOLOAD <guid> dep=<0|1> sched=<0|1> unt=<0|1>   (up to 6, then a total)
 P2 DIAG <L|S> <guid> <status>                      (one per failure, up to 24)
-P2 SEQ [<70 characters>]                           (one per Apriori entry, in dispatch order)
+P2 SEQ [<up to 128 characters>]                    (one per Apriori *match*, in array order)
 P2 STATS discovered=N apriori=N/70 started=N diag=N noload=N
 ```
 
-The `SEQ` line is at most **69** characters, not 70 — step 4.12 works out why, and
-the count is not the point here. `STATS` prints the denominator as the literal 70
-because that is `P2BRINGUP_APRIORI_MAX`'s companion constant in the macro text, not
-a computed count; read `apriori=` against 69, not against 70.
+The `SEQ` line's cap is `P2BRINGUP_APRIORI_MAX`, which is **128**, and
+`mP2SeqLine[]` is 136. An earlier draft of this section said the line was "at most
+69 characters"; it was reading a count of matches as if it were a limit. `STATS`
+prints the denominator as the literal 70 because that is a constant in the macro
+text rather than a computed count, so the two numbers on the `SEQ` and `STATS`
+lines are not counted the same way and should not be compared to each other.
 
 All at `DEBUG_ERROR`, which `PcdDebugPrintErrorLevel` `0x8007EE0F` enables. The
 line budget is deliberate: eight missing protocols print as sixteen lines, so the
@@ -925,24 +927,33 @@ The eight providers sit at these indices, which is what makes the string readabl
 at a glance — and which is where the string stops being the same as the `INF`
 numbering above, for the two reasons given there:
 
-| index in `P2 SEQ` | 5 | 6 | 7 | 8 | 9 | 31 | 34 | 36 | 37 | 38 | 39 | 42 | 44 |
-|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| driver | RuntimeDxe | ArmCpuDxe | ArmGicDxe | MetronomeDxe | ArmTimerDxe | Variable | Reset | Watchdog | SecurityStub | Monotonic | RTC | Capsule | Bds |
-| if it worked | `s` | `s` | `s` | `s` | `s` | `s` | `s` | `s` | `s` | `s` | `s` | `s` | `s` |
+| index in `P2 SEQ` | 30 | 33 | 35 | 36 | 37 | 38 | 41 | 43 |
+|---|---|---|---|---|---|---|---|---|
+| driver | VariableRuntimeDxe | ResetSystemRuntimeDxe | WatchdogTimer | SecurityStubDxe | EmbeddedMonotonicCounter | RealTimeClock | CapsuleRuntimeDxe | BdsDxe |
+| if it worked | `s` | `s` | `s` | `s` | `s` | `s` | `s` | `s` |
 
-**This table was wrong by one or three in every cell, and step 4.12 replaces it.**
-The indices above are read straight out of the built volume's Apriori array, which
-is the only authority: index 0 is `DxeCore` (which is never promoted, so it starts
-the string's *shift*, not its content), and the rest follow the Apriori file's own
-order rather than the `INF` order the earlier table was derived from. The two
-names that were wrong outright were `CpuDxe` (the module is `ArmCpuDxe`) and
-`TimerDxe` (the module is `ArmTimerDxe`) — those are the names the built volume and
-`Guid.xref` carry, and the `INF` paths they come from are
+**This table has been wrong twice, and step 4.12 replaces it.** The first version
+was wrong by one or three in every cell; the second used the Apriori *array* index
+rather than the `P2 SEQ` index, which is the same number minus one wherever
+`DxeCore` shifts the string — so it was off by one throughout, and off by more
+before `SecurityStubDxe`. The indices above are the `P2 SEQ` positions, read off
+the join in step 4.12, and the eight names are the eight the panel printed as
+`Arch Protocol not present`. The two names that were wrong outright in the first
+version were `CpuDxe` (the module is `ArmCpuDxe`) and `TimerDxe` (the module is
+`ArmTimerDxe`) — those are the names the built volume and `Guid.xref` carry, and
+the `INF` paths they come from are
 `ArmPkg/Drivers/ArmCpuDxe/ArmCpuDxe.inf` and
 `ArmPkg/Drivers/ArmGenericTimerDxe/ArmGenericTimerDxe.inf`.
 
 So a healthy line is `s` at every position. The first character that is not `s`
 is where the batch stopped, and its index names the driver.
+
+**And the reading has since landed, so none of the three outcomes below is what
+happened.** The measured line is 46 characters with **zero `?`** — so the drain
+did not stop partway through the promoted batch (it drained all 46), and the
+"`?` from index 30 onward" hypothesis in particular is dead: there are no `?` at
+all. What the three paragraphs below describe is still the right way to read a
+*`?`* if one ever appears, which is why they are kept rather than deleted.
 
 **What to read, and what each outcome means.** `P2 DIAG` names the victims, in the
 order they were reached; the phase letter is what separates the two readings of
@@ -1343,14 +1354,38 @@ through the drain; it stops before the drain begins.
 
 `P2 SEQ`'s index *i* is Apriori entry *i + 1*, and the reason is in the promotion
 loop (`Dispatcher.c`, the `for (Index = 0; Index < AprioriEntryCount; Index++)`
-block): the array is walked in order and `mP2Apriori++` happens only on a match, so
-the string is the *matches*, in array order. Entry 0 is `DxeCore`, whose file type
-is `EFI_FV_FILETYPE_DXE_CORE` — a type the discovery switch handles by filling in
-the core's loaded-image device path and **not** calling `CoreAddToDriverList` — so
-it is never in `mDiscoveredList` and never matches. Every one of the other 69
-entries is a real `EFI_FV_FILETYPE_DRIVER`, and all 70 resolve to a file the volume
-actually contains (70/70, checked GUID by GUID). Hence a ceiling of 69 characters
-on `P2 SEQ`, and index 0 = `PcdDxe`.
+block): the array is walked in order and the ring buffer is filled **inside the
+match** —
+
+```c
+if (CompareGuid (&DriverEntry->FileName, &AprioriFile[Index]) &&
+    (FvHandle == DriverEntry->FvHandle))
+{
+  …
+  if (mP2Apriori < P2BRINGUP_APRIORI_MAX) {
+    CopyGuid (&mP2AprioriGuid[mP2Apriori], &DriverEntry->FileName);
+    mP2AprioriRes[mP2Apriori] = '?';
+  }
+  mP2Apriori++;          /* unconditional: counts MATCHES, not entries scanned */
+  break;
+}
+```
+
+— so the string is the *matches*, in array order, and `mP2Apriori` is a count of
+matches rather than a cursor into the array. Entry 0 is `DxeCore`, whose file
+type is `EFI_FV_FILETYPE_DXE_CORE` — a type the discovery switch handles by
+filling in the core's loaded-image device path and **not** calling
+`CoreAddToDriverList` — so it is never in `mDiscoveredList`, never matches, and is
+not counted. Every one of the other 69 entries is a real
+`EFI_FV_FILETYPE_DRIVER`, and all 70 resolve to a file the volume actually
+contains (70/70, checked GUID by GUID). Hence index 0 of `P2 SEQ` = `PcdDxe`.
+
+**There is no 69-character cap.** An earlier draft of this step said there was;
+the only cap in the printer is `min (mP2Apriori, P2BRINGUP_APRIORI_MAX)`, and
+`P2BRINGUP_APRIORI_MAX` is **128** (`uefi/patches/mu-basecore-local.patch:328`),
+with the line buffer `mP2SeqLine[136]` sized above it. A 69-long `P2 SEQ` would be
+a legal line, and 70 would too. The 46 characters are 46 matches, not 46 out of a
+room of 69.
 
 Resolving each character against the array and the array against the volume's own
 file table gives:
@@ -1376,23 +1411,42 @@ merely tidy.** The eight protocols the panel reported missing are
 not eight indices found by guesswork; they are the eight names the panel printed,
 mapped back through the array, and landing on `L`.
 
-### Two things this settles, and one it does not
+### Three things this settles, and one it does not
 
-**Settled: every failure is `L`, so no entry point was ever called for any of the
-27.** `L` is written on `CoreLoadImage`'s error path, before `CoreStartImage`.
-`CoreLoadImage` returns `EFI_OUT_OF_RESOURCES` here — the panel's
-"Out of Resources" is the `%r` rendering of the same status — and the sites that
-can produce it are `CoreLoadImageCommon`'s `AllocateZeroPool` of the
-`LOADED_IMAGE_PRIVATE_DATA` and `CoreLoadPeImage`'s page allocation. So this is not
-27 drivers deciding they do not support this platform, and it is not 27 dependency
-failures: it is 27 loads that each returned a status that *renders* as Out of
-Resources, in a row. Which of those two allocation sites produced it, and why an
-identical request two positions later succeeded, is the open question — the
-section below narrows it.
+**Settled: `L` means `CoreLoadImage` or `CoreStartImage` failed — the SEQ alone
+cannot say which.** `P2Record (Guid, Phase, Status)` ends with
+`P2MarkSeq (Guid, (Phase == 'L') ? 'L' : 'S')`, so the letter written for a
+*start* failure (`'S'`) renders as `'L'` exactly like a *load* failure. What the
+letter does settle is that the driver's entry point either was never reached or
+returned an error: a driver that loaded and started would have been marked `'s'`.
+The distinction between the two lives only in the `P2 DIAG %c %g %r` lines, and
+only one such line was ever read ("Out of Resources"), so **the claim that all 27
+are load failures is not established by the SEQ**; it is established for at most
+the one driver that produced a DIAG line.
+
+**Narrowed: one `P2 DIAG` reading said Out of Resources, and the sites that can
+produce it are three.** The panel's `%r` rendered a status whose name is `Out of
+Resources` — `EFI_OUT_OF_RESOURCES`. In the load path that is
+`CoreLoadImageCommon`'s `AllocateZeroPool` of the
+`LOADED_IMAGE_PRIVATE_DATA`, `CoreLoadPeImage`'s page allocation, or the
+`AllocatePool` inside `GetSection` when the caller passes a NULL buffer. So this
+is not 27 drivers declining to support the platform, and it is not 27 dependency
+failures: it is a run of loads that each returned a status that *renders* as Out
+of Resources. Which site, and why an identical request two positions later
+succeeded, is what the two sections below narrow — and the memory section is
+where the obvious answer dies.
+
+**Settled: the promoted set is not a prefix of the array's first 46 — it is the
+first 46 *matches*, and 23 entries are missing from the list entirely.** Zero `?`
+characters means the drain reached every promoted entry, so nothing was queued and
+lost. But `mP2Apriori` only increments on a match, so a contiguous 46-letter
+string does not imply the loop stopped at entry 46: it implies entries 47–69
+matched nothing. That is the second, independent puzzle, and it is the one the
+next section and the `P2 WALK` probe are about.
 
 ### What the host can rule out, and it is more than expected
 
-Three of the obvious readings of "27 loads in a row ran out of memory" were
+Four of the obvious readings of "27 loads in a row ran out of memory" were
 checked against the built volume and do not hold. They are recorded because each
 one is the first thing anyone will reach for next time.
 
@@ -1402,24 +1456,53 @@ Characteristics, SizeOfImage, SizeOfHeaders, SizeOfCode, SizeOfInitializedData,
 SizeOfUninitializedData, AddressOfEntryPoint, BaseOfCode, ImageBase,
 SectionAlignment, FileAlignment, Subsystem, DllCharacteristics, SizeOfStackReserve,
 SizeOfHeapReserve, NumberOfRvaAndSizes, .reloc-directory size`, plus the section
-name/characteristics layout. **Not one of them separates the two sets.** Everything
-has `ImageBase 0x0`; nothing is reloc-stripped (`Characteristics` bit 0 clear on all
-80); `SectionAlignment` is `0x1000` except for the Runtime family at `0x10000`, and
-that family straddles the boundary in both directions — `ReportStatusCodeRouterRuntimeDxe`,
-`StatusCodeHandlerRuntimeDxe` and `RuntimeDxe` succeed at `0x10000` while
-`CapsuleRuntimeDxe`, `EmbeddedMonotonicCounter`, `RealTimeClock`,
-`ResetSystemRuntimeDxe` and `VariableRuntimeDxe` fail at the same value. The section
-layout is `{.text,.data,.reloc}` or `{.text,.rdata,.data,.pdata,.reloc}` on both
-sides. There is nothing to see in the binaries.
+name/characteristics layout. **Not one of them separates the two sets.**
+`tools/pe-facts.py` makes this a per-field verdict rather than an assertion, and
+it asks two questions per field because they are easy to conflate. The
+equality-class question — "does some value appear only under one result?" —
+comes out `shared` for **every field but one**: `Machine`,
+`NumberOfSections`, `SizeOfOptionalHeader`, `Characteristics`, `Magic`,
+`SizeOfUninitializedData`, `BaseOfCode`, `ImageBase`, `SectionAlignment`,
+`FileAlignment`, `SizeOfHeaders`, `Subsystem`, `DllCharacteristics`,
+`SizeOfStackReserve`, `SizeOfHeapReserve`, `NumberOfRvaAndSizes`, `has_reloc`
+and `sections` all take values that appear on both sides. The exception is
+`ffs_size`, and it is the reason the tool prints the second question: a field
+that is nearly unique per image comes out `disjoint` for free, having explained
+nothing, so the tool also asks whether a *threshold* splits the sets — and
+`ffs_size` is `interleaved`, i.e. `s` and `L` sizes overlap in range. Its verdict
+line is `no field separates the 19 s from the 27 L by a single value or a
+threshold`.
+
+Everything has `ImageBase 0x0`; nothing is reloc-stripped (`Characteristics` bit
+0 clear on all 80); `SectionAlignment` is `0x1000` except for the Runtime family
+at `0x10000`, and that family straddles the boundary in both directions —
+`ReportStatusCodeRouterRuntimeDxe`, `StatusCodeHandlerRuntimeDxe` and `RuntimeDxe`
+succeed at `0x10000` while `CapsuleRuntimeDxe`, `EmbeddedMonotonicCounter`,
+`RealTimeClock`, `ResetSystemRuntimeDxe` and `VariableRuntimeDxe` fail at the same
+value. Size is not it either, and the interleaving is the measurement. `NpaDxe`
+succeeds at 81,966 bytes — a size **20 of the 27 failures fall below and 7 rise
+above**. The smallest success (`ReportStatusCodeRouterRuntimeDxe`, 9,338 B) is
+smaller than the smallest failure (`EmbeddedMonotonicCounter`, 19,050 B) and the
+largest success (`DALSys`, 307,246 B) is smaller than the largest failure
+(`BdsDxe`, 385,166 B). The two ranges overlap rather than being ordered, which is
+what the tool's `interleaved` verdict means. There is nothing to see in the
+binaries.
 
 **Ruled out, and this is the sharp one: plain exhaustion.** Summing
 `SizeOfImage` (plus `SectionAlignment` where it exceeds a page) over the 46 loads in
-queue order gives **6.10 MB total**, spread over 46 images. And the two drivers on
-either side of the boundary have the *same* `SizeOfImage`: `PdcDxe` is `36,864`
-and is an `L` at queue position 19; `ShmBridgeDxe` is `36,864` and is an `s` at
-queue position 21. A loader that could not satisfy a 36,864-byte request at
-position 19 satisfied an identical one two positions later. Whatever is happening,
-it is not "the heap filled up".
+promotion order gives **6,397,952 B = 6.10 MiB**, spread over 46 images. Against
+that, the device's own memory map gives the DXE heap as
+`{"DXE Heap", 0x9B800000, 0x02360000, AddMem, SYS_MEM, SYS_MEM_CAP, Conv,
+WRITE_BACK_XN}` (`uefi/Platforms/Xiaomi/gauguinPkg/Library/MemoryMapLib/MemoryMapLib.c`)
+— **35.4 MiB of `EfiConventionalMemory` at 0x9B800000**. And the FFS file list
+adds nothing on top: `FFS_ATTRIB_CHECKSUM` is clear on all 123 files, so
+`FvCheck`'s `AllocateCopyPool` per-file cache is never populated and the volume is
+read in place. The cumulative demand is 6.1 MiB of a 35.4 MiB heap. And the two
+drivers on either side of the boundary have the *same* `SizeOfImage`: `PdcDxe` is
+`36,864` and is an `L` at promotion position 19; `ShmBridgeDxe` is `36,864` and is
+an `s` at promotion position 21. A loader that could not satisfy a 36,864-byte
+request at position 19 satisfied an identical one two positions later. Whatever is
+happening, it is not "the heap filled up".
 
 **Ruled out: depex arity.** 53 of the 80 drivers have no `DXE_DEPEX` section at
 all and 25 of the 27 that have one are the bare `(TRUE)`. The only real dependency
@@ -1428,48 +1511,115 @@ in the entire volume is `883CC780-0281-F0F6-A313-4A26F03EF2E0`, required by
 a second missing-provider signal, but not this one, because both of those fail as
 `L` before any depex is evaluated.
 
+**Ruled out: everything below the dispatcher.** This was the layer with room for a
+quiet, plausible bug, so every part of it was replayed against the actual volume
+rather than reasoned about:
+
+- **`FvCheck`.** The scan adds **123 files** to `FfsFileListHeader` and stops at an
+  erased run at `0x702308` — `0xcf8` bytes from the end of a `0x703000` volume,
+  after every file. The truncated-list mechanism is real in the code and hides
+  **nothing** here. Zero corruption.
+- **`IsValidFfsFile`.** All **123/123** files pass the exact test, including
+  `CalculateCheckSum8`'s `(0x100 - sum) & 0xFF` semantics and the `0xAA`
+  `FFS_FIXED_CHECKSUM` for the un-attributed case. (`tools/fv-census.py`'s
+  replay had used the raw sum here, and this step corrected it to EDK2's
+  `CalculateCheckSum8`; harmless only because no file sets the bit.)
+- **`FFS_ATTRIB_CHECKSUM`.** Set on **0 of 123** files — attribute histogram
+  `{0x0: 123}`. So `FvCheck`'s memory-mapped `AllocateCopyPool (WholeFileSize,
+  CacheFfsHeader)` branch and its `EFI_OUT_OF_RESOURCES` site are **dead code on
+  this volume**, and no file is ever copied.
+- **The read path.** `FvReadFile`'s `do { FvGetNextFile (…) } while
+  (!CompareGuid (…));` leaves `LastKey` on the *matching* entry, so
+  `FvReadFileSection`'s `FfsEntry = (FFS_FILE_LIST_ENTRY *)FvDevice->LastKey` is
+  sound. **This was carried as a suspected defect for a while; it is not one.**
+- **The section read.** `GetSection` writes `*BufferSize = SectionSize`
+  unconditionally on success, so a stale `SizeOfBuffer` cannot survive a
+  successful Apriori read.
+- **The GUID table.** All **70/70** Apriori GUIDs resolve to a file the volume
+  contains.
+
+So the volume is clean at every layer beneath the promotion loop, and the
+remaining question is not in the bytes on disk.
+
 **Settled: the boundary is in the Apriori array's index, not in the volume's
 physical file order.** Step 4.9's discussion, and the reading it was built on,
 treated the stop as a position in the volume — an earlier draft of this step
 claimed a "physical file 49/50" cutoff and had to drop it. It cannot be right:
-Apriori entry 22 (`ShmBridgeDxe`) is at **physical index 72** and *is* promoted and
+Apriori entry 22 (`ShmBridgeDxe`) is at **physical index 74** and *is* promoted and
 started, while entries 66–69 (`SimpleTextInOutSerial`, `ConPlatformDxe`,
-`ConSplitterDxe`, `GraphicsConsoleDxe`) sit at **physical indices 12, 18, 19 and
-20** and are *not* promoted at all. No walk-order cutoff produces that set. What
-the promoted set is, exactly, is Apriori entries **1 through 46, contiguous** — and
-nothing about a contiguous Apriori-index prefix follows from where the files live.
+`ConSplitterDxe`, `GraphicsConsoleDxe`) sit at **physical indices 14, 20, 21 and
+22** and are *not* promoted at all. No walk-order cutoff produces that set.
 
-**Re-derived from the volume, and the argument is stronger than the two
-counterexamples above.** Mapping all 46 `SEQ` positions through
-`Apriori[k + 1]` onto the volume's physical file order gives:
+**Re-derived from the volume, and the argument is now a measurement with a single
+number in it.** Joining each SEQ position *k* to `Apriori[k + 1]` and then to the
+volume's file table gives the 46 promoted drivers at physical indices
 
 ```
-SEQ k      0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15 16 17 18 19 20 21 22 …
-phys idx  22  8  9  2  1 23 15 24 26 37 41 25 50 40 27 29 28 31 32 38 72  4 33 …
-letter     s  s  s  s  s  s  s  s  s  s  s  s  s  s  s  s  s  s  L  L  L  s  L …
+physical indices of the 19 loaded (s): 2 3 4 10 11 17 24 25 26 27 28 29 30 31 39 42 43 52 74
+physical indices of the 27 failed (L): 5 6 7 8 9 12 13 15 16 18 19 23 33 34 35 36 37 38 40 44 45 46 47 48 49 54 73
 ```
 
-The last `s` before the run of `L`s is `NpaDxe` at physical **28**; the first `L`
-is `RpmhDxe` at physical **31**. But five `s` entries sit *after* physical 31 —
-`DALSys` (37), `HALIOMMU` (40), `HWIODxeDriver` (41), `PlatformInfoDxeDriver`
-(50) and `ShmBridgeDxe` (72) — and they are the ones that make a walk-order or
-load-order cutoff impossible: if the loader had stopped being able to load at
-physical 31, it could not have loaded physical 72 afterwards. It is not the
-counterexample, it is one of five, and the Apriori index is the only ordering in
-which the boundary is a clean prefix.
+**The lowest physical index among the failures is 5; the highest among the
+successes is 74.** A load at physical 5 failed — `SecurityStubDxe`, Apriori entry
+37 — while a load at physical 74 succeeded, and the interleaving across the whole
+range rules out not just a cutoff but any monotone function of physical position.
+`tools/fv-census.py` prints exactly this and the verdict line "a physical cutoff
+is IMPOSSIBLE". The Apriori index is the only ordering in which the promoted set
+is a clean prefix.
 
-**Not settled: why promotion stops at 46.** The loop iterates
-`Index < AprioriEntryCount` and appends on a match, so a contiguous prefix ending
-at 46 means either (a) `AprioriEntryCount` was 47 on the device — the section read
-came back short — or (b) the loop did run to 70 and entries 47–69 matched nothing
-because those files were never discovered. (b) is hard to hold: it needs the walk
-to have missed physical indices 14–22 while reaching 74. (a) is the more likely of
-the two, and it has a concrete place to look — `SizeOfBuffer` is reused across
-`Fv->ReadSection` calls in `CoreFwVolEventProtocolNotify` and is not reset
-immediately before the Apriori read, so a stale or partial length is not
-impossible. **But neither reading is established, and the `P2 STATS` line decides
-it:** `apriori=46/N` gives `AprioriEntryCount` directly. `N=70` means (b), `N=47`
-means (a). That single number was not captured on the second attempt.
+An earlier draft of this paragraph carried different numbers for the
+counterexamples — `NpaDxe` at physical 28, `RpmhDxe` at 31, `ShmBridgeDxe` at 72 —
+and they were wrong; the measured values are 30, 33 and 74. The five-`s`-after-31
+argument it was making survives, because there are still successes above every
+failure, but it is now one number instead of a list.
+
+**Settled as (b), from the host: why promotion stops at 46.** The loop iterates
+`Index < AprioriEntryCount`; the ring buffer is filled on a match and `break`s out
+of the inner scan, so a contiguous 46-letter string is 46 matches and not a short
+array. The two readings that would have produced it were:
+
+  (a) `AprioriEntryCount` was 47 on the device — the section read came back short.
+  (b) the loop did run to 70 and entries 47–69 matched nothing, because those files
+      were never in `mDiscoveredList`.
+
+**(a) is dead, and it is dead by the code.** `GetSection` writes
+`*BufferSize = SectionSize` unconditionally on success, so a stale `SizeOfBuffer`
+cannot survive a successful read; and even a short array could not do this, because
+`mP2AprioriCount = MAX (mP2AprioriCount, AprioriEntryCount)` is a running
+*maximum* over every `ReadSection` in the walk, so the counter the `P2 STATS` line
+would report is not the one the promotion loop used. The stale-`SizeOfBuffer`
+mechanism this step was built on is retracted.
+
+**(b) is what is left, and the promotion loop cannot be the cause.** The match is
+`CompareGuid (&DriverEntry->FileName, &AprioriFile[Index]) && (FvHandle ==
+DriverEntry->FvHandle)`. The outer loop runs the whole array and the inner loop
+scans the entire `mDiscoveredList`; the extra `FvHandle` conjunct is satisfied by
+every entry *this* FV added, because `CoreFwVolEventProtocolNotify` processes one
+FV and returns. So for any file the walk handed to `CoreAddToDriverList`, the
+matcher finds it. Entries 47–69 therefore matched nothing because those 23 files
+are **not in `mDiscoveredList` at all** — `CoreAddToDriverList` was never called
+for them. The walk's only escapes for a type-0x07 file are
+`FvHasBeenProcessed (FvHandle)` (once per FV, not selective), `FvFoundInHobFv2`
+(`continue`), a `GetNextFile` error, or `FvGetVolumeAttributes` /
+`EFI_FV2_READ_STATUS` failing. And the one failure `CoreAddToDriverList` itself can
+have — `AllocateZeroPool` returning NULL — is an `ASSERT (DriverEntry != NULL)` →
+`CpuDeadLoop`, not a silent skip.
+
+**So the open question has narrowed to one sentence: why are 23 of the 70 Apriori
+files absent from `mDiscoveredList`?** Nothing below the dispatcher can explain it
+(that layer is exonerated above), and the Apriori array is not short. The
+measurement that answers it is `mP2WalkSeen[0]` — `P2 WALK t=0 seen=…` — and it has
+never been read off the panel. This is why the probe exists and why the next step
+is a power-on rather than a rebuild.
+
+**And the `P2 STATS` line was never captured at all.** It appears in this step's
+earlier drafts as if it had been — `apriori=46/N`, `discovered=?` — and it has not:
+the only device reading of this screen is the 46-character `P2 SEQ` string. The
+`N` in `apriori=46/N` has never been observed. A shorter form of the SEQ string,
+`ssssssssssssssssssLLLsL` (23 characters), also appears in this project's notes,
+and it is **a summarisation artifact rather than a second reading** — the
+transcript holds exactly one user turn carrying the string, and it is the
+46-character one.
 
 ### What was built to close it, and why it is on the device now
 
@@ -1478,21 +1628,29 @@ flashed. Neither answers a question the host can compute, which is the test for
 whether a round trip is worth it:
 
 - `P2 WALK t=<type> seen=<n> iter=<n> last=<guid>` — one line per entry in
-  `mDxeFileTypes`, printed from counters incremented inside the discovery walk. The
-  DRIVER pass is `t=0`, and because each type gets its own `Key = 0` walk it is one
-  complete, independent sweep. `seen` is how many files `GetNextFile` handed back,
-  `iter` how many times it was called, `last` the last GUID it saw. **`seen = 80`
-  means the walk finished; anything less means it was cut off**, and `last` names
-  where. **80 is measured, not assumed:** the built `FVMAIN.Fv` holds exactly 80
-  files of type `0x07` and 0 of every other type in `mDxeFileTypes` — the
-  histogram over all 123 files is `{0x02: 37, 0x05: 1, 0x07: 80, 0x09: 5}`, so the
-  `t=1..4` passes print `seen=0` and the DRIVER pass is the only one that says
-  anything. (An earlier draft of this bullet said `seen ≈ 73`. It was a guess off
-  the Apriori array's length, and the array is not the volume.)
+  `mDxeFileTypes`, printed from counters incremented inside the discovery walk,
+  immediately around each `GetNextFile` call. The loop is a
+  `do { … } while (!EFI_ERROR (GetNextFileStatus));`, so the terminating call —
+  the one that returns `EFI_NOT_FOUND` — is counted in `iter` and in
+  `mP2WalkErr`, and **not** in `seen`. That makes the DRIVER line
+  (`t=0`) a self-checking prediction: **`seen=80 iter=81`** if the sweep ran to
+  the end of the volume, since `FVMAIN.Fv` holds exactly **80** files of type
+  `0x07` — the histogram over all 123 files is `{0x02: 37, 0x05: 1, 0x07: 80,
+  0x09: 5}` — and the 81st call is the `EFI_NOT_FOUND` that ends it. Anything
+  less than 80 in `seen`, or more than 81 in `iter` for the DRIVER pass, is the
+  walk being cut off, and `last` then names where. (An earlier draft of this
+  bullet said `seen ≈ 73`, a guess off the Apriori array's length; the array is
+  not the volume. A second draft said the other four types print `seen=0`; the
+  `DXE_CORE` pass has one file — `DxeCore` itself — so it prints `seen=1`, and
+  every type prints a line because every type makes at least the terminating
+  call.)
 - `P2 FREE largest=<n> pages` — the largest allocation `CoreAllocatePages` will
   still satisfy at the moment the assert fires, found by a shrinking ladder
   (4096, 1024, 256, 64, 16, 4, 1 pages) that allocates and immediately frees. This
-  is the memory question asked directly instead of computed.
+  is the memory question asked directly instead of computed. **It is the one probe
+  whose answer is partly predictable from the host:** with 6.10 MiB of demand
+  against a 35.4 MiB `Conv` heap, a large number here would confirm the arithmetic
+  and a small one would falsify the memory map rather than the hypothesis.
 
 The console's screen is wiped by `AdvanceNewLine` and has no scrollback, and the
 P2 output grows from 33 lines to at most 39; 100 rows are available and the
@@ -1536,13 +1694,45 @@ that can answer the next question actually on the device". It is:**
 | payload of record | sha256 `ecc10a225c8492d99ab4062e840e8a6b7def34a75f3f3679b1989ed515bb4bda` |
 | inner `FVMAIN` on device | sha256 `2995a6d0c1e62ceb…`, 123 files, 7,352,320 B |
 | inner `FVMAIN` in the build tree | identical |
-| Apriori array on device | 70 GUIDs, md5 `4fef65c55ac6d83cbfa14996e4b1b0dd` |
+| Apriori array on device | 70 GUIDs, 1120 bytes, md5 `ed607ebccf3c61aa02d15f4b727baf85` |
 | Apriori array in the build tree | identical |
 
 Byte-for-byte. **The payload on the device carries `P2 WALK` and `P2 FREE`**, so
 the three readings step 4.12's "Next" asks for are obtainable by a reboot — no
 flash, no TWRP round trip, and no dependence on the USB port, which at the time of
 writing is not enumerating at all.
+
+The `md5` above replaces `4fef65c55ac6d83cbfa14996e4b1b0dd`, which an earlier
+draft of this step carried and which **matches no hash of any part of the file and
+appears nowhere else in this repository**. It was copied forward without being
+recomputed; the value for the 1120-byte Apriori payload is
+`ed607ebccf3c61aa02d15f4b727baf85`. A hex digest that nothing else in the repo
+agrees with is worth more suspicion than one that appears twice.
+
+**And the host can now say what the difference between the two payloads is, file
+by file.** `boot-before-p2walk.img` (1,142,784 B, sha256 `fb697f47…`) is the image
+that drew the 46-character SEQ; the payload of record is 1,140,736 B and carries
+the `P2 WALK` / `P2 FREE` probes. Diffing their inner `FVMAIN` GUID tables:
+
+```
+only in the payload of record (123 files): [('AcpiTables', (0x02, 2878))]
+only in boot-before-p2walk  (122 files): []
+type/size mismatches on shared GUIDs:    []
+```
+
+So the two builds differ by **exactly one file**: the `AcpiTables` FREEFORM file,
+2,878 bytes, type `0x02` — the platform DSDT. Nothing else moved. That is what
+makes the join above safe to compute against the build tree: the volume the SEQ
+was produced from is this volume minus one ACPI table, and no driver's offset in
+it changed except by the 2,878 bytes that file and its FFS padding account for.
+
+**And that file is at physical index 112, after every driver.** The consequence is
+testable, and it tests out: running the join against the reading's own build
+(`work/out/boot-before-p2walk.img`, 122 files) reproduces it **exactly** — 19 `s`
+and 27 `L`, the same two Apriori sets, the same physical index list
+`[5, 6, 7, 8, 9, 12, 13, 15, 16, 18, 19, 23, 33, …, 73]`, and the same 5-vs-74
+verdict. So the join does not depend on which of the two volumes it is computed
+against, and the "one file differs" caveat is discharged rather than carried.
 
 Two traps in taking that readback, because the first attempt produced a confident
 wrong answer:
@@ -1579,15 +1769,30 @@ passes whatever the last half-block happens to contain. Every earlier payload wa
 the padded copy, so the whole written region is verified and the half-block that
 used to be unverifiable is zeros on both sides.
 
+**And `tools/fv-inventory.py`'s section walker was stepping by the wrong amount.**
+PI 2.3.1 pads every section to a 4-byte boundary, so the next section header is at
+`align4 (off + size)` and not at `off + size`. Most section sizes are already a
+multiple of 4, which is why it looked right: the odd-length ones put every
+following header four bytes early, and a four-byte-early section header still
+yields a plausible type byte. Measured on `FVMAIN.Fv`: stepping by `size` reports
+**83** sections across its 123 files; stepping by `align4` reports 123 files'
+worth, and every file gains the trailing section the unaligned walk had been
+losing. This matters beyond tidiness — `fv_files ()` and `sections ()` are what
+`tools/apriori-order.py`, `tools/fv-census.py` and `tools/pe-facts.py` all read the
+volume through, so a walker that drops each file's last section would have
+mis-cited the Apriori payload as well.
+
 ### What step 4.9 and step 4.10 got wrong
 
 Recorded because both were written with confidence and both are now replaced:
 
-- **`P2 SEQ` is capped at 69, not 70, and `DxeCore` is excluded by its file type,
-  not by being undiscovered.** Step 4.9's paragraph had the right count and the
-  wrong mechanism — it said the promotion loop's GUID compare "finds nothing",
-  implying no file. The file is there; it is the discovery switch that declines to
-  add it.
+- **`P2 SEQ` is not capped at 69 — the cap is 128 — and `DxeCore` is excluded by
+  its file type, not by being undiscovered.** Step 4.9's paragraph had the right
+  count and the wrong mechanism — it said the promotion loop's GUID compare "finds
+  nothing", implying no file. The file is there; it is the discovery switch that
+  declines to add it. And the "69" was never a limit of anything: the ring buffer
+  is `mP2AprioriGuid[128]` behind `P2BRINGUP_APRIORI_MAX`, so a 70-match run would
+  print 70 characters.
 - **The eight providers' SEQ indices were 5, 6, 7, 8, 9, 31, 34, 36, 37, 38, 39,
   42, 44** — not 4, 5, 6, 7, 8, 30, 33, 35, 36, 37, 38, 41, 43. Two of the names
   were wrong outright: the modules are `ArmCpuDxe` and `ArmTimerDxe`, not `CpuDxe`
@@ -1600,6 +1805,124 @@ Recorded because both were written with confidence and both are now replaced:
   cannot be picked up as a candidate by accident. `--apriori-move` and
   `tools/apriori-order.py` remain the right tooling for a reordering experiment;
   this is simply not a reordering problem.
+
+### Readings retracted in this step, and the four that replaced them
+
+Four mechanisms were proposed, argued for, and then killed by measurement. They
+are listed together because each one is the natural next guess, and the list is
+the cheapest way to stop the next session from re-deriving them:
+
+- **The stale or partial `SizeOfBuffer` short read.** `GetSection` writes
+  `*BufferSize = SectionSize` unconditionally on success, and `mP2AprioriCount` is
+  a running `MAX`, so neither a short array nor a stale length survives contact
+  with the code.
+- **A second Apriori GUID file, or a hidden `EFI_SECTION_USER_INTERFACE` on the
+  existing one.** The Apriori file is physical 0, one file, one `RAW` section,
+  1120 bytes, 70 GUIDs, no UI section.
+- **The "74-GUID file" as a source for `mP2AprioriCount`.** There is no such file.
+- **`FvReadFile`'s `LastKey` as a defect.** It is left on the matching entry, so
+  the read that follows it is correct. This was carried as a suspected bug for a
+  while and is not one.
+- **`FvCheck` truncating the FFS file list.** The scan does stop dead at an erased
+  run, and on this volume that run is 0xcf8 bytes from the end with nothing after
+  it: 123 files listed, zero corruption. The mechanism is real in the code and
+  hides nothing here.
+
+What replaced them is four measurements: the FFS attribute histogram and the exact
+`IsValidFfsFile` test (volume clean at every layer), the Apriori-index join with
+the 5-vs-74 verdict (no physical cutoff), the promotion loop read verbatim
+including its `FvHandle` conjunct (the loop cannot miss a listed file, so the 23
+absent entries were never listed), and the payload diff (the build tree differs
+from the reading's build by one `AcpiTables` file).
+
+### The one partial mechanism that survives, for 3 of the 27
+
+`tools/pe-facts.py`'s table has no field that separates the classes, but its last
+two lines report a *joint* condition that does most of the work for three of the
+27: **three of the 27 have no `.reloc` section and `ImageBase 0x0`** —
+`EmbeddedMonotonicCounter`, `RealTimeClock` and `CapsuleRuntimeDxe`. `has_reloc`
+on its own is a shared value (`true` and `false` both occur on both sides), so
+this is not a one-field separator; the signal is in the combination. With
+relocations stripped, `CoreLoadPeImage` takes the
+`CoreAllocatePages (AllocateAddress, …)` path at address 0 and has **no**
+`AllocateAnyPages` fallback (`if (EFI_ERROR (Status) && !RelocationsStripped)`),
+and `CoreInternalAllocatePages` rejects `Start == 0` with `EFI_NOT_FOUND` because
+page 0 is reserved for null-pointer detection. That records an `L` — and records it
+with a status that does *not* render as "Out of Resources", unlike the one `P2 DIAG`
+line that was read.
+
+**It is a partial mechanism and not the answer, because one of the 19 successes is
+in the same state:** `StatusCodeHandlerRuntimeDxe` also has no `.reloc` and
+`ImageBase 0x0`, so it made the same page-0 request and succeeded. Whatever
+distinguishes it from the three is the same unknown that distinguishes `PdcDxe`
+from `ShmBridgeDxe`, and it is still one variable, not two.
+
+### Eleven drivers the volume registers and the Apriori list does not name
+
+`tools/fv-census.py` enumerates them, and the count matters because an earlier
+draft said four:
+
+```
+PwrUtilsDxe, VcsDxe, FeatureEnablerDxe, MacDxe, RamManagerDxe, SmbiosDxe,
+SmBiosTableDxe, AcpiTableDxe, AcpiPlatform, BootGraphicsResourceTableDxe,
+SetupBrowser
+```
+
+11 of the volume's 80 type-`0x07` files are not in the Apriori array, which leaves
+the 69 that are — matching the 69 non-`DxeCore` entries exactly. They are discovered
+and scheduled by DEPEX like any other driver; they are simply not promoted by the
+a-priori pass. `EnvDxe`, which an earlier draft listed here, *is* named — it is
+entry 2.
+
+### The resolved table, all 70 entries
+
+The join is exact and resolves every Apriori entry to a physical file. `phys` is
+the index into `FVMAIN.Fv`'s file table (0 is the Apriori file itself, 1 is
+`DxeCore`); the last column is the `P2 SEQ` letter, with `-` for the 23 entries
+that were never promoted and `core` for `DxeCore`, which the walk never lists.
+
+```
+ap 0 DxeCore                          phys   1  core   ap35 PmicDxe                    phys  54  L
+ap 1 PcdDxe                           phys   2  s      ap36 WatchdogTimer              phys   8  L
+ap 2 EnvDxe                           phys  24  s      ap37 SecurityStubDxe            phys   5  L
+ap 3 ReportStatusCodeRouterRuntimeDxe phys  10  s      ap38 EmbeddedMonotonicCounter   phys  13  L
+ap 4 StatusCodeHandlerRuntimeDxe      phys  11  s      ap39 RealTimeClock              phys  16  L
+ap 5 RuntimeDxe                       phys   4  s      ap40 PrintDxe                   phys  18  L
+ap 6 ArmCpuDxe                        phys   3  s      ap41 DevicePathDxe              phys  19  L
+ap 7 ArmGicDxe                        phys  25  s      ap42 CapsuleRuntimeDxe          phys   9  L
+ap 8 MetronomeDxe                     phys  17  s      ap43 HiiDatabase                phys  23  L
+ap 9 ArmTimerDxe                      phys  26  s      ap44 BdsDxe                     phys  73  L
+ap10 SmemDxe                          phys  28  s      ap45 GpiDxe                     phys  44  L
+ap11 DALSys                           phys  39  s      ap46 I2C                        phys  45  L
+ap12 HWIODxeDriver                    phys  43  s      ap47 AdcDxe                     phys  58  -
+ap13 ChipInfo                         phys  27  s      ap48 UsbPwrCtrlDxe              phys  57  -
+ap14 PlatformInfoDxeDriver            phys  52  s      ap49 QcomChargerDxeLA           phys  56  -
+ap15 HALIOMMU                         phys  42  s      ap50 ChargerExDxe               phys  55  -
+ap16 ULogDxe                          phys  29  s      ap51 UsbfnDwc3Dxe               phys  62  -
+ap17 CmdDbDxe                         phys  31  s      ap52 UsbBusDxe                  phys  63  -
+ap18 NpaDxe                           phys  30  s      ap53 UsbKbDxe                   phys  64  -
+ap19 RpmhDxe                          phys  33  L      ap54 UsbMassStorageDxe         phys  65  -
+ap20 PdcDxe                           phys  34  L      ap55 UsbMsdDxe                  phys  66  -
+ap21 ClockDxe                         phys  40  L      ap56 UsbDeviceDxe               phys  67  -
+ap22 ShmBridgeDxe                     phys  74  s      ap57 UsbConfigDxe               phys  68  -
+ap23 ScmDxe                           phys   6  L      ap58 ButtonsDxe                 phys  53  -
+ap24 DiskIoDxe                        phys  35  L      ap59 TsensDxe                   phys  59  -
+ap25 PartitionDxe                     phys  36  L      ap60 SimpleFbDxe                phys  51  -
+ap26 EnglishDxe                       phys  38  L      ap61 LimitsDxe                  phys  60  -
+ap27 SdccDxe                          phys  47  L      ap62 HashDxe                    phys  69  -
+ap28 UFSDxe                           phys  48  L      ap63 CipherDxe                  phys  70  -
+ap29 Fat                              phys  37  L      ap64 RngDxe                     phys  72  -
+ap30 TzDxe                            phys   7  L      ap65 DDRInfoDxe                 phys  61  -
+ap31 VariableRuntimeDxe               phys  12  L      ap66 SimpleTextInOutSerial      phys  14  -
+ap32 DALTLMM                          phys  49  L      ap67 ConPlatformDxe              phys  20  -
+ap33 SPMI                             phys  46  L      ap68 ConSplitterDxe              phys  21  -
+ap34 ResetSystemRuntimeDxe            phys  15  L      ap69 GraphicsConsoleDxe         phys  22  -
+```
+
+Two things the table makes visible that the prose argues: the `L`s are not
+contiguous in `phys` (5, 6, 7, 8, 9, 12, 13, 15, 16, 18, 19, 23, 33, …, 73), and the
+never-promoted `-`s are interleaved with them right across the volume
+(`phys` 14, 20, 21, 22, 51, 53, 55–70, 72).
 
 ### The panel line the user read, and where it could and could not have come from
 
@@ -1647,10 +1970,21 @@ line first.
 
 ### Next
 
-Read `P2 WALK t=0 seen=…` and `P2 STATS … apriori=46/N` off the panel (video, then
-frame-step). `N` splits the promotion question; `seen` splits "the walk ended" from
-"the walk was cut off"; `P2 FREE largest=` says whether memory was the constraint.
-Then remove the `P2BRINGUP` block and fix what the three numbers name.
+**One line decides the first puzzle: `P2 WALK t=0 seen=…`.** `seen=80` means the
+DRIVER sweep ran to the end of the volume, so all 23 absent Apriori entries were
+walked and something after the walk dropped them — which would point at
+`CoreAddToDriverList`'s own allocation or at the list itself. Anything less than
+80 means the sweep was cut off, and `last` names the file it stopped on, which
+would point at `GetNextFile` or at the volume. Either answer is actionable; the
+current state of knowledge is not.
+
+Read it off the panel by video, then frame-step. Two other lines come with it:
+`P2 FREE largest=` (measured against the 6.10 MiB-vs-35.4 MiB arithmetic above, so
+it either confirms the memory map or falsifies it) and the `P2 DIAG` lines, which
+are the only place a `load failed` can be told from a `start failed`. The
+`P2 STATS` line's `N` is no longer needed: the `AprioriEntryCount` fork it was
+going to split is settled from the host. Then remove the `P2BRINGUP` block and fix
+what the readings name.
 
 **No flashing is needed to get them, and this is now confirmed rather than
 assumed.** `tools/build-p2-payloads.sh` was re-run on 2026-09-23 and reproduced
@@ -1667,10 +2001,22 @@ the reading independent of the USB port — which has been dropping out, was not
 enumerating at all earlier in the day (no `adb`, no `fastboot`, no `2717:`
 descriptor on the bus), and needs no `adb` to film a screen.
 
-The three numbers are the only remaining input the host cannot supply. Everything
-computable from the volume has now been computed: the file census, the Apriori
-join, the DEPEX graph, every PE header, the load-order allocation total, and the
-attribution of the panel line. What is left is one measurement.
+The two numbers are the only remaining input the host cannot supply. Everything
+computable from the volume has now been computed and re-checked: the file census,
+the FvCheck scan, the FFS attribute histogram, the exact `IsValidFfsFile` test,
+the Apriori join, the DEPEX graph, every PE header with a per-field separator
+verdict, the load-order allocation total against the device's own memory map, the
+payload diff, and the attribution of the panel line.
+
+### What this step cost, and what it bought
+
+Eleven host-side hypotheses were tested and ten were killed, which is a poor ratio
+for a step and the reason it is worth writing down. The one that survived is
+narrower than any of them: the 23 missing `mDiscoveredList` entries, and the 3 of
+27 reloc-less images. What the step bought is that both are now questions about a
+single known mechanism rather than about the volume, the checksums, the file table,
+the Apriori array, the PE headers, the heap size, the DEPEX graph, or the loader's
+address selection — all seven of which have been measured and are clean.
 
 ## Step 5 — Leave it bootable
 
@@ -1698,6 +2044,9 @@ attempt  image                          fbreason                     screen     
 3        as found in `boot`             not captured                 logo only            n/a            UEFILOG0: Start EBS
 4        Mu-gauguin-silicon-gzip.img    not captured                 text, then assert    n/a            (not read)
 5        (not flashed - same as row 4)  not captured                 not the panel        n/a            (not read)
+6        boot-before-p2walk.img, then   not captured                 P2 SEQ (46 chars),   n/a            (not read)
+         Mu-gauguin-silicon-gzip.img,                               then assert
+         read back byte-identical
 ```
 
 Row 4 is the one that matters and is step 4.8: our firmware ran and drew its own
@@ -1709,6 +2058,17 @@ no flash was needed and none was done, and the photograph that came back was
 measured and is not the panel — step 4.11 has the numbers. The reason `fbreason` is
 "not captured" for 3–5 is that reading it needs a host channel to fastboot, and none
 of those boots ended in fastboot.
+
+Row 6 is the reading step 4.12 is built on, and the one state the table had been
+missing. What came back from it is one line — the `P2 SEQ` string, read by eye
+rather than by frame-stepping a video — plus, from the same sessions, a single
+`P2 DIAG` line ("Out of Resources"). **No `P2 STATS` line has ever been read**, so
+`discovered=`, `started=` and the `apriori=` denominator are all still unknown, and
+it is the reason this step had to settle the `AprioriEntryCount` fork from the host
+instead. It is also the only row whose image is confirmed byte-identical on the
+device by a hash of the declared payload length rather than of a partition-sized
+read.
+
 
 The `abllog` column is step 4.6's answer — the last stage ABL's own log for that
 boot reached. It is the one column that is filled in whether or not the payload
