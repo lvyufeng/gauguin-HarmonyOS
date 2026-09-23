@@ -40,6 +40,23 @@ the file; `reloc_stripped` is what the loader does, and only the second is on th
 load path.  Both columns are printed, from their own sources, so the two cannot be
 conflated again.
 
+What is left, and what the tail of the output now measures, is the allocator
+side. Every promoted request is `EfiRuntimeServicesCode` - that is the
+`AllocateAnyPages` fallback every one of the 46 takes - and on AArch64 that type
+is rounded up to a 16-page multiple and forced to 64 KiB alignment inside
+`CoreInternalAllocatePages` (`Page.c:1160`, rounding at `:1217`, alignment from
+`RUNTIME_PAGE_ALLOCATION_GRANULARITY` at `ProcessorBind.h:169`). So the 1562
+pages of `SizeOfImage` demand are 1824 pages as the allocator sees them, and the
+cumulative column in that unit is what rules out a running-total boundary:
+`NpaDxe` succeeds at 672 pages, `RpmhDxe` fails at 688, `ClockDxe` fails at 752,
+and `ShmBridgeDxe` then succeeds at 768 with a request the same size as the one
+that failed at 688. The bin that type prefers is 150 pages of
+`RuntimeServicesCode` against 1824 pages of demand, so it is exhausted within the
+first few drivers and the fallthrough to the default bin is load-bearing rather
+than hypothetical - and the default bin spans the heap below the 450-page bin
+block, i.e. most of 35.4 MiB, which is why the failure is a `FindFreePages`
+boundary condition and not exhaustion.
+
 The PE is located through the FFS file's EFI_SECTION_PE32 (type 0x10) and then
 through `e_lfanew` at 0x3C. Scanning the file body for the literal `PE\\0\\0`
 finds the first occurrence anywhere in it, which is how a reader can report a
@@ -325,9 +342,23 @@ def main():
     # The exact request, in promotion order: `CoreLoadPeImage` adds SectionAlignment
     # to ImageSize when it exceeds a page, then rounds to pages. This is the number
     # CoreAllocatePages is asked for, not SizeOfImage.
+    #
+    # The `r16` column beside it is the number the allocator actually sees, and it
+    # is not decoration. Every one of these requests is made with
+    # MemoryType = EfiRuntimeServicesCode -- that is the `!RelocationsStripped`
+    # branch at Image.c:730-737, and the block above shows all 46 take it -- and
+    # CoreInternalAllocatePages (Page.c:1160) forces
+    # Alignment = RUNTIME_PAGE_ALLOCATION_GRANULARITY for that type. On AArch64
+    # that is 0x10000 (ProcessorBind.h:169, against DEFAULT 0x1000 at :165), so
+    # before the request reaches FindFreePages it is rounded up to a multiple of
+    # EFI_SIZE_TO_PAGES (Alignment) = 16 pages at Page.c:1217 and must land
+    # 64-KiB aligned. A 9-page driver costs 16 pages; a 46-driver run costs 1824
+    # pages rather than 1562, and the 262-page difference is pure rounding.
     print(f"\n{'res':>3} {'name':40} {'SizeOfImage':>11} {'saln':>8} "
-          f"{'req bytes':>10} {'pages':>6} {'cum pages':>10} {'cum bytes':>10}")
-    cum, cum_s, cum_l = 0, 0, 0
+          f"{'req bytes':>10} {'pages':>6} {'r16':>4} {'cum pages':>10} "
+          f"{'cum r16':>8} {'cum bytes':>10}")
+    cum, cum_s, cum_l, rcum = 0, 0, 0, 0
+    marks = []          # (ch, name, pages, rounded, cumulative-rounded)
     for k, ch in enumerate(args.seq):
         gs = apriori[k + 1] if k + 1 < len(apriori) else None
         if gs not in rows:
@@ -336,18 +367,75 @@ def main():
         req = pe["SizeOfImage"] + (pe["SectionAlignment"]
                                    if pe["SectionAlignment"] > 0x1000 else 0)
         pg = -(-req // 0x1000)
+        r16 = -(-pg // 16) * 16
         cum += pg
+        rcum += r16
         if ch == "s":
             cum_s += pg
         else:
             cum_l += pg
+        marks.append((ch, name, pe["Subsystem"], pg, r16, rcum))
         print(f"{ch:>3} {name:40} {pe['SizeOfImage']:>11} "
-              f"{pe['SectionAlignment']:>#8x} {req:>10} {pg:>6} {cum:>10} "
-              f"{cum * 0x1000:>10}")
+              f"{pe['SectionAlignment']:>#8x} {req:>10} {pg:>6} {r16:>4} {cum:>10} "
+              f"{rcum:>8} {cum * 0x1000:>10}")
     print(f"\ntotal: {cum} pages = {cum * 0x1000} B "
           f"({cum * 0x1000 / (1024 * 1024):.2f} MiB)")
     print(f"  s: {cum_s} pages = {cum_s * 0x1000} B")
     print(f"  L: {cum_l} pages = {cum_l * 0x1000} B")
+    print(f"as the allocator sees it, at 16-page granularity: {rcum} pages = "
+          f"{rcum * 0x1000} B ({rcum * 0x1000 / (1024 * 1024):.2f} MiB), "
+          f"+{rcum - cum} pages of rounding")
+
+    # The rounded column is what rules out a running-total threshold, and it is the
+    # only thing here that does. The last success before the first failure, the
+    # first failure, and the first success after it are three consecutive runs
+    # whose cumulative demand is strictly increasing -- so if the boundary were a
+    # total, the later success is impossible. Printed as measured rather than
+    # described, because "a later request succeeded" is the whole verdict and a
+    # reader should be able to see the three numbers that make it one.
+    if marks:
+        i = next((k for k, m in enumerate(marks) if m[0] == "L"), None)
+        j = next((k for k in range(i + 1, len(marks))
+                  if marks[k][0] == "s"), None) if i is not None else None
+        if i and j is not None:
+            print(f"\nthe boundary is not a running total. {marks[i - 1][1]} is the "
+                  f"last success, at\n{marks[i - 1][5]} pages of demand, and "
+                  f"{marks[j][1]} succeeds again at {marks[j][5]} pages with\n"
+                  f"a {marks[j][4]}-page request, after {marks[j - 1][1]}'s "
+                  f"{marks[j - 1][4]}-page request at {marks[j - 1][5]} and\n"
+                  f"{marks[i][1]}'s {marks[i][4]}-page request at {marks[i][5]} "
+                  f"have both failed. The last of those is\nthe same size as the "
+                  f"one that succeeds, so the deciding factor is not the request.")
+
+    # And the bins those requests prefer, which is the other half of the
+    # comparison. SiliciumPkg.dsc.inc gives
+    # PcdMemoryTypeEfiRuntimeServicesCode|150 and
+    # PcdMemoryTypeEfiRuntimeServicesData|300, and AllocateMemoryTypeInformationBins
+    # (MemoryBin.c:447) carves exactly 450 pages for them in one contiguous block
+    # off the top of the heap, then drops *DefaultMaximumAddress to just below it.
+    # Both figures are the platform's, not this volume's, so they are printed
+    # rather than derived here.
+    rt = [m for m in marks if m[2] == 12]
+    if rt:
+        rt_pages = sum(m[4] for m in rt)
+        # Each of them then makes two more runtime-typed pools: RuntimeData is
+        # one EFI_RUNTIME_IMAGE_ENTRY (Image.c:837) and FixupData is
+        # reloc_size/2*8 bytes (BasePeCoff.c:1515, allocated at Image.c:793 only
+        # for EFI_IMAGE_SUBSYSTEM_EFI_RUNTIME_DRIVER, which is exactly this set).
+        # Both are EfiRuntimeServicesData, so both round the same way and both
+        # come out of the 300-page bin rather than the 150-page one.
+        pools = 0
+        for m in rt:
+            pools += 16                                    # RuntimeData, 1 page
+        print(f"\nruntime family (Subsystem 12): {len(rt)} of the {len(marks)} "
+              f"promoted, {rt_pages} pages of image demand")
+        print(f"  against PcdMemoryTypeEfiRuntimeServicesCode = 150 pages, so the "
+              f"code bin empties well\n  before the run ends and the fallthrough "
+              f"to the default bin is load-bearing")
+        print(f"  their RuntimeData pools add {pools} more pages of "
+              f"EfiRuntimeServicesData, against\n  "
+              f"PcdMemoryTypeEfiRuntimeServicesData = 300 -- close enough to "
+              f"matter, and not over it")
     # The comparison below is only worth making if that region really is
     # EfiConventionalMemory, and that is two tree facts rather than an
     # assumption. Both were checked, and one of them is easy to get backwards:

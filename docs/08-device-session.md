@@ -2945,6 +2945,225 @@ are now a decided pair rather than a range (`entries=70 sum=a998b263` with
 above are now predictions that can be wrong, which is more than could be said for
 them while the stop was still standing.
 
+## Step 4.18 — The 27 fail on a boundary, not on exhaustion, and the boundary is not the request
+
+This step changes no firmware. It is the first one that tries to answer the 27 by
+reading the allocator rather than the panel, and it ends somewhere narrower than
+it started: three candidate mechanisms are gone, the number that was supposed to
+settle it is wrong, and what remains is a `FindFreePages` boundary condition whose
+deciding factor is heap state at the moment each request arrives. `P2 ERR` still
+has not been read, and this step does not replace it — it changes what `P2 ERR`
+and `P2 FREE` would prove.
+
+### The demand, in the units the allocator uses
+
+`tools/pe-facts.py` has printed a per-driver page demand since `3f79ad6`. The
+number is `EFI_SIZE_TO_PAGES (ImageSize + SectionAlignment)` when
+`SectionAlignment > 0x1000` (`CoreLoadPeImage`, `Image.c:682-688`): **1562 pages =
+6.10 MiB** across the 46 promoted drivers, 575 pages among the `s` and 987 among
+the `L`.
+
+That is not the number `FindFreePages` is asked for, and the difference is not a
+rounding detail — it is the whole shape of the problem. Every one of the 46
+requests is made with `MemoryType = EfiRuntimeServicesCode`, because that is the
+`!RelocationsStripped` fallback every one of them takes (`Image.c:730-737`, and
+the tool prints the evidence: `Characteristics` bit 0 is clear on all 80 DRIVER
+files, so none of them reaches the page-0 `AllocateAddress` path). For that type
+`CoreInternalAllocatePages` (`Page.c:1160`) sets
+`Alignment = RUNTIME_PAGE_ALLOCATION_GRANULARITY`, which is **0x10000 on AArch64**
+(`ProcessorBind.h:169`, against `DEFAULT_PAGE_ALLOCATION_GRANULARITY` 0x1000 at
+`:165`), and then rounds the count up at `Page.c:1217`:
+
+```c
+NumberOfPages += EFI_SIZE_TO_PAGES (Alignment) - 1;
+NumberOfPages &= ~(EFI_SIZE_TO_PAGES (Alignment) - 1);
+```
+
+**16 pages minimum, 64 KiB alignment, for every request in the run.** So the same
+demand is 1824 pages = 7.12 MiB as the allocator sees it — 262 of those pages are
+rounding alone, and the smallest request in the volume is 16 pages rather than 1.
+The tool now prints that column and its cumulative.
+
+### What that column rules out, which the unrounded one did not
+
+The promotion order is Apriori order, so each slot's cumulative demand is the
+running total up to that request:
+
+| | slot | request, rounded | cumulative | result |
+|---|---|---|---|---|
+| last success before the failures | 18 `NpaDxe` | 32 | 672 pages | `s` |
+| first failure | 19 `RpmhDxe` | 16 | 688 pages | `L` |
+| last failure before the lone success | 21 `ClockDxe` | 48 | 752 pages | `L` |
+| the lone success | 22 `ShmBridgeDxe` | 16 | 768 pages | `s` |
+
+> A 16-page request at 768 pages of cumulative demand succeeded after a 16-page
+> request at 688 had already failed.
+
+Identical request, opposite result, in the same phase of the same run. So the
+deciding factor is not the request — not its size, not its type, not its
+alignment — and it is not a running total either, since a larger total came
+later and worked. This is the same fact as the `PdcDxe`/`ShmBridgeDxe` pairing
+from step 4.17 (both 36,9xx B, both 9 pages, opposite results), now stated in the
+unit that matters, and it is what makes "plain exhaustion" untenable rather than
+merely improbable: 768 pages is 3.00 MiB of a heap that is 35.4 MiB.
+
+### The heap is 35.4 MiB and it is the only conventional region
+
+Unchanged from the last time it was dumped, and re-checked here rather than
+assumed: `MemoryMapLib.c:24` carries `{"DXE Heap", 0x9B800000, 0x02360000, AddMem,
+SYS_MEM, SYS_MEM_CAP, Conv, WRITE_BACK_XN}`, and the whole span
+0x9DB60000–0xA0000000 above it is `BsData`/`Reserv`/`RtData`. The three other rows
+carrying `Conv` are `MMAP_IO` rather than `SYS_MEM`, so they never reach
+`CoreAddMemoryDescriptor`'s `EfiConventionalMemory` path. The DXE Heap really is
+the only conventional memory on the platform, and it is 9056 pages.
+
+### Three mechanisms eliminated
+
+**`EFI_MEMORY_SP` — not set by this platform.** The skip is real:
+`CoreFindFreePagesI` does `if (Entry->Type != EfiConventionalMemory) continue;`
+and then, at `Page.c:961-965`, `if ((Entry->Attribute & EFI_MEMORY_SP) != 0)
+continue;` with the comment "Don't allocate out of Special-Purpose memory". The
+mapping exists too — `Gcd.c:96` is
+`{ EFI_RESOURCE_ATTRIBUTE_SPECIAL_PURPOSE, EFI_MEMORY_SP, TRUE }`. But that
+attribute has to be set by the platform's resource map, and neither `Platforms/`
+nor `Silicon/` contains a single `EFI_MEMORY_SP` or `SPECIAL_PURPOSE` reference.
+No region on this device is Special-Purpose, so the skip never fires.
+
+**The `AllocateAddress` path — no promoted driver takes it.** `ImageBase` is
+**0x0 for all 46**, and `RelocationsStripped` is false for all of them, so
+`CoreLoadPeImage`'s condition at `Image.c:719-728` is false, `AllocateAddress` is
+never attempted, and the `Special`-overlap `EFI_NOT_FOUND` at `Image.c:1293`
+cannot be the mechanism for any of the 27. `Status` stays at the value it was
+pre-set to — `EFI_OUT_OF_RESOURCES` at `Image.c:697` — and the run takes the
+`CoreAllocatePages (AllocateAnyPages, EfiRuntimeServicesCode, …)` fallback. This
+also means the status the 27 report is *inherited*, not necessarily the reason
+the allocation failed; `P2 ERR`'s name is the loader's word for it, and the
+detail is in which of `FindFreePages`' four rungs came back empty.
+
+**The runtime fixup log — measured now, and it fits.** `FixupDataSize =
+reloc_size / 2 * 8` (`BasePeCoff.c:1515`) and `CoreLoadPeImage` allocates it at
+`Image.c:793`, with NULL meaning `EFI_OUT_OF_RESOURCES`, for every image whose
+`Subsystem` is 12. That is a second allocation the page-demand table does not
+count, so it was worth measuring rather than reasoning about. Per driver, in
+pages:
+
+| driver | slot | result | reloc | fixup bytes | fixup pages |
+|---|---|---|---|---|---|
+| `EnvDxe` | 2 | `s` | 4096 | 16384 | 4 |
+| `ReportStatusCodeRouterRuntimeDxe` | 3 | `s` | 20 | 80 | 1 |
+| `StatusCodeHandlerRuntimeDxe` | 4 | `s` | 0 | 0 | 0 |
+| `RuntimeDxe` | 5 | `s` | 16 | 64 | 1 |
+| `SdccDxe` | 27 | `L` | 4096 | 16384 | 4 |
+| `VariableRuntimeDxe` | 31 | `L` | 116 | 464 | 1 |
+| `ResetSystemRuntimeDxe` | 34 | `L` | 48 | 192 | 1 |
+| `EmbeddedMonotonicCounter` | 38 | `L` | 0 | 0 | 0 |
+| `RealTimeClock` | 39 | `L` | 0 | 0 | 0 |
+| `CapsuleRuntimeDxe` | 42 | `L` | 0 | 0 | 0 |
+
+**12 pages in total, unrounded** — and the number that was carried into this step
+as 131 was wrong; it is 12, and the tool computes it rather than a scratch
+session. At the 16-page granularity that applies to a runtime pool it is 96 pages
+across the family, against the 300-page `EfiRuntimeServicesData` bin below. The
+table's `s`/`L` split is also flat: the four that loaded and the six that did not
+are interleaved in the order they appear, so the fixup log does not separate them.
+**Not the mechanism**, and now measurably not.
+
+### The bins, which is where the state that decides it lives
+
+The request's preferred rung is the type's own bin, and those bins are real on
+this build. The chain, end to end, because each link is a different file:
+
+- `SiliciumPkg.dsc.inc:45-53` sets `PcdMemoryTypeEfiRuntimeServicesData|300` and
+  `PcdMemoryTypeEfiRuntimeServicesCode|150`, with the other three Special types at
+  0. Only these two are non-zero, and both are `Special = TRUE` in
+  `mMemoryTypeStatistics` (`Page.c:36-53`).
+- `:121` sets `PcdPrePiProduceMemoryTypeInformationHob|TRUE` — the DEC default is
+  FALSE — so `BuildMemoryTypeInformationHob ()` runs in SEC
+  (`MemoryInitPei.c:153`) and produces the 6-entry array
+  (`PrePiHobLib/Hob.c:887-908`).
+- `PopulateMemoryTypeInformation` (`MemoryBin.c:123`, called from
+  `Gcd.c:2306`) copies it in and aligns each non-zero count up:
+  `NumberOfPages = EFI_SIZE_TO_PAGES (ALIGN_VALUE (…, Granularity))`.
+- `CoreInitializeMemoryServices` then computes `MinimalMemorySizeNeeded =
+  MINIMUM_INITIAL_MEMORY_SIZE (0x10000) + CalculateTotalMemoryBinSizeNeeded (…)`
+  (`Gcd.c:2319`) and calls `CoreAddMemoryDescriptor (EfiConventionalMemory, …)`
+  (`Gcd.c:2539-2544`), which reaches
+  `AllocateMemoryTypeInformationBins` (`MemoryBin.c:447`).
+- That function computes `RequiredSize = 300 + 150 = 450 pages = 1,843,200 B =
+  1.76 MiB`, allocates one contiguous block at that alignment, carves the bins
+  out of it top-down in array order — `RuntimeServicesData` gets the top 300
+  pages and `RuntimeServicesCode` the 150 below it — and drops
+  `*DefaultMaximumAddress` to `BaseAddress - 1`, i.e. to the top of everything
+  below the block.
+
+So 1.76 MiB of the heap is spoken for before the dispatcher starts, and the
+150-page `RuntimeServicesCode` bin is asked to hold **1824 pages** of demand: it
+is exhausted within the first few drivers, and everything after that is served by
+the fallthrough — the default bin (the heap below the block), then
+`CoreFindFreePagesI` anywhere, then `PromoteMemoryResource ()`. `Page.c:1314`'s
+`Start = FindFreePages (…); if (Start == 0) { Status = EFI_OUT_OF_RESOURCES; }`
+is therefore being reached with a large amount of memory still free, which is the
+one thing the panel has already told us: `P2 DIAG` reported `Out of Resources`.
+
+### What is left, and what would decide it
+
+The mechanism has to be a state that differs between two *identical* requests
+made a few milliseconds apart — that is all the `s`/`L` pattern leaves standing.
+The two candidates the code offers are both in `FindFreePages`' ladder:
+
+1. **A bin boundary.** `mMemoryTypeStatistics[EfiRuntimeServicesCode]` has a
+   `BaseAddress`/`MaximumAddress` window of 150 pages set at bin-creation time,
+   and test 1 of the ladder only fires while `MaxAddress >= MaximumAddress`. Once
+   the bin is full, the request is served *elsewhere*, and where it lands depends
+   on which rung has room — a 64-KiB-aligned run of the right size below
+   `mDefaultMaximumAddress`, or a promotion. A request can fail on rung 3 while a
+   later one succeeds on rung 3 because `PromoteMemoryResource` added a region in
+   between.
+2. **Promotion.** `PromoteMemoryResource` (`Page.c:382`) converts a non-conventional
+   GCD region into `EfiConventionalMemory` and the ladder recurses. If it fires
+   between slot 21 and slot 22, the successes on either side are the same kind of
+   request finding room that was not there before — which is exactly the shape
+   observed.
+
+Both are decidable, and neither is decidable from the host, because both turn on
+what the heap looked like at that instant. The instrument that answers it is
+already on the phone and has never been read: **`P2 FREE largest=`** is
+`P2LargestAlloc`'s ladder `{4096, 1024, 256, 64, 16, 4, 1}` pages run at the
+assert, so it says how much memory a *fresh* request could still get after all 46
+attempts. Read with the `s`/`L` pattern it separates the two candidates:
+
+| `P2 FREE largest=` | what it means |
+|---|---|
+| `≥16` | a fresh request of the size that failed at slot 19 (16 pages) still succeeds *after* all 46 — so the failures are not about room at all, and the deciding factor is per-request state (a bin window, or an alignment run), not the total |
+| `0` | the heap really did run out by the end — which, with 1824 pages of demand against 9056 pages, means something other than the drivers is consuming it, and the search moves off the dispatcher |
+| `4`, `1` | the residue is real but too small for any driver; the demand was paid down, and the 27 have to be explained by *when* it was paid, not how much was left |
+
+And the one value that would settle the heap's own size, which the host cannot
+compute and which no `P2` line prints: `CoreInitializeMemoryServices`' chosen
+`BaseAddress`, `Length` and `MinimalMemorySizeNeeded`. The `DEBUG` at
+`Gcd.c:2505` computes all three and prints them to a console that does not exist
+on this device. **If a `P2` addition is wanted, that is the line to add** — three
+numbers from inside the one function that decides what the heap is, printed once
+per boot, and they turn the 35.4 MiB figure from the resource map into the number
+the allocator actually got.
+
+| | |
+|---|---|
+| image | **none** — this step changes no firmware, and the phone still carries step 4.13's `8c565681d1093b76c1cf184a549099aa2a957127c8be5ded439d934164535842` |
+| changed | `tools/pe-facts.py` — the 16-page rounded column and its cumulative, the running-total verdict, and the runtime-family bin arithmetic |
+| reproducible from | `python3 tools/pe-facts.py`; the bin sizes come from `SiliciumPkg.dsc.inc`, not from the volume |
+| what it corrects | the fixup-log total, 131 pages → **12** (96 at runtime granularity), and the reading of `P2 DIAG`'s `Out of Resources`, which is the loader's pre-set status at `Image.c:697` rather than a verdict about the heap |
+
+### What to read
+
+Unchanged in priority, with one addition. `P2 ERR` first — it names the status
+the 27 report, and the whole of the above is consistent with one name while the
+`FindFreePages` rung behind it is what varies. Then **`P2 FREE largest=`**, which
+has never been read and which the table above turns into a four-way decision.
+Then the rest of the list from step 4.17 (`P2 APRI`'s `bytes=`/`entries=`/`sum=`
+against `P2 STATS apriori=46/70` or `46/47`; `P2 WHY`, never read; the five
+`P2 WALK` lines; the 27 `P2 DIAG` records in the repeating digest).
+
 ## Step 5 — Leave it bootable
 
 Whatever the outcome, end the session with the stock image back on `boot`:
