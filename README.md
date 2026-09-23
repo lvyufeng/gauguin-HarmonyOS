@@ -83,11 +83,14 @@ is a checkpoint inside P2; none is a completed phase. `docs/00-plan.md` has the
 per-phase detail, and `docs/08-device-session.md` has the exact sequence for the
 next time the phone is in hand. What is blocking is eight architectural protocols
 — Security, Bds, Watchdog, Variable, Capsule, Monotonic, Reset, Real Time Clock —
-that DXE never installs, and no static pass over the volume explains it: the
-dependency expressions all resolve, the Apriori file is complete, and the images
-are well-formed. The failing driver is therefore a runtime property, and the
-firmware has been instrumented to print which one — `docs/08` step 4.9 has the
-lines to look for.
+that DXE never installs. The static pass got as far as it can: the dependency
+expressions all resolve, the Apriori file is complete, the images are well-formed,
+and the five providers that *did* install are exactly the first five in Apriori
+order while the eight that did not are all at position 31 or later — so the batch
+broke somewhere among the twenty-one modules between them, which install no
+architectural protocol and are invisible in the result. The failing driver is
+therefore a runtime property, and the firmware has been instrumented to print
+which one — `docs/08` step 4.9 has the lines to look for.
 
 P0 result: all 38 partition images dumped and size-verified against the GPT; **86
 signed AArch64 DXE drivers** and Qualcomm's own `uefiplat.cfg` recovered from the

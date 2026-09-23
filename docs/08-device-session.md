@@ -769,28 +769,101 @@ That table kills the two hypotheses step 4.8 left open. `ArmTimerDxe` depexes on
 `ArmGicDxe` ran, so a protocol was installed, so `gBS` was valid and
 `PcdProtocol` exists (four present drivers depex on it). "The PCD driver never
 started" is false, and so is "something corrupted the pool before the first
-protocol was installed". Corollary worth keeping: **a driver cannot be the root
-cause if it is absent from the FD's dependency closure**, which is why the
-`MetronomeDxe`-dereferences-`gBS` theory died — it predicted a split that the
-`ArmGicDxe`-ran argument contradicts.
+protocol was installed". The second one died because of the order: the theory was
+that some driver dereferenced an invalid `gBS` and the split falls exactly at
+`MetronomeDxe`, the first driver to do so through `CalculateCrc32` — but
+`ArmGicDxe` installs `gHardwareInterruptProtocolGuid` *earlier* in the same
+sequence, and `ArmTimerDxe` only runs because that succeeded. A valid protocol
+installation means `gBS` was good up to that point, which is past where the
+theory needed it to be bad.
 
-Three more candidates died the same way:
+Five more candidates died the same way:
 
 - **The Apriori file.** FvMain's file `[0]`, GUID `FC510EE7-FFDC-11D4-BD41-0080C73C8881`,
   is one `EFI_SECTION_RAW` of 1120 bytes = 70 GUIDs. **All 70 name a real file in
-  the volume, and all eight missing providers are in it.** A-priori membership
-  separates nothing. Its one real property is subtler and is a genuine mechanism
-  difference: `CorePreProcessDepex` marks a-priori members `Dependent = TRUE`, the
-  promotion loop clears it, and the sweep at `Dispatcher.c:556` only evaluates
-  `CoreIsSchedulable` for entries still `Dependent` — so **a-priori entries are
-  scheduled once and never retried**, unlike depex-driven drivers, which are
-  re-evaluated on every pass of the `do { … } while (ReadyToRun)` loop. That does
-  not yet name a driver, but it is the one asymmetry in the dispatcher that could
-  produce a whole cluster of missing protocols at once.
-- **Malformed images.** All 18 drivers inspected are well-formed `0xaa64` PE32+
-  (uniform `OptHeaderSize 0xf0`, `DllCharacteristics 0x160`, `ImageBase 0x0`), and
-  the FFS `Checksum`/`State`/`FileSize` block is not re-validated on the start
-  path anyway — `CoreValidateFfsHeader` runs only on the read path.
+  the volume, and all eight missing providers are in it.** Measured against the
+  FV's own map, the 70 are the files at index 1–31, 33–40, 42–49, 51–70 and
+  72–74 — that is, the whole front of the volume minus five entries, not a
+  curated list of anything. **All thirteen arch-protocol providers are in it,
+  the five that ran and the eight that did not alike**, so membership separates
+  them perfectly evenly and explains nothing on its own. What membership does
+  give is the mechanism: `CorePreProcessDepex` marks a-priori members
+  `Dependent = TRUE`, the promotion loop clears it, and the sweep at
+  `Dispatcher.c:556` only evaluates `CoreIsSchedulable` for entries still
+  `Dependent` — so **a-priori entries are scheduled once and never retried**,
+  whereas depex-driven drivers are re-evaluated on every pass of the
+  `do { … } while (ReadyToRun)` loop. All thirteen providers therefore had their
+  entry points invoked in one batch at the very start of the dispatcher, with no
+  depex gate.
+
+**The Apriori order is the first thing in this project that separates the five
+from the eight.** `CoreFwVolEventProtocolNotify` walks `AprioriFile[Index]` in
+list order and appends each match to `mScheduledQueue`, and the drain at
+`Dispatcher.c:486` is a plain FIFO — so the batch runs in the order of this
+repository's `APRIORI.inc` `INF` list, *not* in FV file order:
+
+| a-priori # | driver | protocol it owes | state |
+|---|---|---|---|
+| 5 | `RuntimeDxe` | Runtime | **present** |
+| 6 | `CpuDxe` | CPU | **present** |
+| 7 | `ArmGicDxe` | HardwareInterrupt | **present** |
+| 8 | `MetronomeDxe` | Metronome | **present** |
+| 9 | `TimerDxe` | Timer | **present** |
+| 10–30 | 21 modules — `SmemDxe` … `TzDxeLA` — none installs an arch protocol | — | unobservable |
+| 31 | `VariableRuntimeDxe` | Variable | **missing** |
+| 34 | `ResetSystemRuntimeDxe` | Reset | **missing** |
+| 36 | `WatchdogTimer` | Watchdog | **missing** |
+| 37 | `SecurityStubDxe` | Security | **missing** |
+| 38 | `EmbeddedMonotonicCounter` | Monotonic | **missing** |
+| 39 | `RealTimeClockRuntimeDxe` | RTC | **missing** |
+| 42 | `CapsuleRuntimeDxe` | Capsule | **missing** |
+| 44 | `BdsDxe` | Bds | **missing** |
+
+In FV order the same thirteen are interleaved — `WatchdogTimer` is FV file 8,
+`MetronomeDxe` 17, `ArmTimerDxe` 26 — and the split is not clean there. In
+a-priori order it is exact: **every provider at position 5–9 installed its
+protocol, every provider at position 31 or later did not**, with the unobservable
+21 in between. The sample is sparse but the boundary is sharp, and it says the
+batch stopped producing protocols somewhere in that window.
+
+That ordering also retracts the obvious reading of it. Dependencies *are*
+satisfied in this order — `TimerDxe` (9) precedes `WatchdogTimer` (36),
+`VariableRuntimeDxe` (31) precedes `ResetSystemRuntimeDx` (34), `RealTimeClock`
+(39) and `CapsuleRuntimeDxe` (42), and `PcdDxe` (1) precedes everything — so
+"a member needed a peer that had not run yet" is not the defect, and trimming the
+list is not the fix. The reference platforms schedule a batch of the same size
+(72 entries here; `lavender` 63, `nabu` 73, `vili` 81) and dispatch it fine.
+What the order does settle is narrower and more useful: because nothing in the
+batch is retried and nothing can still be waiting, **each of the eight was
+reached** — its image failed to load, or its `EntryPoint` was called and returned
+an error. There is no third possibility, and no stall that the assert would not
+have pre-empted.
+
+- **Malformed images.** A census of all 86 PE32+ files in the volume found no
+  malformed one: every arch-protocol provider is `0xaa64`, `ImageBase 0x0`,
+  `DllCharacteristics 0x160`, uniform `OptHeaderSize 0xf0` — the same shape as
+  the drivers that run. The FFS `Checksum`/`State`/`FileSize` block is not
+  re-validated on the start path anyway (`CoreValidateFfsHeader` runs only on the
+  read path), so a stale checksum could not be the cause even if one existed.
+- **Heap exhaustion.** The five providers that ran are the five *cheapest* in the
+  batch, so "the batch ran out of memory partway" was the obvious reading until
+  the arithmetic killed it. Page-aligned `SizeOfImage` summed over every file in
+  the a-priori batch is **7,385,088 B (7.04 MB)** — all 86 files together are
+  9,306,112 B — against a `DXE Heap` of `0x02360000` = **35.38 MB**. Five times
+  the headroom, for a batch whose `CoreLoadImage` allocations are freed as each
+  section is copied in. (An earlier reading of that same figure was 5× low and
+  briefly made exhaustion look plausible; the number is 35 MB, not 7 MB.)
+- **"Runtime drivers fail."** Ten modules in the volume carry
+  `Subsystem = 12 (EFI_RUNTIME_DRIVER)`, and five of the eight missing providers
+  are among them (FV indices: `RuntimeDxe` 4, `CapsuleRuntimeDxe` 9,
+  `ReportStatusCodeRouter` 10, `StatusCodeHandler` 11, `VariableRuntimeDxe` 12,
+  `EmbeddedMonotonicCounter` 13, `ResetSystemRuntimeDx` 15, `RealTimeClock` 16,
+  `EnvDxe` 24, `SdccDxe` 47). `RuntimeDxe` is one of them and it runs, so this
+  was never a rule — and the a-priori order dissolves the correlation completely:
+  the runtime drivers happen to sit late in `APRIORI.inc` (31–42) while
+  `RuntimeDxe` happens to sit early (5). `SecurityStubDxe`, `WatchdogTimer` and
+  `BdsDxe` are `Subsystem = 11` and are missing alongside them. The shared
+  property is position, not subsystem.
 - **A logging channel we could read instead of the panel.** There is no `logfs`
   writer anywhere in the Mu-Silicium tree, so the firmware does not append to the
   ring `tools/read-logfs.py` reads; and the P0 dump of that partition is a stock
@@ -820,6 +893,33 @@ line budget is deliberate: eight missing protocols print as sixteen lines, so th
 `NOLOAD` list is capped at twelve and `P2 STATS` is printed **last**, which puts it
 inside the console's final screenful no matter how long the dump gets.
 
+**What to read, and what each outcome means.** `P2 DIAG` names the victims, in the
+order they were reached; the phase letter is what separates the two readings of
+the boundary — and note that DIAG never names a *cause*, only a driver that
+failed, so the cause is either the first line's driver or something earlier that
+returned success while breaking something shared:
+
+- **First lines are `L`.** `CoreLoadImage` failed, most likely
+  `EFI_VOLUME_CORRUPTED` or `EFI_NOT_FOUND`. Then by a-priori position 31 the
+  dispatcher could no longer read the volume, and the culprit is in the
+  unobservable window 10–30 — the six there that touch memory mappings or do DMA
+  (`HALIOMMUDxe` 15, `ShmBridgeDxeLA` 22, `ScmDxeLA` 23, `SdccDxe` 27,
+  `UFSDxe` 28, `TzDxeLA` 30) are the ones to look at first.
+- **First lines are `S`.** The volume was fine and eight entry points failed on
+  their own. The status codes then say why, and if all eight share one status the
+  shared cause is in the window again.
+- **`started=70 apriori=70/70 diag=0`.** Every entry point was reached and every
+  one returned success, and the protocols are still absent. Then the failure is
+  inside the drivers — an early "not supported on this platform" return that
+  still returns `EFI_SUCCESS` — and no dispatcher instrumentation can see it; the
+  next probe has to be inside `VariableRuntimeDxe` and `SecurityStubDxe`
+  themselves, with the trivial second one as the control.
+
+A `diag` count of exactly 8 with nothing else is its own signal: it means all 13
+non-arch modules in the window returned success, so nothing between the two
+groups failed outright, and whatever broke the tail did so without returning an
+error at its own entry point.
+
 **This is unverified.** Nothing here has been run on hardware — the phone was not
 on USB when the image was built. What *is* verified is that the instrumentation is
 in the artifact: `strings` finds all four format strings in `DxeCore.efi`, in the
@@ -840,6 +940,20 @@ text added to DXE may overflow the FV rather than simply fail to display.
 `P2 DIAG` and `P2 STATS` lines before anything else — they are the last two blocks
 before the assert and they name the driver. Then remove the `P2BRINGUP` block,
 fix whatever it names, and re-run the standing cycle.
+
+If the evidence lands inside the window rather than on a `DIAG` line — `diag=0`,
+or a set of failures that does not explain the boundary — the next probe is the
+twenty-one modules at a-priori positions 10–30, one at a time, starting with
+`HALIOMMUDxe` (15). The experiment is a **reorder, not a removal**: move the
+suspect to the end of the `APRIORI DXE` block and rebuild. If the eight providers
+then install, that module is the one that broke the batch, and it did so without
+returning an error at its own entry point — which is the one failure mode the
+instrumentation cannot see. The order comes from the reference package verbatim:
+`tools/make_uefi_platform.py` rewrites `suryaPkg/Include/APRIORI.inc` to point at
+`Binaries/gauguin/`, comments out what this device's XBL did not provide, and
+inserts the four extra drivers — it never reorders. So the experiment needs a move
+step added to `rewrite_incs ()`, not a hand edit: `APRIORI.inc` says "do not edit
+by hand" and means it.
 
 ## Step 5 — Leave it bootable
 
