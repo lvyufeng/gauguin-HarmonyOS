@@ -15,6 +15,16 @@
 # Only the kernel log distinguishes them, so this prints the kernel's view live
 # and labels each event. Run it, then plug the phone in.
 #
+# A fourth cause was added after it cost a whole session, and it is why this now
+# opens with the port registers rather than with the device list:
+#
+#   0. nothing is electrically on any port at all, and the watch below would sit
+#      silent forever without saying so
+#
+# The registers answer that one directly - see the note above them - and the same
+# section reports a controller being torn down at the PCIe layer, which produces
+# no USB event and is therefore invisible to the rest of this script.
+#
 #   tools/watch-usb.sh [seconds]      (default: run until Ctrl-C)
 
 set -uo pipefail
@@ -55,6 +65,78 @@ done
 printf '   usbcore.autosuspend = %s\n' \
     "$(cat /sys/module/usbcore/parameters/autosuspend 2>/dev/null)"
 
+# Is anything electrically there at all? This has to be read from the xHCI port
+# registers rather than from the USB device list, because the two answers are
+# different questions and only one of them is about the phone.
+#
+# A port reading `Connected` means the device pulled up D+ and the host can see
+# it. `Not-connected Link:RxDetect` means the host is looking for a receiver and
+# finding none - which is what an empty port looks like AND what a phone looks
+# like when its USB device controller is not running: powered off, or sitting in
+# a boot loop whose payload has no USB stack in it. So "the phone is plugged in
+# and nothing sees it" and "the port is empty" are the same reading here, and
+# that is worth knowing before swapping cables for an hour.
+#
+# The other thing this catches is a controller that is flapping at the PCIe
+# layer rather than the USB layer. `pciehp: Slot(N): Link Down` / `Card not
+# present` produces no USB device event at all, so the event watch below would
+# sit silent while the port underneath it was being torn down and rebuilt. On
+# this machine that is 0000:6c:00.0 behind root port 00:1c.4 - the Type-C port.
+# See docs/06-host-usb.md.
+say "== port registers: what is electrically present"
+# `-d` is not enough here: /sys/kernel/debug is root-only (drwx------), so the
+# test fails for the user even when debugfs is mounted. Ask as root instead.
+if ! sudo ls /sys/kernel/debug/usb/xhci >/dev/null 2>&1; then
+    sudo mount -t debugfs none /sys/kernel/debug 2>/dev/null
+fi
+if ! sudo ls /sys/kernel/debug/usb/xhci >/dev/null 2>&1; then
+    warn "   (debugfs not mounted; run: sudo mount -t debugfs none /sys/kernel/debug)"
+else
+    for c in $(sudo ls /sys/kernel/debug/usb/xhci/ 2>/dev/null | sort); do
+        ports=$(sudo ls /sys/kernel/debug/usb/xhci/"$c"/ports/ 2>/dev/null | wc -l)
+        conn=0
+        for p in $(sudo ls /sys/kernel/debug/usb/xhci/"$c"/ports/ 2>/dev/null | sort); do
+            line=$(sudo head -1 /sys/kernel/debug/usb/xhci/"$c"/ports/"$p"/portsc 2>/dev/null)
+            case "$line" in
+                *Not-connected*) ;;
+                *) conn=$((conn + 1))
+                   printf '   %s %s  %s\n' "$c" "$p" "$line" ;;
+            esac
+        done
+        if [ "$conn" = 0 ]; then
+            warn "   $c  $ports ports, none connected  <- nothing is presenting"
+        else
+            ok   "   $c  $conn of $ports ports connected"
+        fi
+    done
+fi
+
+# The PCIe-layer flap. The window matters and a cumulative count would be worse
+# than useless here: this box has been up for a day and a half, and a total over
+# that span says nothing about whether the port is flapping *now*. Measured over
+# the last five minutes, the answer is stable and reproducible - nine or ten
+# events per minute, every minute, one every 6.5 seconds. `journalctl -k` is the
+# source rather than `dmesg`, because the kernel ring buffer drops messages and a
+# one-minute `dmesg | grep -c` sample here has read `1` while the port was
+# dropping its link nine times in that same minute.
+flaps=$(sudo journalctl -k --since "5 min ago" --no-pager 2>/dev/null |
+        grep -c 'pciehp: Slot.*Link Down')
+if [ -z "$flaps" ]; then
+    flaps=$(sudo dmesg 2>/dev/null | grep -c 'pciehp: Slot.*Link Down')
+fi
+if [ "${flaps:-0}" -gt 0 ]; then
+    last=$(sudo journalctl -k --since "5 min ago" --no-pager 2>/dev/null |
+           grep 'pciehp: Slot.*Link Down' | tail -1)
+    bad "   PCIe link flapping: $flaps Link Down in the last 5 min"
+    bad "   last: ${last#*kernel: }"
+    bad "   that port cannot be used - move the cable to a chipset USB-A port"
+elif [ "${flaps:-0}" = 0 ] && sudo journalctl -k --since "5 min ago" --no-pager 2>/dev/null | grep -q 'pciehp'; then
+    warn "   no PCIe link-down in the last 5 min, but pciehp is still talking;"
+    warn "   treat that port as suspect - see docs/06-host-usb.md"
+else
+    ok "   no PCIe link-down in the last 5 min"
+fi
+
 say "== currently attached"
 found=0
 for d in /sys/bus/usb/devices/*/; do
@@ -79,7 +161,16 @@ while IFS= read -r line; do
     if [[ $line =~ New\ USB\ device\ found,\ idVendor=([0-9a-f]{4}),\ idProduct=([0-9a-f]{4}) ]]; then
         vid=${BASH_REMATCH[1]}; pid=${BASH_REMATCH[2]}
         name=${VENDOR[$vid]:-unknown vendor}
-        ok "  $t  ENUMERATED  $vid:$pid  <- $name"
+        if [ "$vid" = "1d6b" ]; then
+            # 1d6b is the Linux Foundation, i.e. the host's own root hub coming
+            # back after its controller was reset. Printing this as ENUMERATED
+            # would be the worst possible false positive here: it is the failing
+            # controller announcing itself, and it reads exactly like a phone
+            # arriving.
+            warn "  $t  ROOT HUB BACK  $vid:$pid  <- the host's own hub, not a device"
+        else
+            ok "  $t  ENUMERATED  $vid:$pid  <- $name"
+        fi
         if [ "$vid" = "05c6" ] && [ "$pid" = "9008" ]; then
             bad "        That is EDL mode. The phone is in Qualcomm's emergency"
             bad "        download mode and will not answer adb or fastboot."

@@ -91,8 +91,9 @@ pcieport 0000:00:1c.4: pciehp: Slot(8): Card present
 pcieport 0000:00:1c.4: pciehp: Slot(8): Link Up
 ```
 
-Measured rate: **two link-downs in 100 seconds**, versus the chipset controller
-(`0000:00:14.0`, bus 1) which has never once dropped the mouse attached to it.
+Measured rate at the time: **two link-downs in 100 seconds**, versus the chipset
+controller (`0000:00:14.0`, bus 1) which has never once dropped the mouse attached
+to it. (Re-measured later and much worse — see below.)
 
 The correlating detail: the downstream Thunderbolt ports (`03:02.0` and
 `6c:00.0`) have **`LnkCtl: ASPM L0s L1 Enabled`**, while the upstream links
@@ -107,6 +108,59 @@ disagrees, and `pcie_aspm=off` on the kernel command line is the way to force it
 **Use a non-Thunderbolt port.** The chipset controller's ports are stable and
 should be the only ones used for flashing work. On this machine that means the
 USB-A ports, not the Type-C one — the Type-C is wired to the JHL6340.
+
+## What the port measures now, and why the event watch could not see it
+
+Re-measured on 2026-09-24, machine up 1 day 12 hours, with nothing attached to the
+Thunderbolt controller:
+
+| reading | value |
+|---|---|
+| `pciehp: Slot(8): Link Down` | **9–10 per minute — one every 6.5 s** |
+| sustained for | the whole sampled hour: 61 consecutive 5-minute buckets, every one of them 9 or 10 |
+| `0000:6c:00.0` ports reading `Connected` | **0 of 4** |
+| `0000:00:14.0` ports reading `Connected` | **1 of 18** — the mouse, `Link:U0` |
+
+Two things follow.
+
+**The rate is about seven times worse than the figure recorded above, and it is
+steady rather than intermittent.** That matters because "roughly once a minute" is
+what made this port look usable for a transfer: `tools/flash-boot.sh` argues for the
+TWRP route partly on the grounds that a link drop costs one `adb push` and nothing
+else. At one drop per 6.5 seconds, with an up-window of about four seconds, no
+transfer of any size completes — the argument does not hold for that port any more.
+
+**The failure produces no USB device event, so `tools/watch-usb.sh` could not see
+it.** The script watched for `New USB device found` and `USB disconnect`; a PCIe link
+down is one layer below that and deregisters the whole bus without any attached
+device ever being named. Watching it while swapping cables printed nothing at all,
+which reads as "no signal" rather than "the port is being torn down under the cable".
+The script now opens with the port registers and a five-minute flap count for exactly
+this reason, and it labels the root hub's own return as `ROOT HUB BACK` instead of
+`ENUMERATED`: that line is the failing controller announcing itself, and it read
+exactly like a phone arriving.
+
+One measurement note, because it cost time: a one-minute `dmesg | grep -c` sample
+read `1` while `journalctl -k` counted nine in the same minute. The kernel ring buffer
+drops messages. Count flaps with `journalctl -k`, not `dmesg`.
+
+## The same reading has a second, non-hardware cause
+
+`Not-connected Link:RxDetect` on every port means nothing is pulling up D+. There are
+two ways to arrive there, and on this project the second is the one that applies:
+
+- the phone is off, the cable is out, or its port is damaged;
+- **the phone is running firmware with no USB device stack in it.** A phone stuck in
+  the boot loop of our own UEFI payload — which brings up no USB at all — presents
+  nothing on any port, for as long as the loop keeps resetting it. That is precisely
+  the cost recorded in `docs/08` step 5 as the deliberate override: leaving our image
+  in `boot` keeps the phone in the loop, and the loop has no USB.
+
+So on this phone "not connected" is not evidence of a hardware fault, and not evidence
+about the cable either. It is the expected state of a device booting something with no
+gadget driver in it. Getting it back on the bus means getting it *out* of the loop
+first: hold Power for 20 seconds to force a hard reset, bring it up to recovery, and
+plug into a chipset USB-A port.
 
 ## Distinguishing "phone is off" from "host ate the phone"
 
@@ -144,10 +198,12 @@ whose USB device controller is not pulling up D+ is indistinguishable from an
 empty port.** A powered-off phone does that. So does a phone sitting in a hung
 kernel that has reset the DWC3 controller without binding a gadget driver —
 which is exactly the state the last `fastboot boot` of an unsupported mainline
-kernel is expected to leave it in.
+kernel is expected to leave it in. And so does a phone booting a payload that
+brings up no USB at all, which is the state in force during P2 — see "The same
+reading has a second, non-hardware cause" above.
 
 This is why the required action is physical: **hold Power for 20 seconds** (or
-Power + Volume Down for 15) to force a hard reset, then let it boot.
+Power + Volume Down for 15) to force a hard reset, then bring it up to recovery.
 
 ### Corroborating timeline
 
@@ -156,6 +212,10 @@ during the `fastboot boot` of the P1 image. Over the next hour the Thunderbolt
 controller re-registered its buses **twelve** times, and port 3-1 never once
 re-detected a device. A plugged-in, powered-on phone with a live USB PHY would
 have re-enumerated on at least one of those. It did not.
+
+Note which bus that is: `3-1` is on `0000:6c:00.0`, so **the phone was on the
+Thunderbolt path**, which is the one controller on this machine that will not hold
+a link. That is the arrangement to stop using.
 
 ## Missing Android udev rules
 
@@ -170,7 +230,10 @@ Added as `/etc/udev/rules.d/51-android.rules` (13 vendor IDs, `MODE="0666"`).
 
 1. **Prefer a non-Thunderbolt port.** On this machine the JHL6340 is the flaky
    path; a port wired directly to the chipset PCH avoids the whole class of
-   problem. This is the recommended arrangement for all flashing work.
+   problem. This is the recommended arrangement for all flashing work. Run
+   `tools/watch-usb.sh` first — it reads the port registers and counts the PCIe
+   link-downs, so it says whether anything is electrically present *and* whether
+   the port it is present on can hold a link, before any cable gets swapped.
 2. Check the controller did not re-enter suspend:
    `cat /sys/bus/pci/devices/0000:6c:00.0/power/runtime_status`
 3. Re-scan the bus without unplugging: `echo 1 | sudo tee /sys/bus/pci/rescan`
