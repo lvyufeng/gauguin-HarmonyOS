@@ -356,3 +356,64 @@ print("drivers the walk registered but the Apriori file does not name:")
 notin = [fvinv.guid_str(g) for g, t, *_ in files
          if t == 0x07 and fvinv.guid_str(g) not in set(apriori)]
 print(f"  {len(notin)}: {[nm(g) for g in notin]}")
+
+# ---------------------------------------------------------------------------
+# The `miss` decoder.
+#
+# The panel's `P2 APRI miss=` is the lowest Apriori index whose GUID matched no
+# entry in mDiscoveredList. If that list is short because the walk stopped, the
+# stop has a position, and the walk is in physical order - so `miss` is a
+# monotone step function of the stop, and it only takes as many values as there
+# are gaps in the Apriori-named files. Printing that function turns the number
+# from "a failure happened" into "the walk stopped here", which is the difference
+# between a symptom and a location.
+#
+# It is also how the two hypotheses are told apart on the panel. A cut is one of
+# these eight values; the tail assumption (ap1..ap46 matched, ap47..ap69 did not)
+# is `miss=47`, which is not on the list at all - because a cut leaves a physical
+# *suffix* missing and the tail set reaches back to the console drivers.
+# ---------------------------------------------------------------------------
+print()
+print("=== The `miss` decoder: which stop position each value names ===")
+print(f"{'miss':>5}  {'names':36} {'stop in phys':>14} {'seen':>11}")
+dr = [i for i, (g, t, *_r) in enumerate(files) if t == 0x07]
+n, seen_at = 0, {}
+for i, (g, t, *_r) in enumerate(files):
+    if t == 0x07:
+        n += 1
+    seen_at[i] = n
+
+
+def first_miss(stop):
+    """`mP2ApriMiss` when the walk's last file was physical `stop`."""
+    c = sorted(a for a in range(1, len(apriori))
+               if (by_guid.get(apriori[a]) or 0) > stop)
+    return c[0] if c else None
+
+
+# k runs over "the last physical file the walk looked at", not over a count, so
+# the band printed is directly comparable to `P2 WALK seen` and not a translation
+# of it. k = -1 is the degenerate case of a walk that listed nothing.
+bands, prev = [], "unset"
+for k in range(-1, len(files)):
+    m = first_miss(k)
+    if m != prev:
+        bands.append([k, k, m])
+        prev = m
+    else:
+        bands[-1][1] = k
+for lo, hi, m in bands:
+    seen_lo = seen_at.get(lo, 0) if lo >= 0 else 0
+    seen_hi = seen_at.get(hi, 0) if hi >= 0 else 0
+    who = f"{m} {nm(apriori[m])}" if m is not None else "none (every entry matched)"
+    print(f"{str(m) if m is not None else 'none':>5}  {who:36} "
+          f"{lo:>6}..{hi:<6} {seen_lo:>4}..{seen_hi:<6}")
+print(f"\n  known values: {sorted((b[2] for b in bands), key=lambda v: (v is None, v))}")
+print("  -> a `miss` of anything else is not a short walk at all: the device is "
+      "looking at a\n     volume whose Apriori-named files sit where this one's "
+      "do not. The tail assumption\n     of step 4.12 wants miss=47, which is "
+      "not on this list, because a cut leaves a\n     physical suffix missing "
+      "and ap47..ap69 include files at physical 14, 20, 21 and 22.")
+print("  -> and miss=22 ShmBridgeDxe is closed by the 5-vs-74 result above: a "
+      "walk that stopped\n     before physical 74 did not load ShmBridgeDxe at "
+      "74, so that row cannot be this run.")

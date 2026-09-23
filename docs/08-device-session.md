@@ -2370,14 +2370,87 @@ does supply is the *identity* half of the check. A panel reading of `bytes 1120
 entries 70 sum a998b263` says the dispatcher received the section the host read,
 and the question moves entirely to `miss`.
 
+**The numbers below are anchored to GUIDs, because a reading is only a comparison
+if both sides name the same thing.** `ap46` is `I2C` (`D06A77F4-4874-5898-9421-303158ECEA1A`)
+and is the last SEQ character; `ap47` is `AdcDxe`
+(`9143B2B7-D5E7-5190-B22A-605E5C78E7CC`), the first entry the tail assumption says
+matched nothing. `ap69` is `GraphicsConsoleDxe`
+(`CCCB0C28-4B24-11D5-9A5A-0090273FC14D`) and is the last entry in the array. And
+**all 69 non-zero entries resolve to a `DRIVER` file in this volume**, so a host
+replay of the promotion loop over the volume alone matches `1..69` with no miss;
+a panel `miss` can therefore only be non-`none` because `mDiscoveredList` is short
+of what the volume contains, never because the volume is missing a name.
+
+Three of these lines are one line of arithmetic apart from each other, which is
+worth stating because it makes the reading self-checking. `noload` is
+`mDiscoveredList`'s entries with `ImageHandle == NULL`, and zero `'S'` characters
+means every driver that loaded also started, so **`discovered − noload = 19`
+exactly** (`mP2Started`). If the pair on the `P2 STATS` line does not differ by 19,
+the line was misread or the run is not the run this document is describing.
+
 | panel says | means | next |
 |---|---|---|
 | `bytes`/`entries`/`sum` short of `1120/70/a998b263` | `Fv->ReadSection` returned a truncated section | the read is the mechanism; the "23 missing drivers" were never in the buffer, and there is no missing-driver puzzle to solve |
-| `entries=70`, `miss=47` | exactly `ap1..ap46` matched, so the absent 23 are the array's tail | step 4.12's tables stand; the discovered list is short by a *suffix* |
-| `entries=70`, `miss=j<47` | the absent entries are interleaved | step 4.12's name tables are shifted from `SEQ[j-1]` on and must be redone against the true alignment |
+| `entries=70`, `miss=47 9143B2B7-…` | exactly `ap1..ap46` matched (`matched=1..46`), so the absent 23 are the array's tail | step 4.12's tables stand; the discovered list is short by a *suffix*, and the shortfall is in the walk or in `CoreAddToDriverList` |
+| `entries=70`, `miss=j<47` | the absent entries are interleaved; `miss` names the first one | step 4.12's name tables are shifted from `SEQ[j-1]` on and must be redone against the true alignment |
 | `entries=70`, `miss=none` | 69 of 69 matched, so the match count was never 46 | the 46-char line was truncated somewhere other than the array — re-open step 4.12 rather than patch it |
-| `P2 STATS discovered=` ≈ 80 | the walk saw every DRIVER file and something after it dropped 23 | the list, or `CoreAddToDriverList` |
-| `discovered=` ≈ 57 | the walk itself dropped 23 | `GetNextFile`, the volume, or the sweep's own bound |
+| `P2 WALK t=7 seen=80 iter=81` | the walk was handed every DRIVER file | the 23 were dropped after the walk, in `CoreAddToDriverList` or in the list itself |
+| `P2 WALK t=7 seen≈57` | the walk was handed only 57 | `GetNextFile` or the walk's own bound; the volume's file table is known to hold 80 and `FvCheck` lists all 123 |
+| `P2 STATS discovered=` ≈ 80 and `noload=` ≈ 61 | the list was populated and then 23 loads never happened | the load failures and the missing entries are separate faults |
+| `discovered=` ≈ 57 and `noload=` ≈ 38 | the list was never fully populated | one fault, not two: the 23 absent Apriori entries and the 27 `L`s are both downstream of a short walk |
+| `P2 FREE largest=` ≥ 256 | there is a free run of at least 1 MiB, so the largest single request in the promoted set (112 pages) would have fit | the 27 `L`s are not a single allocation that could not be satisfied, and `P2 WHY` decides what they are instead |
+| `P2 FREE largest=` ≤ 64 | the largest free run is 256 KiB or less, less than the largest request the promoted set makes | the load order's arithmetic was right and the heap really is being consumed by something else; find what |
+| `P2 FREE largest=0` | nothing is allocatable at all at digest time | the `L`s are exhaustion by another name |
+
+`P2LargestAlloc` probes a fixed ladder — 4096, 1024, 256, 64, 16, 4, 1 pages —
+and returns the first step that succeeds, so the value is quantized to those
+seven numbers and `0` when even one page fails. That is why the table's thresholds
+are 256 and 64 rather than 112: the number cannot report a 112-page run, only
+whether a 256-page one exists.
+
+**And `miss` can rule the short walk in or out on its own, because a short walk has
+a shape.** `mDiscoveredList` is populated in walk order, and the walk is in
+physical order (`Fv->ReadNextFile` skips forward by file size), so a walk that
+stopped after volume file *k* would leave missing exactly the Apriori entries whose
+files sit above *k* — a physical **suffix** of the DRIVER files. Measured against
+that, the tail assumption is already incompatible with it: `ap47..ap69` are not the
+volume's last 23 DRIVER files but a scattered set whose physical indices are
+`{14, 20, 21, 22, 51, 53, 55…70, 72}`, which reaches back to the console drivers in
+the first quarter of the volume. So under the tail assumption the walk cannot have
+stopped early, and `P2 WALK t=7 seen=80` follows rather than being a separate
+measurement.
+
+The converse is sharper than expected, because `miss` does not just say *that* the
+walk was cut, it says **where**. `mP2ApriMiss` is the lowest Apriori index whose
+file sits above the stop, so it is a monotone step function of the stop position —
+and the step function is short, because the Apriori-named files have gaps in them.
+Measured over this volume, every possible `miss` value is one of eight, plus
+`none`:
+
+| `miss` | names | the stop was in physical | which is `seen` |
+|---|---|---|---|
+| `1` | `PcdDxe` | -1..1 (nothing listed at all) | 0..0 |
+| `2` | `EnvDxe` | 2..23 | 1..22 |
+| `7` | `ArmGicDxe` | 24 | 23 |
+| `9` | `ArmTimerDxe` | 25 | 24 |
+| `10` | `SmemDxe` | 26..27 | 25..26 |
+| `11` | `DALSys` | 28..38 | 27..37 |
+| `12` | `HWIODxeDriver` | 39..42 | 38..41 |
+| `14` | `PlatformInfoDxeDriver` (`09EE56ED-E7FD-5B64-831C-7C32CE88C6E2`) | 43..51 | 42..50 |
+| `22` | `ShmBridgeDxe` | 52..73 | 51..72 |
+| `none` | — | 74..122 | 73..80 |
+
+So a `miss` of anything else is not a cut at all: it means the device is looking at
+a volume whose Apriori-named files sit somewhere the host's do not, and that is a
+different investigation. And two of the rows are already eliminated from the
+device's own earlier reading. `miss=none` cannot be it, because 46 of the 70 did
+not match. `miss=22` cannot be it either, and for the nicest reason in this
+document: `ShmBridgeDxe` is the driver at physical 74, the **highest index in the
+loaded set** — the 5-vs-74 measurement — so a walk that stopped before 74 did not
+produce this SEQ line. That leaves `miss=14 09EE56ED-…` as the signature of a
+genuinely short walk, and `miss=47 9143B2B7-…` (`AdcDxe`) as the tail assumption's
+signature. The two readings are two characters apart on the panel and they are
+different faults.
 
 ### The image, and where it is
 
