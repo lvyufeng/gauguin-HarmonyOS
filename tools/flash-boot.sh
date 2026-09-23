@@ -101,7 +101,34 @@ fi
 # harmless - ABL is driven by the header, and the stock image's own tail is
 # 86 MB of zeros - but it does mean only the written prefix can be verified, so
 # that is what is verified.
-(( SRC_SIZE % 4096 == 0 )) || die "$SRC_SIZE is not a multiple of 4096; dd read-back would compare a partial block"
+#
+# A payload is page-aligned to the size its own header declares, and that is 2048
+# for the `silicon` profile - which leaves it a multiple of 2048 and not of 4096.
+# The block device is 4096, so an unaligned write leaves the last block half old
+# and half new, and the read-back can then only be compared over a partial block:
+# `dd bs=4096 count=$((SIZE/4096))` reads *less* than was written and hashes a
+# prefix, which passes whatever the last half-block contains. Previous payloads
+# happened to be 4096-aligned and hid this; the instrumented build is 1,140,736
+# bytes = 278.5 blocks and it does not.
+#
+# So the file is padded up to a block with zeros and *that* is what is pushed,
+# written and read back. It is a stronger check than truncating the comparison
+# would be: the whole written region is verified, the half-block that used to be
+# unverifiable is now zeros on both sides, and the tail of the previous image
+# stops at the padding instead of surviving underneath this one.
+FLASH_SRC=$IMG
+if (( SRC_SIZE % 4096 != 0 )); then
+    PAD=$(( (SRC_SIZE / 4096 + 1) * 4096 ))
+    PAD_BYTES=$(( PAD - SRC_SIZE ))
+    tmp=$(mktemp) || die "mktemp failed"
+    trap 'rm -f "$tmp"' EXIT
+    cp "$IMG" "$tmp"
+    dd if=/dev/zero bs=1 count="$PAD_BYTES" >> "$tmp" 2>/dev/null
+    FLASH_SRC=$tmp
+    SRC_SIZE=$PAD
+    log "   padded to $PAD bytes with $PAD_BYTES zero bytes (4096-block)"
+fi
+FLASH_SHA=$(sha256sum "$FLASH_SRC" | awk '{print $1}')
 BLOCKS=$(( SRC_SIZE / 4096 ))
 
 # --- pre-flight 2: pick a route, by talking to the thing we intend to use ------
@@ -163,7 +190,7 @@ twrp)
     esac
 
     log "== pushing $IMG to /tmp on the device"
-    adb push "$IMG" /tmp/payload.img || die "push failed (retryable - nothing on the
+    adb push "$FLASH_SRC" /tmp/payload.img || die "push failed (retryable - nothing on the
      device was written; a dropped USB link fails the push and only the push)"
     log "== writing with dd ($BLOCKS x 4096 bytes)"
     adb shell "dd if=/tmp/payload.img of=/dev/block/by-name/boot bs=4096 conv=notrunc" \
@@ -176,14 +203,14 @@ twrp)
     log "== reading back"
     dev=$(adb shell "dd if=/dev/block/by-name/boot bs=4096 count=$BLOCKS 2>/dev/null | sha256sum" \
           | awk '{print $1}')
-    if [ "$dev" != "$SRC_SHA" ]; then
+    if [ "$dev" != "$FLASH_SHA" ]; then
         die "read-back mismatch - the write did not land:
      device: $dev
-     source: $SRC_SHA
+     source: $FLASH_SHA
    Do NOT reboot into this image. Re-run this script; if it fails again, restore
    the stock image with tools/restore-stock-boot.sh --twrp."
     fi
-    log "   ok  the first $SRC_SIZE bytes of \`boot\` match $IMG"
+    log "   ok  the first $SRC_SIZE bytes of \`boot\` match ${FLASH_SRC#$PWD/}"
     ;;
 esac
 

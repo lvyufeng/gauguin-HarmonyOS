@@ -53,3 +53,10 @@
 #       "arch protocol not present" assert, i.e. while it is still the last thing
 #       on the panel. Remove this block, and this hunk from the patch, once DXE
 #       reaches BDS. See docs/08 step 4.9.
+#
+#       The same block carries a second probe, P2 WALK / P2 FREE, added in step
+#       4.12: the per-file-type count of what the firmware volume walk actually
+#       handed back, and the largest page allocation CoreAllocatePages will
+#       still satisfy at the moment the assert fires. The first separates "the
+#       walk ended" from "the walk was cut off" by count, the second says whether
+#       what remained was memory. Both are things the host cannot compute.

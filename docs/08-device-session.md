@@ -898,6 +898,11 @@ P2 SEQ [<70 characters>]                           (one per Apriori entry, in di
 P2 STATS discovered=N apriori=N/70 started=N diag=N noload=N
 ```
 
+The `SEQ` line is at most **69** characters, not 70 — step 4.12 works out why, and
+the count is not the point here. `STATS` prints the denominator as the literal 70
+because that is `P2BRINGUP_APRIORI_MAX`'s companion constant in the macro text, not
+a computed count; read `apriori=` against 69, not against 70.
+
 All at `DEBUG_ERROR`, which `PcdDebugPrintErrorLevel` `0x8007EE0F` enables. The
 line budget is deliberate: eight missing protocols print as sixteen lines, so the
 `NOLOAD` list is capped at six and the two lines that matter are printed **last**,
@@ -920,10 +925,21 @@ The eight providers sit at these indices, which is what makes the string readabl
 at a glance — and which is where the string stops being the same as the `INF`
 numbering above, for the two reasons given there:
 
-| index in `P2 SEQ` | 4 | 5 | 6 | 7 | 8 | 30 | 33 | 35 | 36 | 37 | 38 | 41 | 43 |
+| index in `P2 SEQ` | 5 | 6 | 7 | 8 | 9 | 31 | 34 | 36 | 37 | 38 | 39 | 42 | 44 |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| driver | RuntimeDxe | CpuDxe | ArmGicDxe | MetronomeDxe | TimerDxe | Variable | Reset | Watchdog | SecurityStub | Monotonic | RTC | Capsule | Bds |
+| driver | RuntimeDxe | ArmCpuDxe | ArmGicDxe | MetronomeDxe | ArmTimerDxe | Variable | Reset | Watchdog | SecurityStub | Monotonic | RTC | Capsule | Bds |
 | if it worked | `s` | `s` | `s` | `s` | `s` | `s` | `s` | `s` | `s` | `s` | `s` | `s` | `s` |
+
+**This table was wrong by one or three in every cell, and step 4.12 replaces it.**
+The indices above are read straight out of the built volume's Apriori array, which
+is the only authority: index 0 is `DxeCore` (which is never promoted, so it starts
+the string's *shift*, not its content), and the rest follow the Apriori file's own
+order rather than the `INF` order the earlier table was derived from. The two
+names that were wrong outright were `CpuDxe` (the module is `ArmCpuDxe`) and
+`TimerDxe` (the module is `ArmTimerDxe`) — those are the names the built volume and
+`Guid.xref` carry, and the `INF` paths they come from are
+`ArmPkg/Drivers/ArmCpuDxe/ArmCpuDxe.inf` and
+`ArmPkg/Drivers/ArmGenericTimerDxe/ArmGenericTimerDxe.inf`.
 
 So a healthy line is `s` at every position. The first character that is not `s`
 is where the batch stopped, and its index names the driver.
@@ -965,17 +981,30 @@ protocol-installation path itself — which is a different investigation, and th
 `P2 SEQ` line is what tells the two apart.
 
 One count to read as a checksum rather than as a result: `apriori=69/70` is the
-**expected** pair, not a shortfall. 70 is the Apriori file's GUID count and 69 is
-how many of them name a discovered driver — `DxeCore` is the one that does not, so
-the `SEQ` string is 69 characters long and ends with `GraphicsConsoleDxe`.
+**expected** pair, not a shortfall, and the truncation is at most 69 for a reason
+that is not "one GUID names nothing". All 70 GUIDs in the array name a file that
+is really in the volume — verified, 70/70, by resolving each against the volume's
+own file table. The one that can never be promoted is index 0, `DxeCore`, and it
+is excluded by its **file type**, not by being absent: `EFI_FV_FILETYPE_DXE_CORE`
+is one of the types `CoreFwVolEventProtocolNotify` handles by filling in the core's
+loaded-image device path *without* calling `CoreAddToDriverList` (Dispatcher.c, the
+type switch), so it is never in `mDiscoveredList` for the promotion loop at the
+bottom of the same function to find. Every other one of the 70 is a real
+`EFI_FV_FILETYPE_DRIVER` in the volume and is added. Hence 69 promotable entries,
+a `SEQ` line of at most 69 characters, and — since the promotion loop appends in
+`Index` order and the drain is a FIFO — the string's index *i* is Apriori entry
+*i*, shifted by one from what a naive reading of `APRIORI.inc` gives.
 
-**This is unverified.** Nothing here has been run on hardware — the phone was not
-on USB when the image was built. What *is* verified is that the instrumentation is
-in the artifact: `strings` finds all five format strings in `DxeCore.efi` and in
-the packed `FVMAIN.Fv`, and the image's packed volume matches `FVMAIN.Fv.txt` at
-all 122 offsets and GUIDs. Note where that check has to be made — **not** on the
-payload, which carries `FVMAIN` inside `FVMAIN_COMPACT` and is compressed, so the
-strings are not in it.
+**This step's prediction was overtaken: the reading was taken, and step 4.11/4.12
+are what it said.** Nothing in the paragraphs above is now the live question, and
+the image header below is the one that produced the reading rather than one that
+has yet to be tried. What *is* still worth keeping from here is how the
+instrumentation was verified to be in the artifact: `strings` finds all five
+format strings in `DxeCore.efi` and in the packed `FVMAIN.Fv`, and the image's
+packed volume matches `FVMAIN.Fv.txt` at all 122 offsets and GUIDs. Note where that
+check has to be made — **not** on the payload, which carries `FVMAIN` inside
+`FVMAIN_COMPACT` and is compressed, so the strings are not in it. (That last point
+cost this project a session, and step 4.12 gives the decompression recipe.)
 
 | | |
 |---|---|
@@ -1159,10 +1188,11 @@ experiment an experiment:
   at 10–17 and the 27 slots behind them shift down by eight, which is exactly the
   difference that was asked for and nothing besides.
 
-**What it means on the device, and the order to do it in.** Flash the baseline
-first: its `P2 SEQ` string is what the variant is read against, and it is the one
-piece of evidence that cannot be recovered afterwards. In the variant the eight
-occupying SEQ **9–16** are, in order:
+**What it means on the device, and why this experiment was never run.** The order
+of operations it prescribes is right and was followed — flash the baseline, read
+its `P2 SEQ`, and only then the variant — but the reading came back in step 4.12
+and **it retired the experiment rather than motivating it.** In the variant the
+eight would have occupied SEQ **9–16**:
 
 | SEQ | 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16 |
 |---|---|---|---|---|---|---|---|---|
@@ -1184,8 +1214,29 @@ same signal read off the assert instead of off `P2 SEQ`.
   points called, which would put the failure before anything this reorder touches —
   and the baseline's string is what distinguishes that from the same result.
 
-This is still unverified on hardware. The phone was off USB for every build in
-steps 4.9 and 4.10, and nothing in either step has been run on the device.
+**The reading made all three of those outcomes uninteresting, and the reason is
+structural rather than empirical.** The baseline's 27 failures are every one of
+them phase `L` — `CoreLoadImage` returned an error and no entry point was ever
+called — and the batch stops producing promotable entries at a *physical file*
+boundary, not at a position in the Apriori array. Reordering the array cannot move
+that boundary: the same 46 files are discovered in the same order whatever order
+the GUIDs are listed in, because discovery walks the volume and the promotion loop
+only decides which of the discovered entries get *scheduled*. The variant would
+therefore have reproduced the same 46-character string with the same first `L`,
+having changed which driver that `L` lands on and nothing else — at the cost of one
+build, one flash and one physical reset. It was built
+(`work/out/retracted/Mu-gauguin-arch-first-gzip.img`, kept there rather than in
+`p2-variants/` so it cannot be picked up as a candidate by accident) and never
+flashed.
+
+The `--apriori-move` machinery and `tools/apriori-order.py` are not wasted — the
+move step is what any future reordering experiment needs, and the tool that reads
+the order back *out of the image* rather than out of the file is the only thing
+that makes such an experiment readable at all. They are simply not the next move.
+
+The phone was off USB for every build in steps 4.9 and 4.10, and neither step was
+run on the device — which is also why the baseline had to be re-flashed in 4.11
+rather than being re-read.
 
 ## Step 4.11 — The reading was attempted, and the photograph is not the console
 
@@ -1255,13 +1306,212 @@ defeat the obvious command and both produce a confident wrong answer:
   bytes at 0x800 are a valid `1f 8b 08 00`. Inflate one member instead:
   `zlib.decompressobj (16 + zlib.MAX_WBITS)`, then `decompress (blob) + flush ()`.
 
-**The order of operations is unchanged and the baseline is still first.** In TWRP,
-`Reboot → System`, wait for the assert, then photograph the whole panel square-on
-and filling the frame — that screen is the last thing drawn and it stays up. Read
-`P2 SEQ […]` first, then `P2 STATS …`, then the `P2 DIAG` lines above them. Only
-after that string is written down does `Mu-gauguin-arch-first-gzip.img` go on, and
-its three lines are read the same way. **The baseline is the control and it cannot
-be recovered once the variant has overwritten `boot`.**
+**The reading was taken on the next attempt, and step 4.12 is what it said.** In
+TWRP, `Reboot → System`, wait for the assert, then photograph the whole panel
+square-on and filling the frame — that screen is the last thing drawn and it stays
+up. Read `P2 SEQ […]` first, then `P2 STATS …`, then the `P2 DIAG` lines above them.
+
+**And the screen does not in fact stay up, which is the correction this step
+needs.** `PcdDebugPropertyMask` is `0x2F` (`SiliciumPkg.dsc.inc:69`), whose `0x20`
+is `DEBUG_PROPERTY_ASSERT_DEADLOOP_ENABLED` — so the assert *is* a deadloop and the
+CPU does stop there. What ends it is not the firmware: something resets the phone
+after a few seconds, so the panel is readable only inside that window. A still
+photograph has to be taken in it, and a still taken later reads as a scene rather
+than as a console — which is exactly the frame step 4.11 measured and rejected. The
+reliable instrument is a **video** covering the whole boot: film from before the
+power button, then step the frames on the host and take the last one that is a
+black background with white text. Nothing about the reading changes; only the way
+it is captured does.
+
+The variant (`Mu-gauguin-arch-first-gzip.img`) is **not** the next payload, and
+step 4.10 says why.
+
+## Step 4.12 — The reading, and what it does and does not say
+
+The `P2 SEQ` line was read off the device on 2026-09-23, second attempt:
+
+```
+ssssssssssssssssssLLLsLLLLLLLLLLLLLLLLLLLLLLLL
+```
+
+**46 characters, 19 `s`, 27 `L`, zero `?`.** The zero is worth as much as the
+digits: `?` means "promoted but never reached", and there are none, so every entry
+the promotion loop queued was also drained. The batch does not stop partway
+through the drain; it stops before the drain begins.
+
+### The join, and it is now exact rather than inferred
+
+`P2 SEQ`'s index *i* is Apriori entry *i + 1*, and the reason is in the promotion
+loop (`Dispatcher.c`, the `for (Index = 0; Index < AprioriEntryCount; Index++)`
+block): the array is walked in order and `mP2Apriori++` happens only on a match, so
+the string is the *matches*, in array order. Entry 0 is `DxeCore`, whose file type
+is `EFI_FV_FILETYPE_DXE_CORE` — a type the discovery switch handles by filling in
+the core's loaded-image device path and **not** calling `CoreAddToDriverList` — so
+it is never in `mDiscoveredList` and never matches. Every one of the other 69
+entries is a real `EFI_FV_FILETYPE_DRIVER`, and all 70 resolve to a file the volume
+actually contains (70/70, checked GUID by GUID). Hence a ceiling of 69 characters
+on `P2 SEQ`, and index 0 = `PcdDxe`.
+
+Resolving each character against the array and the array against the volume's own
+file table gives:
+
+| SEQ | 0–17 | 18 | 19 | 20 | 21 | 22 | 23 | 24 | 25 |
+|---|---|---|---|---|---|---|---|---|---|
+| Apriori | 1–18 | 19 | 20 | 21 | 22 | 23 | 24 | 25 | 26 |
+| driver | PcdDxe … NpaDxe | RpmhDxe | PdcDxe | ClockDxe | **ShmBridgeDxe** | ScmDxe | DiskIoDxe | PartitionDxe | EnglishDxe |
+| result | `s` ×18 | `L` | `L` | `L` | **`s`** | `L` | `L` | `L` | `L` |
+
+and the rest of the failing run, SEQ 26–45, is Apriori 27–46: `SdccDxe`, `UFSDxe`,
+`Fat`, `TzDxe`, `VariableRuntimeDxe`, `DALTLMM`, `SPMI`, `ResetSystemRuntimeDxe`,
+`PmicDxe`, `WatchdogTimer`, `SecurityStubDxe`, `EmbeddedMonotonicCounter`,
+`RealTimeClock`, `PrintDxe`, `DevicePathDxe`, `CapsuleRuntimeDxe`, `HiiDatabase`,
+`BdsDxe`, `GpiDxe`, `I2C` — every one of them `L`.
+
+**This reproduces the assert, which is what makes the join trustworthy rather than
+merely tidy.** The eight protocols the panel reported missing are
+`SecurityStubDxe` (SEQ 36), `BdsDxe` (43), `WatchdogTimer` (35),
+`VariableRuntimeDxe` (30), `CapsuleRuntimeDxe` (41),
+`EmbeddedMonotonicCounter` (37), `ResetSystemRuntimeDxe` (33) and `RealTimeClock`
+(38) — and those eight indices are exactly the ones the join says failed. They are
+not eight indices found by guesswork; they are the eight names the panel printed,
+mapped back through the array, and landing on `L`.
+
+### Two things this settles, and one it does not
+
+**Settled: every failure is `L`, so no entry point was ever called for any of the
+27.** `L` is written on `CoreLoadImage`'s error path, before `CoreStartImage`.
+`CoreLoadImage` returns `EFI_OUT_OF_RESOURCES` here — the panel's
+"Out of Resources" is the `%r` rendering of the same status — and the sites that
+can produce it are `CoreLoadImageCommon`'s `AllocateZeroPool` of the
+`LOADED_IMAGE_PRIVATE_DATA` and `CoreLoadPeImage`'s page allocation. So this is not
+27 drivers deciding they do not support this platform, and it is not 27 dependency
+failures: it is 27 loads that could not get memory, in a row.
+
+**Settled: the boundary is in the Apriori array's index, not in the volume's
+physical file order.** Step 4.9's discussion, and the reading it was built on,
+treated the stop as a position in the volume — an earlier draft of this step
+claimed a "physical file 49/50" cutoff and had to drop it. It cannot be right:
+Apriori entry 22 (`ShmBridgeDxe`) is at **physical index 74** and *is* promoted and
+started, while entries 66–69 (`SimpleTextInOutSerial`, `ConPlatformDxe`,
+`ConSplitterDxe`, `GraphicsConsoleDxe`) sit at **physical indices 14, 20, 21 and
+22** and are *not* promoted at all. No walk-order cutoff produces that set. What
+the promoted set is, exactly, is Apriori entries **1 through 46, contiguous** — and
+nothing about a contiguous Apriori-index prefix follows from where the files live.
+
+**Not settled: why promotion stops at 46.** The loop iterates
+`Index < AprioriEntryCount` and appends on a match, so a contiguous prefix ending
+at 46 means either (a) `AprioriEntryCount` was 47 on the device — the section read
+came back short — or (b) the loop did run to 70 and entries 47–69 matched nothing
+because those files were never discovered. (b) is hard to hold: it needs the walk
+to have missed physical indices 14–22 while reaching 74. (a) is the more likely of
+the two, and it has a concrete place to look — `SizeOfBuffer` is reused across
+`Fv->ReadSection` calls in `CoreFwVolEventProtocolNotify` and is not reset
+immediately before the Apriori read, so a stale or partial length is not
+impossible. **But neither reading is established, and the `P2 STATS` line decides
+it:** `apriori=46/N` gives `AprioriEntryCount` directly. `N=70` means (b), `N=47`
+means (a). That single number was not captured on the second attempt.
+
+### What was built to close it, and why it is on the device now
+
+Two probes were added to the `P2BRINGUP` block and the firmware rebuilt and
+flashed. Neither answers a question the host can compute, which is the test for
+whether a round trip is worth it:
+
+- `P2 WALK t=<type> seen=<n> iter=<n> last=<guid>` — one line per entry in
+  `mDxeFileTypes`, printed from counters incremented inside the discovery walk. The
+  DRIVER pass is `t=0`, and because each type gets its own `Key = 0` walk it is one
+  complete, independent sweep. `seen` is how many files `GetNextFile` handed back,
+  `iter` how many times it was called, `last` the last GUID it saw. **`seen ≈ 73`
+  means the walk finished; `seen ≈ 47` means it was cut off**, and `last` names
+  where.
+- `P2 FREE largest=<n> pages` — the largest allocation `CoreAllocatePages` will
+  still satisfy at the moment the assert fires, found by a shrinking ladder
+  (4096, 1024, 256, 64, 16, 4, 1 pages) that allocates and immediately frees. This
+  is the memory question asked directly instead of computed.
+
+The console's screen is wiped by `AdvanceNewLine` and has no scrollback, and the
+P2 output grows from 33 lines to at most 39; 100 rows are available and the
+six-line assert postmortem prints after, so it still fits.
+
+**And the capture has to be a video, not a still.** `PcdDebugPropertyMask` is
+`0x2F` (`SiliciumPkg.dsc.inc:69`) and `0x20` is
+`DEBUG_PROPERTY_ASSERT_DEADLOOP_ENABLED`, so the assert really is a deadloop — but
+something resets the phone a few seconds later, so the panel is only readable
+inside that window. Step 4.11's rejected photograph is what a still taken outside
+it looks like.
+
+### The payloads, and the one number that reconciles them
+
+The instrumented build was regenerated and the payload of record rebuilt and
+re-flashed through TWRP. All three variants pass `check-payload.py`,
+`abl-boot-check.py` and `fv-inventory.py --against FVMAIN.Fv.txt` (123 offsets and
+GUIDs, zero mismatches each).
+
+| | |
+|---|---|
+| payload of record | `work/out/p2-variants/Mu-gauguin-silicon-gzip.img` |
+| size / sha256 | 1,140,736 B / `ecc10a225c8492d99ab4062e840e8a6b7def34a75f3f3679b1989ed515bb4bda` |
+| `boot` before this flash | `work/out/boot-before-p2walk.img`, sha256 `fb697f47…` |
+
+`boot` was read back with `dd` before being overwritten, and the image pulled off
+the device was taken apart to check that the reading could have come from it: its
+kernel blob inflates to 3,145,840 B, its inner `FVMAIN` holds a `DxeCore` of
+170,032 B carrying `P2 SEQ` / `P2 STATS` / `P2 NOLOAD` / `P2 DIAG` and *not*
+`P2 WALK` / `P2 FREE`, and its Apriori array is 70 GUIDs with md5
+`ed607ebccf3c61aa02d15f4b727baf85`. **That md5 is identical to the freshly built
+volume's**, so the array the join above was computed against is the array the
+device actually ran — the mapping does not need a caveat about which build drew the
+screen.
+
+What that readback also closes is the discrepancy carried since step 4.10: the
+build tree's `APRIORI.inc` had been regenerated with the *Qualcomm* display driver
+at slot 60, and the flashed array has `DCFD1E6D-788D-4FFC-8E1B-CA2F75651A92`
+(`SimpleFbDxe`) there instead. The two now agree, because
+`tools/make_uefi_platform.py --display` **defaults to `simple`**: a default is what
+a plain regeneration produces, and it has to be the configuration that has been on
+the device. `DisplayDxe` is a bring-up step of its own, taken once DXE reaches BDS,
+not something that should happen by omitting a flag.
+
+### A tool fix this forced
+
+`tools/flash-boot.sh` refused the new payload: 1,140,736 bytes is a multiple of
+2048, which is the `silicon` profile's page size, and not of 4096, which is the
+block device's. The old guard simply died. That was hiding a real hole rather than
+finding one — the read-back does `dd bs=4096 count=$((SIZE/4096))`, so for a
+non-4096-aligned image it reads *less* than was written and hashes a prefix, which
+passes whatever the last half-block happens to contain. Every earlier payload was
+4096-aligned by luck. The script now pads the file to a block with zeros and pushes
+the padded copy, so the whole written region is verified and the half-block that
+used to be unverifiable is zeros on both sides.
+
+### What step 4.9 and step 4.10 got wrong
+
+Recorded because both were written with confidence and both are now replaced:
+
+- **`P2 SEQ` is capped at 69, not 70, and `DxeCore` is excluded by its file type,
+  not by being undiscovered.** Step 4.9's paragraph had the right count and the
+  wrong mechanism — it said the promotion loop's GUID compare "finds nothing",
+  implying no file. The file is there; it is the discovery switch that declines to
+  add it.
+- **The eight providers' SEQ indices were 5, 6, 7, 8, 9, 31, 34, 36, 37, 38, 39,
+  42, 44** — not 4, 5, 6, 7, 8, 30, 33, 35, 36, 37, 38, 41, 43. Two of the names
+  were wrong outright: the modules are `ArmCpuDxe` and `ArmTimerDxe`, not `CpuDxe`
+  and `TimerDxe`.
+- **Step 4.10's reorder experiment is retired, not pending.** All 27 failures are
+  `L`, and reordering the Apriori array cannot change which files discovery finds
+  or in what order — it changes only which discovered entries get *scheduled*. The
+  variant would have reproduced the same first `L` at a different driver. It was
+  built and is kept at `work/out/retracted/Mu-gauguin-arch-first-gzip.img` so it
+  cannot be picked up as a candidate by accident. `--apriori-move` and
+  `tools/apriori-order.py` remain the right tooling for a reordering experiment;
+  this is simply not a reordering problem.
+
+### Next
+
+Read `P2 WALK t=0 seen=…` and `P2 STATS … apriori=46/N` off the panel (video, then
+frame-step). `N` splits the promotion question; `seen` splits "the walk ended" from
+"the walk was cut off"; `P2 FREE largest=` says whether memory was the constraint.
+Then remove the `P2BRINGUP` block and fix what the three numbers name.
 
 ## Step 5 — Leave it bootable
 

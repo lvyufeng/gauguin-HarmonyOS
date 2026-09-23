@@ -53,6 +53,13 @@
 #       "arch protocol not present" assert, i.e. while it is still the last thing
 #       on the panel. Remove this block, and this hunk from the patch, once DXE
 #       reaches BDS. See docs/08 step 4.9.
+#
+#       The same block carries a second probe, P2 WALK / P2 FREE, added in step
+#       4.12: the per-file-type count of what the firmware volume walk actually
+#       handed back, and the largest page allocation CoreAllocatePages will
+#       still satisfy at the moment the assert fires. The first separates "the
+#       walk ended" from "the walk was cut off" by count, the second says whether
+#       what remained was memory. Both are things the host cannot compute.
 diff --git a/ArmPkg/Library/ArmGenericTimerPhyCounterLib/ArmGenericTimerPhyCounterLib.c b/ArmPkg/Library/ArmGenericTimerPhyCounterLib/ArmGenericTimerPhyCounterLib.c
 index fbbecdc5..9378c270 100644
 --- a/ArmPkg/Library/ArmGenericTimerPhyCounterLib/ArmGenericTimerPhyCounterLib.c
@@ -266,10 +273,10 @@ index 39668123..8405bc31 100644
  #define  USB_INTERFACE_SIGNATURE  SIGNATURE_32 ('U', 'S', 'B', 'I')
  #define  USB_BUS_SIGNATURE        SIGNATURE_32 ('U', 'S', 'B', 'B')
 diff --git a/MdeModulePkg/Core/Dxe/Dispatcher/Dispatcher.c b/MdeModulePkg/Core/Dxe/Dispatcher/Dispatcher.c
-index d7c7147e..17ff387b 100644
+index d7c7147e..2c62ff53 100644
 --- a/MdeModulePkg/Core/Dxe/Dispatcher/Dispatcher.c
 +++ b/MdeModulePkg/Core/Dxe/Dispatcher/Dispatcher.c
-@@ -60,6 +60,92 @@ EFI_LOCK  mDispatcherLock = EFI_INITIALIZE_LOCK_VARIABLE (TPL_HIGH_LEVEL);
+@@ -60,6 +60,128 @@ EFI_LOCK  mDispatcherLock = EFI_INITIALIZE_LOCK_VARIABLE (TPL_HIGH_LEVEL);
  //
  BOOLEAN  gDispatcherRunning = FALSE;
  
@@ -324,6 +331,42 @@ index d7c7147e..17ff387b 100644
 +STATIC CHAR8     mP2AprioriRes[P2BRINGUP_APRIORI_MAX];
 +STATIC CHAR8     mP2SeqLine[P2BRINGUP_APRIORI_MAX + 8];
 +
++//
++// P2BRINGUP: what the firmware volume walk actually returned, kept per entry in
++// mDxeFileTypes. `seen` is how many files GetNextFile handed back and `iter` how
++// many times it was called, so seen < iter means the walk was still being asked
++// and answering "no more"; a pass that stops at a file the volume really contains
++// is the difference between "the walk ended" and "the walk was cut off", and the
++// last GUID names the file it ended on.
++//
++STATIC UINTN     mP2WalkSeen[8] = { 0 };
++STATIC UINTN     mP2WalkIter[8] = { 0 };
++STATIC UINTN     mP2WalkErr[8]  = { 0 };
++STATIC EFI_GUID  mP2WalkLast[8];
++
++STATIC
++UINTN
++P2LargestAlloc (
++  VOID
++  )
++{
++  STATIC CONST UINTN  Ladder[] = { 4096, 1024, 256, 64, 16, 4, 1 };
++  EFI_PHYSICAL_ADDRESS  Memory;
++  EFI_STATUS            Status;
++  UINTN                 Index;
++
++  for (Index = 0; Index < sizeof (Ladder) / sizeof (Ladder[0]); Index++) {
++    Memory = 0;
++    Status = CoreAllocatePages (AllocateAnyPages, EfiBootServicesData, Ladder[Index], &Memory);
++    if (!EFI_ERROR (Status)) {
++      CoreFreePages (Memory, Ladder[Index]);
++      return Ladder[Index];
++    }
++  }
++
++  return 0;
++}
++
 +STATIC
 +VOID
 +P2MarkSeq (
@@ -362,7 +405,7 @@ index d7c7147e..17ff387b 100644
  //
  // Module globals to manage the FwVol registration notification event
  //
-@@ -483,6 +569,8 @@ CoreDispatcher (
+@@ -483,6 +605,8 @@ CoreDispatcher (
              DriverEntry->Initialized = TRUE;
            }
  
@@ -371,7 +414,7 @@ index d7c7147e..17ff387b 100644
            DriverEntry->Scheduled = FALSE;
            RemoveEntryList (&DriverEntry->ScheduledLink);
  
-@@ -519,6 +607,13 @@ CoreDispatcher (
+@@ -519,6 +643,13 @@ CoreDispatcher (
  
          Status = CoreStartImage (DriverEntry->ImageHandle, NULL, NULL);
  
@@ -385,7 +428,7 @@ index d7c7147e..17ff387b 100644
          REPORT_STATUS_CODE_WITH_EXTENDED_DATA (
            EFI_PROGRESS_CODE,
            (EFI_SOFTWARE_DXE_CORE | EFI_SW_PC_INIT_END),
-@@ -896,6 +991,8 @@ CoreAddToDriverList (
+@@ -896,6 +1027,8 @@ CoreAddToDriverList (
  
    CoreReleaseDispatcherLock ();
  
@@ -394,7 +437,24 @@ index d7c7147e..17ff387b 100644
    return EFI_SUCCESS;
  }
  
-@@ -1412,6 +1509,7 @@ CoreFwVolEventProtocolNotify (
+@@ -1309,6 +1442,16 @@ CoreFwVolEventProtocolNotify (
+                                   &Attributes,
+                                   &Size
+                                   );
++        if (Index < sizeof (mP2WalkSeen) / sizeof (mP2WalkSeen[0])) {
++          mP2WalkIter[Index]++;
++          if (!EFI_ERROR (GetNextFileStatus)) {
++            mP2WalkSeen[Index]++;
++            CopyGuid (&mP2WalkLast[Index], &NameGuid);
++          } else {
++            mP2WalkErr[Index]++;
++          }
++        }
++
+         if (!EFI_ERROR (GetNextFileStatus)) {
+           if (Type == EFI_FV_FILETYPE_DXE_CORE) {
+             //
+@@ -1412,6 +1555,7 @@ CoreFwVolEventProtocolNotify (
                          );
      if (!EFI_ERROR (Status)) {
        AprioriEntryCount = SizeOfBuffer / sizeof (EFI_GUID);
@@ -402,7 +462,7 @@ index d7c7147e..17ff387b 100644
      } else {
        AprioriEntryCount = 0;
      }
-@@ -1433,6 +1531,12 @@ CoreFwVolEventProtocolNotify (
+@@ -1433,6 +1577,12 @@ CoreFwVolEventProtocolNotify (
            DriverEntry->Scheduled = TRUE;
            InsertTailList (&mScheduledQueue, &DriverEntry->ScheduledLink);
            CoreReleaseDispatcherLock ();
@@ -415,7 +475,7 @@ index d7c7147e..17ff387b 100644
            DEBUG ((DEBUG_DISPATCH, "Evaluate DXE DEPEX for FFS(%g)\n", &DriverEntry->FileName));
            DEBUG ((DEBUG_DISPATCH, "  RESULT = TRUE (Apriori)\n"));
            break;
-@@ -1486,11 +1590,79 @@ CoreDisplayDiscoveredNotDispatched (
+@@ -1486,11 +1636,103 @@ CoreDisplayDiscoveredNotDispatched (
  {
    LIST_ENTRY             *Link;
    EFI_CORE_DRIVER_ENTRY  *DriverEntry;
@@ -450,8 +510,8 @@ index d7c7147e..17ff387b 100644
 +          DriverEntry->Untrusted
 +          ));
 +      }
-     }
-   }
++    }
++  }
 +
 +  DEBUG ((DEBUG_ERROR, "P2 NOLOAD total=%d shown=%d\n", NotLoaded, Shown));
 +
@@ -480,11 +540,11 @@ index d7c7147e..17ff387b 100644
 +  } else {
 +    for (Index = 0; Index < SeqLen; Index++) {
 +      mP2SeqLine[Index] = mP2AprioriRes[Index];
-+    }
+     }
 +
 +    mP2SeqLine[SeqLen] = '\0';
 +    DEBUG ((DEBUG_ERROR, "P2 SEQ [%a]\n", mP2SeqLine));
-+  }
+   }
 +
 +  DEBUG ((
 +    DEBUG_ERROR,
@@ -496,6 +556,30 @@ index d7c7147e..17ff387b 100644
 +    mP2DiagCount,
 +    NotLoaded
 +    ));
++
++  //
++  // What the volume walk itself returned, one line per entry in mDxeFileTypes,
++  // followed by the largest allocation the page allocator will still satisfy.
++  // The walk lines are the answer to "did discovery stop short, or was there
++  // simply nothing left to promote": seen is the number of files the walk was
++  // handed and last is the last one it saw.
++  //
++  for (Index = 0; Index < sizeof (mP2WalkSeen) / sizeof (mP2WalkSeen[0]); Index++) {
++    if (mP2WalkIter[Index] == 0) {
++      continue;
++    }
++
++    DEBUG ((
++      DEBUG_ERROR,
++      "P2 WALK t=%d seen=%d iter=%d last=%g\n",
++      Index,
++      mP2WalkSeen[Index],
++      mP2WalkIter[Index],
++      &mP2WalkLast[Index]
++      ));
++  }
++
++  DEBUG ((DEBUG_ERROR, "P2 FREE largest=%d pages\n", P2LargestAlloc ()));
  }
 diff --git a/SecurityPkg/Library/AuthVariableLib/AuthService.c b/SecurityPkg/Library/AuthVariableLib/AuthService.c
 index 7f7c91e9..aa8632ad 100644
