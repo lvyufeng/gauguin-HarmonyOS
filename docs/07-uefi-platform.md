@@ -210,7 +210,18 @@ what is flashed; **Qcom** is `=1` (Qualcomm `DisplayDxe`) and is the goal.
   files, every one in state `EFI_FILE_DATA_VALID`. The tool that does it,
   `tools/fv-inventory.py`, reproduces GenFv's own `FVMAIN.Fv.txt` map exactly —
   122 offsets, 122 GUIDs, zero mismatches — which is what makes the rest of the
-  numbers here trustworthy rather than plausible.
+  numbers here trustworthy rather than plausible. That comparison is a mode of
+  the tool rather than something that was done once by hand, so it stays
+  re-runnable:
+
+  ```
+  python3 tools/fv-inventory.py work/out/p2-variants/Mu-gauguin-stock-gzip.img \
+      --against work/uefi/Mu-Silicium/Build/gauguinPkg/DEBUG_CLANGPDB/FV/FVMAIN.Fv.txt
+  ```
+
+  It exits nonzero on a mismatch, and pointing it at `suryaPkg`'s map — the other
+  platform's, which is a different volume — reports 95 mismatches and exits 1.
+  A check that cannot fail is not a check, so that direction is tested too.
 - Of the 42 drivers present in the flashed build: `UFSDxe`, the whole USB device
   stack (`UsbConfigDxe`, `UsbDeviceDxe`, `UsbfnDwc3Dxe`, `UsbMsdDxe`,
   `UsbPwrCtrlDxe`, plus EDK2's `UsbBusDxe`/`UsbKbDxe`/`UsbMassStorageDxe`),
@@ -229,9 +240,17 @@ what is flashed; **Qcom** is `=1` (Qualcomm `DisplayDxe`) and is the goal.
   given no INF line by the reference package. They are named in `DXE.inc`'s
   header comment so the omission stays visible. `PILDxe`/`PILProxyDxe`/
   `ADSPDxe` load firmware to DSPs, `QcomBds` is replaced by EDK2's `BdsDxe`,
-  `VibratorDxe`/`QcomChargerApp` are not needed for a shell, and
   `VerifiedBootDxe`/`SecRSADxe` are authentication paths this build does not
   use. None is a prerequisite of the console.
+- `VibratorDxe` and `QcomChargerApp` are the two in that list that are absent by
+  choice rather than by irrelevance, and the difference matters for where they
+  get picked up. The haptics part is real and driven on this board: `aw8624` is
+  at `i2c@990000` address `0x5A` in the hardware map (`docs/05`), and the
+  phone's *own* ABL log carries `VibratorDxe: aw8624 read id ok`. That line is
+  ABL's firmware, not ours — a different build with a different `DXE.inc` — so it
+  says the driver binds this part on this hardware, not that our volume has it.
+  Neither driver is needed for a console, so neither is in P3's way; they are P5
+  items (haptics; charging UI), and the blobs are already extracted.
 
 `QcomWDogDxe` being in that list is the one worth naming explicitly: the
 watchdog is disabled by `PlatformSecLib` in SEC, before the driver model

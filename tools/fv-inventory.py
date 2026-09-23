@@ -14,12 +14,19 @@ looks exactly like a firmware that shipped empty, and is not.
     python3 tools/fv-inventory.py Mu-gauguin.img            # list everything
     python3 tools/fv-inventory.py Mu-gauguin.img --usb      # just the USB stack
     python3 tools/fv-inventory.py --verify uefi/Binaries/gauguin ...
+    python3 tools/fv-inventory.py Mu-gauguin.img --against Build/.../FVMAIN.Fv.txt
 
 `--verify DIR` compares the driver .inf FILE_GUIDs under DIR against the ones
 really present, which is the check that answers "is the driver I packaged
 actually in the image" - and it is answered by GUID, not by name, because the
 names are inside compressed sections and searching the raw bytes for them
 silently finds nothing.
+
+`--against MAP` compares the walk against GenFv's own `FVMAIN.Fv.txt`, which is
+the half of the check this tool cannot make about itself: it is an independent
+record of what the build put where, so it catches a reader that is wrong in a way
+that still looks plausible. It exits nonzero on any mismatch, and mismatching a
+map from a different platform is the test that it can fail at all.
 """
 import argparse
 import glob
@@ -173,13 +180,23 @@ def decompress_guided(body):
 
 
 def unpack(img):
-    """Walk image -> FD -> FVMAIN -> [(guid, type, size, name)]."""
+    """Walk image -> FD -> FVMAIN -> ([(guid, type, size, name, state)], fv_len)."""
     d = open(img, "rb").read()
     if d[:8] != b"ANDROID!":
         sys.exit(f"{img}: not an Android boot image")
     ks, ps = struct.unpack("<I", d[8:12])[0], struct.unpack("<I", d[36:40])[0]
-    do = zlib.decompressobj(16 + zlib.MAX_WBITS)
-    payload = do.decompress(d[ps:ps + ks])
+    # Both payload shapes reach here and both are legal: a gzip package, which is
+    # what Mu-gauguin-stock-gzip.img carries, and a raw one, which is what
+    # Mu-gauguin-stock-none.img carries. Reading the magic rather than assuming
+    # gzip is what keeps this tool usable on the uncompressed half of the pair -
+    # and the pair is the experiment, so a tool that could read only one half of
+    # it would be checking the thing that is easy and skipping the other.
+    blob = d[ps:ps + ks]
+    if blob[:2] == b"\x1f\x8b":
+        do = zlib.decompressobj(16 + zlib.MAX_WBITS)
+        payload = do.decompress(blob)
+    else:
+        payload = blob
     if payload[:2] != b"\x81\x03":          # BootShim's adr/b instructions
         sys.exit("payload does not start with BootShim")
 
@@ -206,12 +223,57 @@ def unpack(img):
                 print(f"    GUIDed section {guid_str(sbody[0:16])}: not decompressed")
                 continue
             print(f"    -> inner FV {len(inner):#x} bytes")
-            out = []
+            out, offs = [], []
             for g2, t2, s2, o2, st2 in fv_files(inner):
                 nm = gui_name(inner[o2 + 24:o2 + s2])
                 out.append((guid_str(g2), t2, s2, nm, st2))
-            return out
-    return []
+                offs.append(o2)
+            return out, len(inner), offs
+    return [], None, []
+
+
+def compare_map(files, offsets, map_path, fv_len=None):
+    """Check this image's FVMAIN against GenFv's own map of the volume it built.
+
+    `Build/.../FV/FVMAIN.Fv.txt` is written by GenFv as it lays the volume out,
+    so it is the build's record of what it put where - an independent opinion
+    about the same bytes, and the only one available that was not produced by
+    this reader. Agreeing with it on every offset and every GUID is what makes
+    "the volume contains 122 files" a measurement rather than a claim this tool
+    makes about itself. Disagreement is worth more than agreement: the walk here
+    has already been wrong twice in ways that still produced a plausible-looking
+    list (see `_walk_from` and `fv_files`), and both times the map would have
+    caught it.
+    """
+    want, total = [], None
+    for line in open(map_path):
+        line = line.strip()
+        if line.startswith("EFI_FV_TOTAL_SIZE"):
+            total = int(line.split("=")[1], 16)
+            continue
+        parts = line.split()
+        if len(parts) == 2 and parts[0].startswith("0x"):
+            want.append((int(parts[0], 16), parts[1].upper()))
+    got = [(o, g) for (g, _, _, _, _), o in zip(files, offsets)]
+
+    bad = 0
+    if fv_len is not None and total is not None and total != fv_len:
+        print(f"  MISMATCH: map says the volume is {total:#x}, "
+              f"the image's is {fv_len:#x}")
+        bad += 1
+    if len(want) != len(got):
+        print(f"  MISMATCH: map lists {len(want)} files, the walk found {len(got)}")
+        bad += 1
+    for i, ((wo, wg), (go, gg)) in enumerate(zip(want, got)):
+        if wo != go or wg != gg:
+            print(f"  MISMATCH at #{i}: map {wo:#010x} {wg}  walk {go:#010x} {gg}")
+            bad += 1
+    if bad:
+        print(f"  {bad} mismatch(es) against {os.path.basename(map_path)}")
+        return False
+    print(f"  matches {os.path.basename(map_path)}: "
+          f"{len(want)} offsets and GUIDs, zero mismatches")
+    return True
 
 
 def main():
@@ -221,13 +283,21 @@ def main():
                     help="a Binaries/<device> tree whose driver .inf FILE_GUIDs "
                          "to check against the image")
     ap.add_argument("--usb", action="store_true", help="only USB-related files")
+    ap.add_argument("--against", metavar="FVMAIN.Fv.txt",
+                    help="compare this image's FVMAIN against GenFv's own map "
+                         "of the volume it built")
     args = ap.parse_args()
     if not args.image:
         sys.exit(__doc__)
 
-    files = unpack(args.image)
+    files, fv_len, offsets = unpack(args.image)
     print(f"\nFVMAIN: {len(files)} FFS files, "
           f"{sum(s for _, _, s, _, _ in files):#x} bytes of file headers+data")
+
+    if args.against:
+        if not compare_map(files, offsets, args.against, fv_len):
+            sys.exit(1)
+        return
 
     if args.usb:
         for g, t, s, n, st in files:

@@ -106,3 +106,30 @@ python3 "$ROOT/tools/check-payload.py" "$P2"/Mu-gauguin-*.img
 
 log "== ABL's checks, replayed offline"
 python3 "$ROOT/tools/abl-boot-check.py" --dtbo "$DTBO_IMG" "$P2"/Mu-gauguin-*.img
+
+# The volume's own contents, against the build's record of them. GenFv writes
+# FVMAIN.Fv.txt as it lays the volume out, so the two are independent accounts of
+# the same bytes and disagreeing means one of them is wrong - which is a thing
+# that has already happened here, twice, in the reader, both times producing a
+# list that looked plausible. Derived from $FD rather than hardcoded so an
+# overridden build is compared against its own map; a build that left no map is
+# skipped with a note, not failed, because the map is GenFv's by-product and not
+# something every FD necessarily comes with.
+MAP="$(dirname "$FD")/FVMAIN.Fv.txt"
+if [ -f "$MAP" ]; then
+    log "== the volume's contents, against GenFv's map"
+    for img in "$P2"/Mu-gauguin-*.img; do
+        # The exit code is the gate, so it is read from the command and not from
+        # a pipe: piping would hand `set -e` the exit status of the last stage
+        # instead, and a mismatch would print and pass.
+        if ! python3 "$ROOT/tools/fv-inventory.py" "$img" --against "$MAP" \
+                >"$OUT/fvmap.txt" 2>&1; then
+            sed 's/^/   /' "$OUT/fvmap.txt" >&2
+            echo "   FAILED: $(basename "$img") does not match $MAP" >&2
+            exit 1
+        fi
+        printf '   %-30s %s\n' "$(basename "$img")" "$(tail -1 "$OUT/fvmap.txt")"
+    done
+else
+    log "== no FVMAIN.Fv.txt beside $FD; skipping the map comparison"
+fi
