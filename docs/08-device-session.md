@@ -2716,9 +2716,14 @@ the device — the phone still carries step 4.13's image — so overwriting the 
 two in `work/out/p2-variants/` loses nothing that any reading has to be compared
 against. The rule that a control image must be read before it is overwritten
 applies to images the device has carried, and none of these has. All three are
-reproducible from their commits (`515dc71` for the first), and the last is
-archived under `work/out/p2-4.15/` so that the next build is not overwritten in
-turn.
+reproducible from their commits (`515dc71` for the first, `09e0e0e` for the
+last), and **none of them is archived**: `work/out/p2-4.15/` was created for the
+last one and was then reused by step 4.16's build, which is the mistake this
+paragraph exists to record. It is recoverable - a checkout of `09e0e0e` plus
+`tools/build-p2-payloads.sh` reproduces `5be70ecc…` byte for byte - and it costs
+nothing, because a build no device has carried is a build nothing has to be
+compared against. Step 4.16 archives under its own directory and does not reuse
+one.
 
 The payload was checked against the build it claims to be, byte for byte rather
 than structurally: the gzip kernel is a 112-byte `BootShim.bin` followed by
@@ -2733,7 +2738,9 @@ read in the same photograph as `P2 STATS`. Everything else is unchanged from ste
 4.14 — `P2 APRI` (`bytes=1120 entries=70 sum=a998b263` is the host's value),
 `P2 APRI miss=`, `P2 SEQ`, `P2 WHY`, `P2 STATS`, the five `P2 WALK` lines and
 `P2 FREE largest=` — and each frame is still held for minutes by step 4.14's
-bounded busy-wait, so the window is not the constraint any more.
+bounded busy-wait, so the window is not the constraint any more. Step 4.16 moves
+the per-driver `P2 DIAG` list into this repeated block as well, so it is read from
+the same steady-state screen; see that step.
 
 The three `P2 APRI` lines and `P2 STATS` are read as one group, and the numbers
 that matter are small: `entries` is the array as the firmware read it, `apriori`
@@ -2741,6 +2748,66 @@ is how many of those entries were promoted, and the two must satisfy
 `apriori + unhit = entries` with `unhit` at 1 or 24. A `P2 APRI` line that
 disagrees with the `apriori=` on `P2 STATS` is two lines from different boots, and
 then the fix is to read them again rather than to explain them.
+
+## Step 4.16 — The per-driver failure list, moved where it repeats
+
+Step 4.15 put the failure *statuses* into the repeating digest and left one thing
+outside it: the list of failures, one line per driver, `P2 DIAG <phase> <guid>
+<status>`. That list was printed once, before the digest's 41 repetitions, and
+capped at 24 records of the 27.
+
+Both of those are the same fault, and it is the fault this whole line of work
+exists to remove. `AdvanceNewLine` clears the panel once the cursor passes the
+last row, so a line printed before the repetition begins is on the screen only
+during the first frames; and a cap of 24 against 27 failures means three of them
+could not be photographed at all, however the photograph was taken. The sessions
+that read this data were decided by what the panel happened to be holding when
+somebody looked, and both of these make that worse than it needs to be.
+
+The list now lives inside `P2Digest ()`, so it repeats with everything else and is
+part of the steady state. The cap is the storage cap, 64 records — no lower,
+because the whole list is the point.
+
+**`P2 ERR` says how many of each kind; `P2 DIAG` says which.** They answer
+different questions and the second is the one that names a mechanism: a status
+shared by twenty-seven drivers that have nothing in common points somewhere other
+than the same status shared by a recognisable family — the four runtime drivers,
+the USB stack, the console stack. With the list in the digest, one photograph of
+the steady-state screen carries every failure with its own status in words, which
+is the first time that has been true.
+
+The block still fits: the worst case is 64 records plus fourteen rows of digest,
+78 rows against the hundred or so the panel holds, and a `P2 DIAG` line is at most
+65 columns against the ninety — so it neither wraps nor pushes the head of the
+digest off the screen. Because the block is shorter than the screen, the last 100
+rows of the output always contain one complete copy, whatever the clear does.
+
+| | |
+|---|---|
+| image | `work/out/p2-variants/Mu-gauguin-silicon-gzip.img` |
+| size | 1,140,736 B |
+| sha256 | `7b5a1067d29d1a2fcc832941c614939452307ee17de41c32fd9cf081cf564b6d` |
+| supersedes | `5be70ecc4b2646cf9d44e3ddb6cde1cfe6a176bf38c5bd96b991ea19683cf11d` (step 4.15, reproducible from `09e0e0e`; its archive directory was reused, see that step) |
+| difference | the digest function in `DxeCore`: one loop moved into it and its cap raised; the other 122 files are at the same offsets, and `fv-inventory.py --against` reports "123 offsets and GUIDs, zero mismatches" |
+| on the phone | **no** — the phone still carries the step-4.13 image |
+| archived at | `work/out/p2-4.16/` |
+| to write it | `tools/flash-boot.sh --twrp work/out/p2-variants/Mu-gauguin-silicon-gzip.img`, from TWRP |
+
+The payload was re-checked the same way as step 4.15's: the gzip kernel stream is
+exactly `BootShim.bin` followed by `SILICIUM_UEFI.fd`, `tools/check-payload.py`
+and `tools/abl-boot-check.py` pass, and the GenFv map agrees on all 123 files.
+`grep` for the `P2 DIAG` format string finds it **once** in the volume, which is
+the move: the one-shot copy is gone and the digest's is the only one left.
+
+### What to read from this one
+
+Everything from step 4.15's list, plus the `P2 DIAG` block, which now sits between
+`P2 ERR` and `P2 STATS` and lists one line per load failure. Read it as the
+driver-by-driver half of `P2 ERR`: `P2 ERR Out of Resources x27` with 27 `P2 DIAG`
+lines all saying `Out of Resources` is one finding; the same `x27` spread across
+`Not Found` and `Out of Resources` is two, and the GUIDs say which is which —
+`Guid.xref` on the host maps them back to names, and `tools/pe-facts.py` says what
+is peculiar about each one.
 
 ## Step 5 — Leave it bootable
 
@@ -2805,6 +2872,11 @@ attempt  image                          fbreason                     screen     
          the promotion loop counts the
          Apriori entries that matched
          nothing), sha256 5be70ecc
+10       Mu-gauguin-silicon-gzip.img    (not flashed)                (not read)             n/a           (not read)
+         (4.16: the per-driver
+         failure list moved into the
+         repeated digest, so it stays
+         on the screen), sha256 7b5a1067
 ```
 
 Row 4 is the one that matters and is step 4.8: our firmware ran and drew its own
@@ -2859,6 +2931,16 @@ mean anything as a pair, so the reason needed two captures and got none. Row 9 a
 a third spelling of the same statuses, `P2 ERR <name> x<count>`, which is short
 enough to be photographed on its own. Like row 8 it has not been flashed; the phone
 still carries row 7.
+
+Row 10 is step 4.16 and it is the same complaint one layer down. Row 9 put the
+failure *statuses* into the repeated digest; the list of failures, one line per
+driver, was still printed once before the repetition began — and capped at 24
+records against 27 failures, so three of them were unreachable no matter how the
+photograph was taken. Row 10 moves that list into `P2Digest` and lifts the cap to
+the storage. It adds nothing to the instrument and everything to the chance of
+reading it, which is now what this step of the work turns on: the answer exists
+after every boot and has been missed after every boot, and each of rows 8, 9 and
+10 removes one way for that to happen. Row 10 has not been flashed either.
 
 The `abllog` column is step 4.6's answer — the last stage ABL's own log for that
 boot reached. It is the one column that is filled in whether or not the payload

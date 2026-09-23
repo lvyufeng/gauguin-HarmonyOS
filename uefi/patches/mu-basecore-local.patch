@@ -72,6 +72,17 @@
 #       per photograph, so the answer that is wanted - the reason the 27 loads
 #       failed - is now also a short line in words, complete on its own.
 #
+#       The digest also carries the failure list itself, one line per driver -
+#       `P2 DIAG <phase> <guid> <status>` - and it has to be there rather than
+#       beside the other one-shot dumps. A line printed before the repetition has
+#       begun is on the panel only during the first frames, and what the panel is
+#       holding when somebody looks is the whole of what a reading can be built
+#       from. Printed once and capped at 24 records, three of the twenty-seven
+#       failures could not be photographed at all; inside the digest the list
+#       repeats with everything else, so one photograph of the steady-state screen
+#       carries every failure with its own status in words. The block is 78 rows
+#       in the worst case against the hundred or so the panel holds.
+#
 #       It also replaces the digest's pause. The repeat loop stalled on
 #       CoreStall, which waits through the Metronome - and the Metronome is
 #       installed by `MetronomeDxe`, one of the drivers this volume is being
@@ -297,7 +308,7 @@ index 39668123..8405bc31 100644
  #define  USB_INTERFACE_SIGNATURE  SIGNATURE_32 ('U', 'S', 'B', 'I')
  #define  USB_BUS_SIGNATURE        SIGNATURE_32 ('U', 'S', 'B', 'B')
 diff --git a/MdeModulePkg/Core/Dxe/Dispatcher/Dispatcher.c b/MdeModulePkg/Core/Dxe/Dispatcher/Dispatcher.c
-index d7c7147e..0a4b183f 100644
+index d7c7147e..6a1e67b5 100644
 --- a/MdeModulePkg/Core/Dxe/Dispatcher/Dispatcher.c
 +++ b/MdeModulePkg/Core/Dxe/Dispatcher/Dispatcher.c
 @@ -60,6 +60,277 @@ EFI_LOCK  mDispatcherLock = EFI_INITIALIZE_LOCK_VARIABLE (TPL_HIGH_LEVEL);
@@ -724,7 +735,7 @@ index d7c7147e..0a4b183f 100644
      }
  
      //
-@@ -1470,6 +1840,211 @@ CoreInitializeDispatcher (
+@@ -1470,6 +1840,233 @@ CoreInitializeDispatcher (
    PERF_FUNCTION_END ();
  }
  
@@ -897,6 +908,28 @@ index d7c7147e..0a4b183f 100644
 +    }
 +  }
 +
++  //
++  // One line per load failure, naming the driver and the status in words.
++  // `P2 ERR` says how many of each kind; this says which, and the two are
++  // different questions: a status shared by drivers with nothing in common
++  // points somewhere other than one shared by a recognisable family. It is
++  // not capped lower than the storage, because the whole list is wanted and
++  // the block still fits the screen: the storage cap is 64 records and the
++  // rest of the digest is fourteen rows, so the worst case is 78 rows against
++  // the hundred or so the panel holds, and the line itself is at most 65
++  // columns against the ninety - so it neither wraps nor pushes the head of
++  // the digest off the screen.
++  //
++  for (Index = 0; Index < mP2DiagCount && Index < P2BRINGUP_DIAG_MAX; Index++) {
++    DEBUG ((
++      DEBUG_ERROR,
++      "P2 DIAG %c %g %r\n",
++      mP2Diag[Index].Phase,
++      &mP2Diag[Index].Guid,
++      mP2Diag[Index].Status
++      ));
++  }
++
 +  DEBUG ((
 +    DEBUG_ERROR,
 +    "P2 STATS discovered=%d apriori=%d/%d started=%d diag=%d noload=%d\n",
@@ -936,7 +969,7 @@ index d7c7147e..0a4b183f 100644
  //
  // Function only used in debug builds
  //
-@@ -1486,11 +2061,73 @@ CoreDisplayDiscoveredNotDispatched (
+@@ -1486,11 +2083,73 @@ CoreDisplayDiscoveredNotDispatched (
  {
    LIST_ENTRY             *Link;
    EFI_CORE_DRIVER_ENTRY  *DriverEntry;
@@ -977,15 +1010,15 @@ index d7c7147e..0a4b183f 100644
 +
 +  DEBUG ((DEBUG_ERROR, "P2 NOLOAD total=%d shown=%d\n", NotLoaded, Shown));
 +
-+  for (Index = 0; Index < mP2DiagCount && Index < 24; Index++) {
-+    DEBUG ((
-+      DEBUG_ERROR,
-+      "P2 DIAG %c %g %r\n",
-+      mP2Diag[Index].Phase,
-+      &mP2Diag[Index].Guid,
-+      mP2Diag[Index].Status
-+      ));
-+  }
++  //
++  // P2BRINGUP: the per-failure list used to be printed here, capped at 24 of
++  // the 27. It now lives inside P2Digest, which is repeated, and this is why
++  // that is not just a move: a line printed here is only on the panel during
++  // the first frames, before the repetition has wiped the screen a few times,
++  // and the sessions that read this data were decided by what the screen was
++  // holding when someone looked. Printed once, three of the twenty-seven were
++  // unreachable no matter how the photograph was taken.
++  //
 +
 +  //
 +  // P2BRINGUP: everything from here down is the digest, and it is printed again
