@@ -35,6 +35,7 @@ while [ $# -gt 0 ]; do
         --twrp)     ROUTE=twrp ;;
         --fastboot) ROUTE=fastboot ;;
         --auto)     ROUTE=auto ;;
+        -h|--help)  sed -n '2,29p' "$0"; exit 0 ;;
         -*)         echo "unknown option: $1" >&2; exit 2 ;;
         *)          break ;;
     esac

@@ -23,14 +23,28 @@
 #         tools/restore-stock-boot.sh --twrp     # force the TWRP route
 #         tools/restore-stock-boot.sh --check    # verify the backup only
 #
+# An unrecognised argument is refused rather than ignored. This script's whole
+# value is that running it is safe, and the way that stops being true is a typo:
+# `--dryrun` or `--chek` used to fall through to the auto route and write the
+# partition. Nothing here writes until the backup has been verified, and the
+# file written is the right one either way, but "restore stock" is not something
+# to enter by accident.
 set -u
 
 BACKUP="${BACKUP:-$HOME/backup/gauguin/images/part-boot.img}"
 # sha256 read off the device immediately before the first write, 2026-09-22.
 EXPECT="${EXPECT:-50ef59beb17e75de1e749b7d261eb41a18d9cca025befb3357e43e239de78ef3}"
 ROUTE=auto
-[ "${1:-}" = "--twrp" ] && ROUTE=twrp
-[ "${1:-}" = "--check" ] && ROUTE=check
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --twrp)    ROUTE=twrp ;;
+        --check)   ROUTE=check ;;
+        --auto|"") ;;
+        -h|--help) sed -n '2,31p' "$0"; exit 0 ;;
+        *)         echo "unknown option: $1" >&2; exit 2 ;;
+    esac
+    shift
+done
 
 log() { printf '\033[1m%s\033[0m\n' "$*"; }
 die() { printf '\033[31m%s\033[0m\n' "$*" >&2; exit 1; }
