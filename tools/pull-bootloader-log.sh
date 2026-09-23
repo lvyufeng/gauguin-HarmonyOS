@@ -72,8 +72,11 @@ fi
 
 # --- 2. adb: read the partition ----------------------------------------------
 # TWRP comes up as `recovery` and is root already; Android comes up as `device`
-# and needs `su`. Both end up at the same dd.
-if [ -z "$GOT" ] && have adb && adb devices 2>/dev/null | grep -q 'device$'; then
+# and needs `su`. Both end up at the same dd. Both states have to be accepted
+# here: TWRP is the route this script exists for - it is the one that works when
+# ABL's fastboot is wedged - and a check that only accepted `device` would skip
+# it and fall through to the backup while reporting success at having tried.
+if [ -z "$GOT" ] && have adb && adb devices 2>/dev/null | grep -qE '(device|recovery)$'; then
     log "== adb: reading /dev/block/by-name/logfs"
     shell() {
         # root if the device offers it, plain otherwise - a recovery build that

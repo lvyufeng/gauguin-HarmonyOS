@@ -187,6 +187,32 @@ from "the image was rejected", and it is the one reading that would say P2 was
 reached. Worth doing on the same trip in, since getting here costs a power-button
 sequence and the pstore log is the thing that does not survive it.
 
+**The same trip in also reads ABL's log, and that is the highest-value thing to
+do with it** (step 4.6 has the tool and how to read the answer):
+
+```sh
+tools/pull-bootloader-log.sh          # over adb, from TWRP: dd of the logfs partition
+```
+
+This is the one route that survives the thing this step costs. Reaching TWRP is a
+cold power-button start, so anything in DRAM is gone — but `logfs` is on disk, and
+ABL wrote a slot for the boot that failed before this one. So the trip answers the
+question the project has been unable to answer since the write: **what ABL did
+with the image in `boot`**. The slot to read is the one whose `pureason` is not in
+the `docs/07` baseline of five.
+
+Three things can be done on this one trip and the order among them is free,
+because nothing on `logfs` depends on what is in `boot`:
+
+1. `adb shell 'dd if=/dev/block/by-name/logfs ...'` — via `pull-bootloader-log.sh`
+2. `dd` of `misc`, above
+3. `tools/restore-stock-boot.sh --twrp` or `tools/flash-boot.sh --twrp <image>` —
+   leaving `boot` holding whatever the next reboot should try
+
+Do all three, then reboot once. The pstore cost below is about the *payload's*
+log, not this one: reading `logfs` does not require the payload to have rebooted
+itself, so it does not have to be read before the write.
+
 One cost to know about, because it is easy to lose the thing you came for:
 reaching TWRP this way is a power-button path, and a pstore log does not survive
 a cold start — the region is in RAM. So **the payload log is only readable via
