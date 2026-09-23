@@ -417,3 +417,39 @@ print("  -> a `miss` of anything else is not a short walk at all: the device is 
 print("  -> and miss=22 ShmBridgeDxe is closed by the 5-vs-74 result above: a "
       "walk that stopped\n     before physical 74 did not load ShmBridgeDxe at "
       "74, so that row cannot be this run.")
+
+# ---------------------------------------------------------------------------
+# The five `P2 WALK` lines the device should print, generated rather than
+# transcribed.
+#
+# `mDxeFileTypes` in Dispatcher.c is
+#   { EFI_FV_FILETYPE_DRIVER, EFI_FV_FILETYPE_COMBINED_SMM_DXE,
+#     EFI_FV_FILETYPE_COMBINED_PEIM_DRIVER, EFI_FV_FILETYPE_DXE_CORE,
+#     EFI_FV_FILETYPE_FIRMWARE_VOLUME_IMAGE }
+# and the probe prints the *position* in that array, not the type value - so the
+# DRIVER pass is t=0 and a t=7 on the panel is a line the code cannot emit. The
+# walk is a do/while around GetNextFile, and the terminating call that returns
+# EFI_NOT_FOUND is counted in `iter` and not in `seen`, so each line should read
+# iter = seen + 1 on a pass that ended by running out of files. `last` is the GUID
+# of the last file the pass was handed, which on a complete pass is the volume's
+# highest-offset file of that type.
+# ---------------------------------------------------------------------------
+print()
+print("=== The `P2 WALK` lines this volume should produce ===")
+TYPES = [
+    ("EFI_FV_FILETYPE_DRIVER", 0x07),
+    ("EFI_FV_FILETYPE_COMBINED_SMM_DXE", 0xF3),
+    ("EFI_FV_FILETYPE_COMBINED_PEIM_DRIVER", 0x08),
+    ("EFI_FV_FILETYPE_DXE_CORE", 0x05),
+    ("EFI_FV_FILETYPE_FIRMWARE_VOLUME_IMAGE", 0x0B),
+]
+for idx, (tname, tval) in enumerate(TYPES):
+    of = [f for f in files if f[1] == tval]
+    seen, itr = len(of), len(of) + 1
+    lastg = fvinv.guid_str(of[-1][0]) if of else "0" * 36
+    print(f"  P2 WALK t={idx} seen={seen} iter={itr} last={lastg}")
+    print(f"      ({tname} = {tval:#04x}, {seen} file(s) in this volume)")
+print("\n  -> t=0 seen=80 iter=81 is the prediction that matters: if the panel "
+      "reports it, the\n     walk reached every DRIVER file and the 23 absent "
+      "Apriori entries were dropped\n     after it. The other four lines are the "
+      "control, and they should read exactly as\n     above.")

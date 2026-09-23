@@ -2207,9 +2207,13 @@ the digest repeats 41 times and any moment on the panel is a valid frame.
 together.** `P2 APRI` (`bytes/entries/sum`, then `matched=` and `miss=`) settles
 whether the 23 absent entries are a suffix of the array or interleaved — which is
 what makes step 4.12's join either correct or shifted, and it is the one question
-that step was unable to answer from the host. `P2 STATS discovered=` splits the
-remaining fork: near 80 means the walk saw every DRIVER file and something after
-the walk dropped 23, while near 57 means the sweep itself was cut short. `P2 WHY`
+that step was unable to answer from the host. `P2 WALK t=0 seen=` splits the
+remaining fork: 80 means `GetNextFile` handed back every `DRIVER` file and the 23
+were dropped after the walk, while 57 means the sweep itself was cut short — and
+the line is self-checking, because `iter` must be `seen + 1`. It is `P2 WALK` and
+not `P2 STATS` that carries this, which is worth being exact about: `discovered` is
+bounded at **57** by the 46-character `SEQ` and cannot report the walk's reach at
+all. `P2 WHY`
 turns the 27 `L` from a count into a mechanism: `P2Record` writes `'L'` for every
 `CoreLoadImage` failure regardless of *which* error it was, so the letters are the
 only signal that separates a load that ran out of memory (`'R'`) from one the PE
@@ -2381,12 +2385,28 @@ replay of the promotion loop over the volume alone matches `1..69` with no miss;
 a panel `miss` can therefore only be non-`none` because `mDiscoveredList` is short
 of what the volume contains, never because the volume is missing a name.
 
-Three of these lines are one line of arithmetic apart from each other, which is
-worth stating because it makes the reading self-checking. `noload` is
-`mDiscoveredList`'s entries with `ImageHandle == NULL`, and zero `'S'` characters
-means every driver that loaded also started, so **`discovered − noload = 19`
-exactly** (`mP2Started`). If the pair on the `P2 STATS` line does not differ by 19,
-the line was misread or the run is not the run this document is describing.
+The `P2 STATS` line is one line of arithmetic, which is worth stating because it
+makes the reading self-checking. `noload` is `mDiscoveredList`'s entries with
+`ImageHandle == NULL`, so `discovered − noload` is the number that *loaded*, and
+because there are zero `'S'` characters every one of them also started — so
+**`discovered − noload = started` exactly**, and `started ≥ 19`. It is `≥` and not
+`=` because `started` counts entry points across the whole volume while the SEQ
+string only spans the Apriori array: the 11 `DRIVER` files the array never names
+would each add 1 to `started` if they loaded, and would be invisible in `SEQ`
+and `WHY`. So a `started` above 19 is itself a finding — it means some unnamed
+driver loaded — and a `P2 STATS` line where the three do not satisfy that identity
+was misread or is not this run.
+
+**And a 46-character `SEQ` bounds `discovered` from above, which removes one of the
+two rows this table used to carry.** `mP2Apriori` counts Apriori entries that
+matched an entry in `mDiscoveredList`, and the host has verified that all 69
+non-zero entries name a `DRIVER` file this volume contains. So a list holding all
+80 `DRIVER` files would match 69. It matched 46, so 23 of the named drivers are
+not in the list, so **`discovered` is at most `80 − 23 = 57`** — or, written the way
+the arithmetic actually closes, `discovered = 46 + (unnamed drivers in the list)`.
+The old `discovered ≈ 80` row is therefore not a reading that can come back, and a
+`P2 STATS` line reporting it means the SEQ string and the STATS line are from
+different runs.
 
 | panel says | means | next |
 |---|---|---|
@@ -2394,13 +2414,27 @@ the line was misread or the run is not the run this document is describing.
 | `entries=70`, `miss=47 9143B2B7-…` | exactly `ap1..ap46` matched (`matched=1..46`), so the absent 23 are the array's tail | step 4.12's tables stand; the discovered list is short by a *suffix*, and the shortfall is in the walk or in `CoreAddToDriverList` |
 | `entries=70`, `miss=j<47` | the absent entries are interleaved; `miss` names the first one | step 4.12's name tables are shifted from `SEQ[j-1]` on and must be redone against the true alignment |
 | `entries=70`, `miss=none` | 69 of 69 matched, so the match count was never 46 | the 46-char line was truncated somewhere other than the array — re-open step 4.12 rather than patch it |
-| `P2 WALK t=7 seen=80 iter=81` | the walk was handed every DRIVER file | the 23 were dropped after the walk, in `CoreAddToDriverList` or in the list itself |
-| `P2 WALK t=7 seen≈57` | the walk was handed only 57 | `GetNextFile` or the walk's own bound; the volume's file table is known to hold 80 and `FvCheck` lists all 123 |
-| `P2 STATS discovered=` ≈ 80 and `noload=` ≈ 61 | the list was populated and then 23 loads never happened | the load failures and the missing entries are separate faults |
-| `discovered=` ≈ 57 and `noload=` ≈ 38 | the list was never fully populated | one fault, not two: the 23 absent Apriori entries and the 27 `L`s are both downstream of a short walk |
+| `P2 WALK t=0 seen=80 iter=81` | `GetNextFile` handed back every one of the volume's 80 `DRIVER` files | the walk is exonerated and the 23 were dropped after it, in `CoreAddToDriverList` or in the list itself — with `discovered ≤ 57`, so the drop is between the two numbers |
+| `P2 WALK t=0 seen≈57 iter≈58` | `GetNextFile` stopped after 57, and `last` names where | the walk itself is the mechanism; the volume's file table is known to hold 80 and `FvCheck` lists all 123, so nothing below it is at fault |
+| `P2 STATS` with `discovered − noload ≠ started`, or `started > 19` | the three numbers disagree with the coded identity, or an Apriori-unnamed driver loaded | re-read the line before drawing anything from it |
 | `P2 FREE largest=` ≥ 256 | there is a free run of at least 1 MiB, so the largest single request in the promoted set (112 pages) would have fit | the 27 `L`s are not a single allocation that could not be satisfied, and `P2 WHY` decides what they are instead |
 | `P2 FREE largest=` ≤ 64 | the largest free run is 256 KiB or less, less than the largest request the promoted set makes | the load order's arithmetic was right and the heap really is being consumed by something else; find what |
 | `P2 FREE largest=0` | nothing is allocatable at all at digest time | the `L`s are exhaustion by another name |
+
+**`P2 WALK` prints one line per entry in `mDxeFileTypes`, and the DRIVER pass is
+index `0`, not `7`.** The array is
+`{ EFI_FV_FILETYPE_DRIVER, COMBINED_SMM_DXE, COMBINED_PEIM_DRIVER, DXE_CORE,
+FIRMWARE_VOLUME_IMAGE }`, and the counter and the printed number are both the
+*position* in it — so the five lines are `t=0`..`t=4`, the DRIVER line is the first,
+and a `t=7` on the panel would be a line the code cannot print. The four non-DRIVER
+passes are part of the same self-check rather than noise: this volume holds no
+`0xF3`, `0x08` or `0x0B` file at all and exactly one `0x05` file, so they should
+read `seen=0 iter=1` three times and `seen=1 iter=2` once (`DxeCore`), and because
+the loop counts the terminating `EFI_NOT_FOUND` call in `iter` and not in `seen`,
+**every line must satisfy `iter = seen + err`** — where `err` is a counter the
+digest does not print, and is 1 on a pass that ended by running out of files. So
+`iter = seen + 1` on all five lines is the expected reading, and `iter > seen + 1`
+means `GetNextFile` failed on a file the volume does contain.
 
 `P2LargestAlloc` probes a fixed ladder — 4096, 1024, 256, 64, 16, 4, 1 pages —
 and returns the first step that succeeds, so the value is quantized to those
@@ -2417,7 +2451,7 @@ that, the tail assumption is already incompatible with it: `ap47..ap69` are not 
 volume's last 23 DRIVER files but a scattered set whose physical indices are
 `{14, 20, 21, 22, 51, 53, 55…70, 72}`, which reaches back to the console drivers in
 the first quarter of the volume. So under the tail assumption the walk cannot have
-stopped early, and `P2 WALK t=7 seen=80` follows rather than being a separate
+stopped early, and `P2 WALK t=0 seen=80` follows rather than being a separate
 measurement.
 
 The converse is sharper than expected, because `miss` does not just say *that* the
