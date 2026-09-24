@@ -2515,6 +2515,19 @@ for the CPU skeleton at `Silicon/Qualcomm/Moorea/DSDT_Minimal.asl`, and 20 platf
 > | `FACS` | `0x54deac` | 64 | (no OEM fields — all zero, as `FACS` has none) |
 > | `GTDT` | `0x54def0` | 156 | `QCOM`/`QCOMEDK2`, rev 2 |
 >
+> **`docs/08` step 4.53 has since re-derived this table by walking the
+> `AcpiTables` FFS file rather than by scanning for signatures, and every offset
+> above came out exactly right for the volume the paragraph names.** The two
+> things step 4.53 corrects are about the method and about scope, not about the
+> numbers: these offsets are right for the **payload of record** and stale for the
+> `Build/` tree, which now holds the `xhci-host` volume (7,524,352 bytes — the
+> payload plus exactly the three USB-host blobs' 172,032 — and 126 files, built
+> 2026-09-25 01:19), where the same six tables are at `0x57764c`…`0x578158`; and
+> "take each hit whose length field is sane" is not what selects them, because
+> the raw scan returns six `DSDT` hits and five `FACS` hits, the extras being
+> debug strings inside `AcpiTableDxe.efi` — one of which carries a length field of
+> `0x0000000A`, which passes any plausible sanity bound.
+>
 > The DSDT is gauguin's own and contains what it was supposed to: `ACPI0007`
 > eight times (the eight CPU devices), `QCOM24A5` once (the UFS `_HID`), and
 > `UFS0` and `URS0` device nodes, with `_HID`/`_ADR`/`_CRS`/`_DSM`/`_STA`/`_UID`

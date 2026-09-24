@@ -7557,6 +7557,21 @@ six between `0x54d484` and `0x54df8c`:
 | `FACS` | `0x54deac` | 64 | OEM fields all zero, which is what `FACS` has |
 | `GTDT` | `0x54def0` | 156 | `QCOM`/`QCOMEDK2`, rev 2 |
 
+**Step 4.53 re-derived this table by walking the `AcpiTables` FFS file instead of by
+scanning, and every offset above is exactly right** — the zeros this session got from
+reading those offsets came from the `Build/` tree, not from the artifact, because that
+tree had been rebuilt into the `xhci-host` volume by then. Two corrections to the
+paragraph above, both about method and scope rather than about the numbers: the
+sentence "taking each hit whose length field is sane" does not describe what selects
+these six, because the raw scan returns six `DSDT` hits and five `FACS` hits, the extras
+being debug strings inside `AcpiTableDxe.efi` — one of them carrying a length field of
+`0x0000000A`, which passes any plausible sanity bound; and the volume this table
+describes is the payload of record, while `Build/gauguinPkg/DEBUG_CLANGPDB/FV/FVMAIN.Fv`
+is now 7,524,352 bytes (the payload plus exactly the three USB-host blobs' 172,032) and
+126 files, built **2026-09-25 01:19**, with the same six tables at
+`0x57764c`…`0x578158`. So "reading the build tree is reading the payload" above held on
+2026-09-24 and stopped holding when the host stack was added.
+
 The DSDT is gauguin's own, 1,520 bytes compiled by `iasl` from `tools/acpi/gauguin.asl` (21,615
 bytes), and it contains `ACPI0007` eight times, `QCOM24A5` once, and `UFS0` and `URS0` device nodes,
 with `_HID`, `_ADR`, `_CRS`, `_DSM`, `_STA` and `_UID` all present.
@@ -8674,3 +8689,132 @@ panel has never produced.
 | bounds | free ≥ 19.9 MiB at `Fat.efi`, from one address plus the direction of the search; and the bottom-up reading is impossible by 2.8× against the volume's own 7,352,320 B |
 | instrument | no new one: `Page.c`, `Image.c` and step 4.28's measured `FVMAIN.Fv` size read against the single panel row. No source under `Mu_Basecore` was edited, so no line number in this log moved |
 | does not close | the 27 `CoreLoadImage` failures, `bs9=`'s value, or whether the used band is PrePi's uncounted pages or pool — the `free=` column during dispatch is still the reading that decides, and the panel has still never shown one |
+
+## Step 4.53 — the FACP is a template, and the empty FADT pointers are the pre-install state
+
+Step 4.45 read the six ACPI tables back out of the payload and checked each one.
+Doing that again this session, four of the six come back with a valid checksum, a
+fifth (`FACS`) has no checksum field to check, and **the sixth does not**: `FACP`
+stores `0xb0` at offset 9, its 276 bytes sum to 200 mod 256, and `0xe8` is the byte
+that would make it valid. Its four pointer fields are empty as well —
+`FIRMWARE_CTRL` (`@36`), `DSDT` (`@40`), `X_FIRMWARE_CTRL` (`@132`) and `X_DSDT`
+(`@140`) all read zero.
+
+Read on its own that is a P3 blocker of the first order. A FADT that points at no
+DSDT means no `UFS0`, no `URS0`, no CPU devices and no interrupt model, and a table
+whose checksum fails is one an ACPI interpreter is entitled to discard outright.
+Neither of those is what is happening here, and the firmware says so in three
+places that can be read without a device.
+
+**The checksum byte is recomputed over every table before any of them is
+installed.** `AcpiPlatformEntryPoint` reads the `AcpiTables` FFS file section by
+section and, for each one, calls `AcpiPlatformChecksum ((UINT8 *)CurrentTable,
+TableSize)` at `AcpiPlatform.c:219` — one line before `InstallAcpiTable` at `:224`.
+The function itself (`:126-144`) zeroes the field and writes `CalculateCheckSum8`
+over the whole table:
+
+```c
+  ChecksumOffset = OFFSET_OF (EFI_ACPI_DESCRIPTION_HEADER, Checksum);
+  Buffer[ChecksumOffset] = 0;                                 // :138
+  Buffer[ChecksumOffset] = CalculateCheckSum8 (Buffer, Size);  // :143
+```
+
+So the byte in the volume is not read by anything. What is in the volume is
+whatever the tool that produced the blob left in a field that is defined to be
+recomputed.
+
+**The empty pointers are the documented pre-install state, and the same function
+fills them.** `AddTableToList` in `AcpiTableProtocol.c` sets them from the tables
+that are actually installed:
+
+```c
+        // Update pointers in FADT.  If tables don't exist this will put NULL pointers there.   // :678
+        AcpiTableInstance->Fadt1->FirmwareCtrl = (UINT32)(UINTN)AcpiTableInstance->Facs1;     // :680
+        AcpiTableInstance->Fadt1->Dsdt         = (UINT32)(UINTN)AcpiTableInstance->Dsdt1;     // :681
+```
+
+with the 2.0+ branch at `:715-757` doing the same for `Fadt3->XFirmwareCtrl` and
+`Fadt3->XDsdt` under the long comment block at `:735-745` about the DSDT/X_DSDT
+mutual-exclusion rule and the two possible install orders. EDK2's own comment is
+the whole answer to the finding: **a zero on disk is expected, and the field is
+populated from the DSDT and FACS once those have been installed.** Each write is
+followed by another `AcpiPlatformChecksum` on the FADT — `:853`/`:894` for the FACS
+path, `:943`/`:993` for the DSDT path — and `PublishTables` then re-checksums the
+RSDP, RSDT and XSDT through `ChecksumCommonTables` (`:1711`) under the comment at
+`:159`, "Do checksum again because Dsdt/Xsdt is updated." Both orders are handled,
+which is what the two comment blocks are for.
+
+**A positive control settles it.** If the stored byte were a computed checksum,
+some platform's would be the right one. The `FACP.aml` blobs of the eighteen
+Qualcomm platforms in this tree differ from Moorea's only in `OemId`,
+`OemTableId`, `OemRevision` and `CreatorRevision` — same length 276, same revision,
+same `FLAGS`, same `ARM_BOOT_ARCH`, same `RESET_REG`, same zeroed pointers — and
+**three of them store `0x00`** (`Cedros`, `Kailua`, `Kona`; their tables sum to
+162, 177 and 180). A zero cannot be a valid checksum for a 276-byte table with a
+nonzero OEM revision, so the field is a leftover from whatever emitted the original
+OEM tables and is not maintained by anything downstream. The asymmetry in the
+payload is then not a defect but a confirmation: **exactly one of the six tables
+has a bad stored checksum, and it is exactly the one table the installer
+rewrites.**
+
+**And a second correction, to my own reading rather than to the firmware's.** I had
+recorded `FACS ✗` beside `FACP ✗`. The FACS has **no checksum field at all** — the
+64 bytes are signature 0-3, length 4-7, hardware signature 8-11, the waking
+vectors, global lock and flags through 23, `X_FirmwareWakingVector` 24-31, version
+32-35, reserved 36-59, OSPM flags 60-63 — so there was nothing there to verify.
+The bytes are `'FACS'`, length 64, version 2, everything else zero, which is a
+valid minimal FACS. "Invalid" there was a category error, not a finding.
+
+**What the FACP does say, since P3 is the phase that has to live with it.** Every
+x86 legacy field reading zero is not missing data, it is the model:
+
+| field | value | what it means |
+|---|---|---|
+| `FLAGS` `@112` | `0x300000` | `HW_REDUCED_ACPI` (BIT20, `Acpi60.h:250`) \| `LOW_POWER_S0_IDLE_CAPABLE` (BIT21, `:251`) |
+| `PREFERRED_PM_PROFILE` `@45` | `8` | `PM_PROFILE_TABLET` (`Acpi60.h:206`) |
+| `ARM_BOOT_ARCH` `@129` | `1` | `ARM_PSCI_COMPLIANT` (BIT0, `Acpi60.h:223`) — reset and power go through PSCI |
+| `RESET_REG_SUP` in `FLAGS` | clear | the `RESET_REG` GAS that is present (`address_space_id 3`, `0x009020B4`) is declared **not in use** |
+| `PM1a_EVT_BLK`, `PM1a_CNT_BLK`, `PM_TMR_BLK`, `GPE0_BLK`, `SMI_CMD`, `ACPI_ENABLE`, `PM1_EVT_LEN`, `PM1_CNT_LEN`, `PM_TMR_LEN`, `GPE0_BLK_LEN` | all `0` | under `HW_REDUCED_ACPI` there are no PM1/GPE register blocks and no SMI command port, and `SCI_INT` is ignored — this is the correct encoding |
+
+Revision 6, length 276, `QCOM`/`QCOMEDK2`, OEM revision `0x7150`, creator `INTL`
+rev `0x20230628` — the same shape as all eighteen siblings. The three things P3
+actually needs from ACPI are the three that are *not* in the FADT: the interrupt
+model (the DSDT's GSIs and `GpioInt`s on `UFS0`/`URS0`/`USB0`/`UFN0`), the timers
+(the `GTDT`), and the interrupt controller (the `APIC`). The FADT's job is to
+declare hardware-reduced ACPI and PSCI, and it does.
+
+**Where the offsets in steps 4.45 and 4.42 came from, and which artifact they
+describe.** Walking the `AcpiTables` FFS file (`7E374E25-8E01-4FEE-87F2-
+390C23C606CD`, type `0x02`, size `0xb3e`) in the payload of record reproduces the
+recorded offsets exactly — six consecutive RAW (`0x19`) sections starting at
+`0x54d484` — and adds the detail that the file also carries a 22-byte UI (`0x15`)
+section after them. What has changed is not the payload but the tree: `Build/
+gauguinPkg/DEBUG_CLANGPDB/FV/FVMAIN.Fv` is now **7,524,352 bytes across 126 files,
+built 2026-09-25 01:19** — the payload's 7,352,320 plus exactly the three USB host
+blobs' 94,208 + 45,056 + 32,768 = 172,032, and 123 plus 3 files. That volume's
+`AcpiTables` file sits at `0x577630` and its six tables at `0x57764c`, `0x577690`,
+`0x577c84`, `0x577f5c`, `0x578074`, `0x5780b8`. So "reading the build tree is
+reading the payload" held on 2026-09-24 and stopped holding when the host stack was
+added; the offsets were never wrong, they describe the payload of record, which is
+the artifact the P2 gates use.
+
+**The signature scan those steps used is not what would have found them.** The raw
+scan returns **six** `DSDT` hits and **five** `FACS` hits in the payload, not one
+each. The extras are debug strings inside `AcpiTableDxe.efi`
+(`9622E42C-…-54F784652F6B` at `0x53d7a8`) — "DSDT table not found", "Failed to add
+DSDT in the …", "The DSDT content", and the FACS equivalents — which is a nice
+coincidence given that this is the module that fills the FADT's `DSDT` and `FACS`
+pointers, and a trap for anyone who repeats the scan: the hit at `0x544f24` is
+followed by a length field of `0x0000000A`, which passes every plausible sanity
+bound, and it sits *before* the real table. The structural walk is the method that
+cannot be fooled by it, and it is what step 4.53 used.
+
+| | |
+|---|---|
+| finds | the FACP's stored checksum byte and its four empty pointer fields are the **normal pre-install state** of every FADT in this tree, filled and re-checksummed at runtime by `AcpiPlatformDxe` and `AcpiTableDxe` — not a defect, and nothing to fix host-side for P3 |
+| mechanism | `AcpiPlatform.c:219` re-checksums every RAW section before `InstallAcpiTable` at `:224` (`:126-144` zeroes the field and writes `CalculateCheckSum8`); `AcpiTableProtocol.c:678-681` and `:715-757` fill `FirmwareCtrl`/`Dsdt`/`XFirmwareCtrl`/`XDsdt` from the installed FACS and DSDT — EDK2's own comment at `:678` is "If tables don't exist this will put NULL pointers there" — each write followed by another `AcpiPlatformChecksum` (`:853`, `:894`, `:943`, `:993`) and by `ChecksumCommonTables` (`:1711`) for the RSDP/RSDT/XSDT |
+| positive control | the eighteen sibling `FACP.aml` blobs differ only in OEM/creator fields, and three of them (`Cedros`, `Kailua`, `Kona`) store checksum byte `0x00` on tables that sum to 162/177/180 — so the byte is an unmaintained leftover everywhere, and the payload's one invalid table is the one table the installer rewrites |
+| corrects | my own reading of this session: `FACS` has **no checksum field** by spec, so "FACS ✗" was a category error, not a finding. And `docs/07:2507-2516` / `docs/08:7548-7560` describe the payload of record correctly but the `Build/` tree no longer holds that volume (it holds the `xhci-host` one, +172,032 bytes = the three blobs, 126 files, 2026-09-25 01:19; its tables are at `0x57764c`…`0x578158`) — and "take each hit whose length field is sane" is not what selects the six, since the raw scan gives six `DSDT` hits and five `FACS` hits, the extras being `AcpiTableDxe` debug strings, one with a length field of `0x0000000A` that passes a sanity bound |
+| bounds | the six tables are located by walking the `AcpiTables` FFS file, so the offsets, lengths and checksums are exact and not scan-dependent; the four valid stored checksums (SSDT, DSDT, APIC, GTDT) and the one invalid one (FACP) are facts about the bytes, FACS has no checksum field to be either, and the FADT's semantic fields are read rather than inferred |
+| instrument | no new one: `AcpiPlatform.c`, `AcpiTableProtocol.c` and `MdePkg/Include/IndustryStandard/Acpi60.h` on the host side, plus `tools/fv-inventory.py` against `work/out/p2-freewhy-g/Mu-gauguin-silicon-gzip.img`. No source under `Mu_Basecore` was edited, so no line number in this log moved |
+| does not close | the P2 gate — the 27 `CoreLoadImage` failures, `bs9=`, and the census against the step 4.43 predictions are all still unread, because the device has presented nothing on any port since `2026-09-24T14:59:32`. And it does not make the DSDT complete: it still carries no I2C, GPIO, buttons or thermal zones, which is work on the DSDT rather than on the FACP |
