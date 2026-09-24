@@ -23,52 +23,117 @@ describes by the `Memory32Fixed` base address - the one key both the ACPI and
 the device-tree worlds carry - and tabulates the `_HID` seen at each of
 gauguin's own block addresses.
 
-    python3 tools/acpi-hid-census.py                  # the census
-    python3 tools/acpi-hid-census.py --drivers DIR    # which INFs bind these
-    python3 tools/acpi-hid-census.py --blocks         # gauguin's block list
+    python3 tools/acpi-hid-census.py                   # the address join
+    python3 tools/acpi-hid-census.py --functions       # the name join
+    python3 tools/acpi-hid-census.py --blocks          # gauguin's block list
+    python3 tools/acpi-hid-census.py --drivers DIR     # which INFs bind these
 
-Measured 2026-09-25, 36 reference DSDTs:
+Measured 2026-09-25, 66 reference tables. Three defects were found and fixed in
+the drafts of this file, and all three made a negative answer look stronger
+than the corpus supports:
 
-    TLMM    0x0F100000   7 describe it, 4 different _HIDs
-                         QCOM1A0C x3 (lemonade, venus, vili)
-                         QCOM0A0C x2 (a52sxq, lisa)
-                         QCOM250C x1 (alioth)    QCOM090C x1 (renoir)
-    SE0     0x00880000   5 describe it, 4 different _HIDs
-                         QCOM0811 x2, QCOM0C10, QCOM0511, QCOM140F
-    SE3     0x00984000   QCOM0A10 x2, QCOM2510
-    SE5     0x00988000   QCOM250E, QCOM090E
-    SE7     0x00990000   QCOM250E, QCOM0A10, QCOM1A10
-    SPMI    0x0C440000   0 describe it
-    TSENS0  0x0C263000   0 describe it
-    TSENS1  0x0C265000   0 describe it
+    TLMM    0x0F100000   11 tables have a device here, 5 distinct _HIDs
+                         QCOM1A0C x4   OnePlus/lemonade, Xiaomi/venus,
+                                       Xiaomi/vili, Qualcomm/Lahaina/DSDT_MTP
+                         QCOM0A0C x2   Samsung/a52sxq, Xiaomi/lisa
+                         QCOM090C x2   Xiaomi/renoir, Qualcomm/Cedros/DSDT_IDP
+                         QCOM0C0C x2   Qualcomm/Kailua/DSDT_MTP, .../DSDT_QRD
+                         QCOM250C x1   Xiaomi/alioth
+    SPMI    0x0C440000   no device *at this address*; 22 tables declare a
+                         window at 0x0C400000 that contains it
+    TSENS0  0x0C263000   no device at this address, no thermal node anywhere
+    TSENS1  0x0C265000   same
+    SE0..SE7 0x00[89]xxxxx  every window carries a different name per SoC
 
-The same window carries a different name on every SoC, and two of the five
-blocks have no reference at all - not a wrong form, no form. The `_DSM`
-contracts are per-SoC in the same way: the GPIO node returns 0x0140 on vili,
-0x0100 on alioth and 0x0180 on lisa, and nothing in the tree says what that
-number means.
+The 36 came from reading each platform's `DSDT.aml`, which is the trim. The
+board variants are where Qualcomm writes the *complete* device list: Lahaina
+ships `DSDT_MTP` (152 `Device` nodes) and `DSDT_Minimal` (8) and no plain
+`DSDT.aml` at all, so the trim-only glob read none of Lahaina's device list in
+any form - and Lahaina is the platform whose `GIO0` sits on gauguin's exact
+TLMM window and length. Three of the four new TLMM references are variants.
+Counted by name rather than by address, `GIO0` appears in 21 of the 66 tables
+and `SPMI` in 22.
 
-**What this means is not that the hardware has a hidden name.** ACPI's `_HID` is
-not a hardware fact; it is a string this port gets to choose, and the only thing
-that constrains the choice is that a driver has to claim it. That the same block
-appears under four different names in four reference DSDTs is evidence about the
-choice being free, not about a name being lost - and whichever internal numbering
-Qualcomm's own firmware teams used, the binding rule is the `.inf`, and nothing
-else.
+The second error is the join key, and the way it failed is worth copying down
+because it is not the obvious one. **An address is a weak key, because a
+reference's `_CRS` is often much coarser than the block it declares.** The
+corpus's `SPMI` node claims `0x0C400000` for `0x02800000` - forty megabytes -
+and gauguin's arbiter at `0x0C440000` sits inside that region. So an equality
+test says "no device here" about a block that 22 of these 66 tables describe,
+and it does so with the same confidence whether the corpus is empty or full.
+Containment, not equality, is the test that matches how `_CRS` is written; what
+carries across SoCs even better is the device *name* - every reference table
+calls the GPIO controller `GIO0` and the arbiter `SPMI` regardless of where
+their windows are. `--functions` joins on that.
 
-So the direction of the work is: **adopt a driver set first, then name every
-block after it.** The DSDT is written *to a driver*, not *to the SoC*. A block
-described with an `_HID` no available driver claims is hardware that cannot be
-driven, and the goal is that all of it is - so the set is a precondition for
-authoring these tables, not a later step. Write them first, from a corpus of
-other SoCs, and every added node is a silent failure: no error, no warning, just
-a device absent from Device Manager.
+Measured 2026-09-25, the name join:
+
+    GIO0   02->17  05->0D  08->0D  09->0C  0A->0C  0C->0C  14->0D  1A->0C  25->0C  60->16
+    SPMI   02->16  05->0C  08->0C  09->0B  0A->0B  0C->0B  14->0C  1A->0B  25->0B
+    MMU0   02->12  05->09  08->09  09->09  0A->09  0C->09  14->09  1A->09  25->09
+    QDSS   02->8C  05->5A  08->5A  09->56  0A->56  0C->56  14->5A  1A->56  25->56
+    RFS0   02->35  05->17  08->17  09->15  0A->15  0C->15  14->17  1A->15  25->15
+
+So a Qualcomm `_HID` is `QCOM` + two hex pairs, and the pairs are not
+independent. The low pair is a block index that a whole *generation* of the
+table generator shares: the families {09, 0A, 0C, 1A, 25} put the arbiter at 0B,
+the GPIO controller at 0C, the MMU at 09, QDSS at 56 and RFS at 15, while the
+older group {05, 08, 14} uses 0C, 0D, 09, 5A and 17 for the same five devices.
+SDM850's 02 is a third group of its own - 16, 17, 12, 8C, 35 - which is why this
+list used to be wrong: treating {02, 05, 08, 14} as one generation put the
+arbiter at the wrong index for one of its four families. `MMU0` is the exception
+that shows the axis is the generator and not the silicon: it stayed at 09 across
+05 08 09 0A 0C 14 1A 25 and moved only for 02.
+
+The high pair is a chipset-family token, and it does not follow the SoC's
+marketing number: pipa and alioth both declare `SDM8250` and carry 05 and 25
+respectively. Across the eleven tables where a GIO0 and an OEM table id can both
+be read, the pairs are SDM850 02, SDM8150 05, SDM8250 05, SDM8250 25, SDM7180 08,
+SDM7350 09, SDM7280 0A, SDM8550 0C, SDM7150 14, SDM8350 1A, SDM636 60.
+
+**What that leaves is one byte, not a name.** The node shapes are all here -
+`GIO0` with its `_CRS`, its interrupts and its pin tables; `SPMI`; `I2C<n>`,
+`SPI<n>` and `UR<n>` for the GENI SE blocks, named by protocol; `BTNS` as a
+standard `ACPI0011` Generic Buttons Device with Microsoft's `_DSD` UUID, which
+needs no vendor INF at all. What cannot be read off the corpus is which family
+SM7225 carries, and therefore whether its GPIO controller is `QCOM??0C` or
+`QCOM??0D` - let alone what `??` is. But the search for it is finite and
+mechanical: ten of gauguin's twelve blocks have a known index in each of the
+measured generations, so a driver set either answers to `QCOM<byte><index>` for
+all ten or it does not. No SM7225 table exists here: the only one that declares
+the name is `Platforms/Xiaomi/gauguin/DSDT.aml`, and that is the file this tree
+generated. Searching the corpus for `SM7225` returns our own work.
+
+**And the reason is structural, not an accident of this corpus.** ACPI's `_HID`
+is not a hardware fact; it is a string this port gets to choose, and the only
+thing that constrains the choice is that a driver has to claim it. That the same
+block appears under five different names in five reference DSDTs is evidence
+about the choice being free, not about a name being lost.
+
+So the direction of the work is unchanged but much narrower than "the tables
+cannot be written": **adopt a driver set first, then name every block after it.**
+The DSDT is written *to a driver*, not *to the SoC*, and an `.inf` lists exactly
+the ids its driver answers to - so the driver set is not a later step, it is
+where the missing two digits come from. A node described with an `_HID` no
+available driver claims is hardware that cannot be driven, and it fails
+silently: no error, no warning, just a device absent from Device Manager.
 
 `--drivers DIR` takes a set and reports which of gauguin's blocks it covers,
 which is the check to run the moment one is in hand, and it also answers the
 question in the other direction - whose driver set this is, read off which names
 it answers to. The same mechanism is what P5 means by "re-bind the WoA driver
 INF" for the GPU.
+
+Three ways this file fooled itself, recorded because all three agreed with the
+conclusion being reached at the time. The `isinstance(True, int)` sentinel in
+`devices_in`, which reported that *no* reference describes *any* of gauguin's
+blocks; reading `*/DSDT.aml` alone, which reported that two of them have no
+reference *at all*; and an equality test on the address, where containment is
+what a `_CRS` actually means. Each one produced the same answer - nothing here
+describes this - with perfect confidence and for a reason unconnected to the
+corpus. A negative result is easiest to believe when it matches what you were
+about to say, and the third one is the hardest to notice, because a miss read as
+an absence looks exactly like a miss.
 """
 import argparse
 import glob
@@ -139,27 +204,44 @@ def disassemble(aml, cache):
 
 
 def devices_in(dsl):
-    """[(device_name, hid, cid, base_address or None)] in file order.
+    """[(device_name, hid, cid, base_address, length)] in file order.
 
     The walk keeps a stack of enclosing devices. A resource is attributed to
     the innermost enclosing device that has a `_HID`, which is what a driver
     binds to; a `_CRS` inside a child that has only an `_ADR` (the UFS `DEV0`
     case) belongs to the parent.
+
+    The length is carried because a reference's window is sometimes much
+    coarser than the block it declares: Lahaina's `SPMI` claims
+    `0x0C400000` for `0x02800000`, forty megabytes, which contains gauguin's
+    arbiter at `0x0C440000`. An exact-equality census cannot see a block
+    inside a window like that, and that - not a window that moves between
+    SoCs - is why this tool reported SPMI as having no reference at all.
     """
     out = []
     stack = []
+
+    def attribute(base, length):
+        """Give a window to the innermost enclosing device that has a `_HID`."""
+        for fr in reversed(stack):
+            if fr[1]:
+                out.append((fr[0], fr[1], fr[2], base, length))
+                return
+
     # `NEXT` is a string and not True on purpose. `isinstance(True, int)` is
     # true in Python, so a boolean "the address is on the next line" sentinel
     # passes an `isinstance(pending, int)` test, records base 1, and clears
     # itself - which is how the first draft of this tool reported that *no*
     # reference DSDT describes any of gauguin's blocks.
     NEXT = "next"
-    pending = None
+    pending = None        # base address, an int, or NEXT while it is unread
+    want_len = False      # base is known; its length is on the next line
     for ln in open(dsl, errors="replace"):
         m = DEVICE.match(ln)
         if m:
-            stack.append([m.group(2), None, None, None])
+            stack.append([m.group(2), None, None])
             pending = None
+            want_len = False
             continue
         h = NAME_HID.search(ln)
         if h and stack:
@@ -175,28 +257,66 @@ def devices_in(dsl):
                     fr[2] = c.group(1)
                     break
             continue
+        # The disassembly puts a window over three lines - the call, the base
+        # with an `// Address Base` comment, then the length - and a source
+        # file may put all three on one. Both are accepted; a window whose
+        # length never arrives is still recorded, with the length `None`.
+        if want_len:
+            n = HEX.search(ln)
+            if n:
+                attribute(pending, int(n.group(0), 16))
+                pending = None
+            elif ")" in ln:
+                attribute(pending, None)
+                pending = None
+            want_len = False
+            continue
         mm = MEMFIX_CALL.search(ln)
         if mm:
-            tail = HEX.search(mm.group(1))
-            pending = int(tail.group(0), 16) if tail else NEXT
-        elif pending is NEXT:
+            found = HEX.findall(mm.group(1))
+            if not found:
+                pending = NEXT
+            elif len(found) > 1:
+                attribute(int(found[0], 16), int(found[1], 16))
+            else:
+                pending = int(found[0], 16)
+                want_len = True
+            continue
+        if pending is NEXT:
             n = HEX.search(ln)
             if n:
                 pending = int(n.group(0), 16)
-        if isinstance(pending, int) and not isinstance(pending, bool) and stack:
-            for fr in reversed(stack):
-                if fr[1]:
-                    fr[3] = pending
-                    out.append(tuple(fr[:4]))
-                    break
-            pending = None
+                want_len = True
     return out
 
 
-def census(tree, cache, only=None):
-    """{base: [(platform, device, hid, cid)]} over every reference DSDT."""
-    amls = sorted(glob.glob(tree + "/Platforms/*/*/DSDT.aml") +
-                  glob.glob(tree + "/Silicon/Qualcomm/*/DSDT.aml"))
+def table_files(tree):
+    """Every ACPI table in the reference tree, not just each platform's DSDT.
+
+    The first draft of this tool read `*/DSDT.aml` alone and concluded that two
+    of gauguin's blocks had no reference anywhere. That was wrong, and wrong in
+    the direction that flatters a negative result: the tree also carries the
+    board variants (`DSDT_MTP`, `DSDT_QRD`, `DSDT_IDP`) and the SSDTs, and the
+    variants are where Qualcomm writes the *complete* device list. Lahaina's
+    `DSDT.aml` has 24 devices; Lahaina's `DSDT_MTP` has 152, including the
+    `GIO0` node on gauguin's exact TLMM window.
+    """
+    pats = ["Platforms/*/*/", "Silicon/Qualcomm/*/"]
+    return sorted(set(
+        p for pre in pats
+        for pat in ("DSDT*.aml", "SSDT*.aml")
+        for p in glob.glob(tree + "/" + pre + pat)))
+
+
+def census(tree, cache):
+    """({base: [(platform, device, hid, cid, base, len)]}, tables) over the corpus.
+
+    Every window in the corpus is kept, not just the ones at gauguin's own
+    addresses, because the second question a caller asks is which references
+    *contain* an address. A reference's `_CRS` is often much coarser than the
+    block it declares, and equality alone reports that as a miss.
+    """
+    amls = table_files(tree)
     os.makedirs(cache, exist_ok=True)
     found = {}
     for aml in amls:
@@ -204,12 +324,31 @@ def census(tree, cache, only=None):
         if not dsl:
             print(f"  !! iasl could not read {aml}", file=sys.stderr)
             continue
-        plat = os.path.relpath(aml, tree).replace("/DSDT.aml", "")
-        for dev, hid, cid, base in devices_in(dsl):
-            if base is None or (only and base not in only):
+        # Keep the table name: `Xiaomi/lahaina/DSDT` and
+        # `Xiaomi/lahaina/DSDT_MTP` are different readings of one platform and
+        # collapsing them to `Xiaomi/lahaina` is how the variants went unread.
+        plat = os.path.relpath(aml, tree)[:-4]
+        plat = re.sub(r"^(Platforms|Silicon)/", "", plat)
+        for dev, hid, cid, base, length in devices_in(dsl):
+            if base is None:
                 continue
-            found.setdefault(base, []).append((plat, dev, hid, cid))
+            found.setdefault(base, []).append((plat, dev, hid, cid, base, length))
     return found, len(amls)
+
+
+def containing(found, addr):
+    """[(platform, device, hid, base, length)] whose window holds `addr`.
+
+    Strictly bigger than a point: a window that starts at `addr` is the exact
+    match the caller already has, and counting it twice would make a 40 MB
+    region look like a second reference.
+    """
+    out = []
+    for _base, rows in found.items():
+        for plat, dev, hid, _cid, base, length in rows:
+            if base != addr and length and base < addr < base + length:
+                out.append((plat, dev, hid, base, length))
+    return out
 
 
 def cmd_blocks():
@@ -222,19 +361,207 @@ def cmd_blocks():
     print("  binds to. The addresses are the part the device tree supplies.")
 
 
+QCOM_ID = re.compile(r"^QCOM([0-9A-F]{2})([0-9A-F]{2})$")
+
+
+def collect_by_name(tree, cache):
+    """{device name: {hid: [platform/table]}} over every reference table.
+
+    The address join in `census` cannot see SPMI at all: the reference `SPMI`
+    node declares `0x0C400000` for `0x02800000` - forty megabytes - while
+    gauguin's arbiter sits at `0x0C440000` inside that region, so a reader
+    testing for equality reports "no reference device at this address" about
+    a block 22 of the 66 tables describe. Qualcomm's reference tables name
+    their devices by function, and *that* is the key that carries.
+    """
+    byname = {}
+    for aml in table_files(tree):
+        dsl = disassemble(aml, cache)
+        if not dsl:
+            continue
+        plat = re.sub(r"^(Platforms|Silicon)/", "",
+                      os.path.relpath(aml, tree)[:-4])
+        for dev, hid, _cid, _base, _len in devices_in(dsl):
+            if hid:
+                byname.setdefault(dev, {}).setdefault(hid, []).append(plat)
+    return byname
+
+
+# The reference device names for the blocks gauguin's destination table has to
+# describe. The reference DSDTs use these names on every SoC, which is what
+# makes them usable as a join key where an address is not.
+REF_NAMES = {
+    "GIO0": "TLMM", "SPMI": "SPMI", "PMIC": "SPMI (PMIC child)",
+    "IC": "SE* I2C", "SPI": "SE* SPI", "UR": "SE* UART",
+    "TSEN": "TSENS", "TSSC": "TSENS", "QTSC": "TSENS",
+    "BTNS": "buttons (ACPI0011)",
+}
+
+# The low pair of `QCOM<family><index>`, per generation of Qualcomm's block
+# index table. Measured off the corpus with `--functions`: the same device
+# carries the same index on every SoC of one generation, and a different one on
+# every SoC of the other. Which generation SM7225 belongs to is not in the
+# corpus, so `--drivers` tries both.
+# The measured index tables. The low pair of `QCOM<family><index>` is fixed per
+# generation of the table generator - `--functions` prints the evidence, which is
+# that the families arrive in groups rather than scattered. There are three of
+# those groups in the corpus, not two: this list used to merge 02 in with 05 08
+# 14, and family 02 does not share their indices (`SPMI` is 16 under 02 and 0C
+# under 05 08 14). The SDM850 table is incomplete because the corpus gives no SE
+# indices for it; a `None` there means unmeasured, not absent.
+GENERATIONS = [
+    ("modern  (index table read off 09 0A 0C 1A 25)", {
+        "SPMI": "0B", "TLMM": "0C", "MMU": "09", "QDSS": "56", "RFS": "15",
+        "GPU": "36", "I2C": "10", "SPI": "0E", "UART": "16"}),
+    ("legacy  (index table read off 05 08 14)", {
+        "SPMI": "0C", "TLMM": "0D", "MMU": "09", "QDSS": "5A", "RFS": "17",
+        "GPU": "3A", "I2C": "11", "SPI": "0F", "UART": "18"}),
+    ("sdm850  (family 02 only, SE indices unmeasured)", {
+        "SPMI": "16", "TLMM": "17", "MMU": "12", "QDSS": "8C", "RFS": "35",
+        "GPU": "7E", "I2C": None, "SPI": None, "UART": None}),
+]
+
+# What each of gauguin's twelve blocks is in the index tables' vocabulary. The
+# two TSENS windows have no kind because the corpus has no thermal-sensor device
+# at all - 66 tables, no `TSEN`, no `_HID` ending in a thermal index, and no
+# device at either of gauguin's windows. Windows on these platforms gets its
+# thermal zones from `ThermalZone` objects named `QCOM<family><zone>`, whose
+# zone indices are their own per-generation table and which read the PMIC
+# rather than a TSENS block. So these two ids cannot be guessed even once the
+# family byte is known.
+BLOCK_KIND = {
+    "TLMM": "TLMM", "SPMI": "SPMI",
+    "TSENS0": None, "TSENS1": None,
+    "SE0": "SPI", "SE0u": "UART", "SE1": "I2C", "SE2": "I2C",
+    "SE3": "I2C", "SE5": "I2C", "SE6": "SPI", "SE7": "I2C",
+}
+
+
+def cmd_functions(args):
+    """Is the low pair of a QCOM id the block's function, and the high pair the SoC?
+
+    This is the question `--drivers` and the address census both leave open.
+    Every SoC-scoped id in the corpus is `QCOM` + four hex digits. If the last
+    two are what the block *is* - the same on every SoC - then the function is
+    a fact about the hardware, readable off the corpus; and if the first two
+    are the SoC family, then naming gauguin's twelve blocks collapses to
+    finding one two-digit number for SM7225. If instead both pairs move
+    together, the id is opaque and only a driver set can supply it.
+    """
+    byname = collect_by_name(args.tree, args.cache)
+    tables = len(table_files(args.tree))
+    print(f"{tables} reference tables under "
+          f"{os.path.relpath(args.tree, REPO)}\n")
+
+    rows = []
+    for dev, hids in byname.items():
+        forms = {h: p for h, p in hids.items() if QCOM_ID.match(h)}
+        if len(forms) < 2:
+            continue
+        suffixes = {QCOM_ID.match(h).group(2) for h in forms}
+        prefixes = {QCOM_ID.match(h).group(1) for h in forms}
+        rows.append((dev, forms, prefixes, suffixes))
+
+    # A device whose low pair is constant across SoCs is the evidence for the
+    # decomposition; one whose low pair moves is evidence against it, and both
+    # belong in the table.
+    stable = [r for r in rows if len(r[3]) == 1 and len(r[2]) > 1]
+    unstable = [r for r in rows if len(r[3]) > 1]
+    stable.sort(key=lambda r: (-len(r[1]), r[0]))
+
+    print(f"  {len(stable)} device names keep one low pair across different "
+          f"SoC families:\n")
+    print(f"  {'device':<7} {'n':>3}  {'low':<4} {'families (high pair)':<34} ids")
+    for dev, forms, prefixes, suffixes in stable[:40]:
+        low = next(iter(suffixes))
+        fams = " ".join(sorted(prefixes))
+        ids = " ".join(sorted(forms))
+        note = f"  <- {REF_NAMES[dev]}" if dev in REF_NAMES else ""
+        print(f"  {dev:<7} {len(forms):>3}  {low:<4} {fams:<34} {ids}{note}")
+
+    if unstable:
+        # The groups are the finding. A device whose low pair takes one value
+        # on the five modern families and another on the three older ones is
+        # not a counterexample to the decomposition - it is the decomposition
+        # with the generation axis still in it, and the axis is the point.
+        print(f"\n  {len(unstable)} device names move, and the way they move is\n"
+              f"  the generation - the families arrive grouped, not scattered:\n")
+        print(f"  {'device':<7} {'n':>3}  low pair <- families")
+        for dev, forms, _p, _s in sorted(unstable)[:14]:
+            groups = {}
+            for h in forms:
+                m = QCOM_ID.match(h)
+                groups.setdefault(m.group(2), []).append(m.group(1))
+            ordered = sorted(groups.items(), key=lambda kv: (-len(kv[1]), kv[0]))
+            cell = "   ".join(f"{low} <- {' '.join(sorted(f))}"
+                              for low, f in ordered[:2])
+            if len(ordered) > 2:
+                cell += f"   (+{len(ordered) - 2} more)"
+            print(f"  {dev:<7} {len(forms):>3}  {cell}")
+
+    print()
+    print("  Read the first table as: for those ten the low pair is the same")
+    print("  on every family in the corpus, so on its own it reads as a")
+    print("  property of the device kind.")
+    print()
+    print("  Read the second as: for the rest the low pair is fixed per")
+    print("  generation of the table generator, and the families arrive")
+    print("  grouped rather than scattered. Five of them, groups spelled out:")
+    print()
+    print("    device   modern (09 0A 0C 1A 25)   older (05 08 14)  02 (SDM850)")
+    print("    SPMI     0B                        0C                16")
+    print("    GIO0     0C                        0D                17")
+    print("    QDSS     56                        5A                8C")
+    print("    RFS0     15                        17                35")
+    print("    GPU0     36                        3A                7E")
+    print()
+    print("  which is why gauguin's TLMM window, at gauguin's exact length,")
+    print("  is spelled QCOM1A0C in Lahaina's DSDT_MTP. MMU is the exception")
+    print("  that fixes what the axis is: it stayed 09 across 05 08 09 0A 0C")
+    print("  14 1A 25 and only moved to 12 for 02, so the axis is the")
+    print("  generator that emitted the table and not the silicon.")
+    print()
+    print("  The family sets in that table are the ones each index was")
+    print("  measured on, not a closed membership - `GPU0` lands on its")
+    print("  modern index 36 under 0E as well, and GIO0 carries a fourth")
+    print("  index under family 60. Which is also why `--drivers` tries")
+    print("  every byte rather than these:")
+    print()
+    print("  And the high pair is not the SoC either - pipa and alioth both")
+    print("  declare SDM8250 and carry 05 and 25. So the id is two facts in")
+    print("  one string: a block index readable off this corpus once the")
+    print("  generation is known, and a family token that has to come from a")
+    print("  driver set or from firmware that declares it. `--drivers`")
+    print("  searches every family byte against each measured index table.")
+
+
 def cmd_census(args):
-    blocks = {b[1]: b for b in BLOCKS}
-    found, total = census(args.tree, args.cache, only=set(blocks))
-    print(f"{total} reference DSDTs under {os.path.relpath(args.tree, REPO)}\n")
+    found, total = census(args.tree, args.cache)
+    print(f"{total} reference tables under {os.path.relpath(args.tree, REPO)}\n")
     verdicts = []
     for label, base, _len, node, _why in BLOCKS:
         rows = found.get(base, [])
         seen = {}
-        for plat, dev, hid, cid in rows:
+        for plat, dev, hid, cid, _b, _l in rows:
             seen.setdefault((hid, cid), []).append(f"{plat}/{dev}")
+        covers = containing(found, base)
         if not rows:
             print(f"  {label:<7} 0x{base:08X}  {node}")
-            print(f"          NO REFERENCE describes this window")
+            print(f"          no reference device sits at this address")
+            if covers:
+                # The reference describes the block, just as part of a bigger
+                # region. That distinction is the difference between "cannot be
+                # named from this corpus" and "was read with the wrong test".
+                bywin = {}
+                for plat, dev, hid, cbase, clen in covers:
+                    bywin.setdefault((hid, cbase, clen), []).append(f"{plat}/{dev}")
+                for (hid, cbase, clen), where in sorted(
+                        bywin.items(), key=lambda kv: -len(kv[1])):
+                    who = ", ".join(sorted(where)[:3])
+                    more = f" +{len(where) - 3}" if len(where) > 3 else ""
+                    print(f"          but {len(where)}x {hid} claim(s) "
+                          f"0x{cbase:08X} for 0x{clen:X}, which contains it:")
+                    print(f"            {who}{more}")
             verdicts.append((label, 0, 0))
             print()
             continue
@@ -252,9 +579,18 @@ def cmd_census(args):
     unnamable = [l for l, rows, names in verdicts if rows == 0]
     ambiguous = [l for l, rows, names in verdicts if names > 1]
     if unnamable:
-        print(f"  no reference at all: {', '.join(unnamable)}")
+        print(f"  no reference device at this address: {', '.join(unnamable)}")
     if ambiguous:
         print(f"  more than one name in the corpus: {', '.join(ambiguous)}")
+    print()
+    print("  Careful with the first line: an address is a weak join key. A")
+    print("  reference `_CRS` is often coarser than the block it declares -")
+    print("  `SPMI` claims 0x0C400000 for 0x02800000, forty megabytes, with")
+    print("  gauguin's arbiter at 0x0C440000 inside it - so an equality test")
+    print("  reports a miss where a containment test finds 22 tables. Any")
+    print("  block that line names is worth re-reading above before it is")
+    print("  believed. `--functions` joins on the device name, which is the")
+    print("  key that carries.")
     if unnamable or ambiguous:
         print()
         print("  Read this as: the name is not a hardware fact. ACPI's _HID is a")
@@ -274,12 +610,20 @@ def cmd_census(args):
 
 
 def cmd_drivers(args):
-    """Which of gauguin's blocks an available Windows driver set covers.
+    """Which family byte turns a driver set into a name for every block.
 
-    This is the other half of the census: the tables cannot be authored until
-    the names are known, and the names are whatever the drivers answer to. So
-    the question to ask of a driver set is not "does it have a GPIO driver" but
-    "which of these twelve blocks does it name an ACPI id for".
+    This is the other half of the census, and the generation search is the
+    point of it. The block *index* - the low pair of `QCOM<family><index>` - is
+    readable off the corpus; the *family* byte is not, and it is not derivable
+    from the SoC's marketing number either: pipa and alioth both declare
+    `SDM8250` and carry 05 and 25.
+
+    What an `.inf` does carry is the exact ids its driver binds to. So a driver
+    set is a four-hex-digit oracle, and this uses it as one: for each of the 256
+    family bytes and each of the measured index tables, build
+    `QCOM<family><index>` for every block gauguin has, and count how many of
+    them the set answers to. A set that covers all of them names the family, and
+    names every block in the same breath.
     """
     inffiles = []
     for root, _dirs, names in os.walk(args.drivers):
@@ -297,37 +641,56 @@ def cmd_drivers(args):
             hids.setdefault(m.group(1).upper(), []).append(os.path.relpath(inf, args.drivers))
     print(f"{len(inffiles)} .inf files, {len(hids)} distinct ACPI hardware ids\n")
 
-    # A driver for a block does not have to carry the block's own id - it can
-    # be a child device (the touchscreen) that names the parent's. So this
-    # reports the ids present and the ids each block's reference DSDTs used,
-    # and lets the reader see which of them the set answers to.
-    refs = {}
-    if os.path.isdir(args.tree):
-        blocks = {b[1]: b for b in BLOCKS}
-        found, _total = census(args.tree, args.cache, only=set(blocks))
-        for base, rows in found.items():
-            for _plat, _dev, hid, _cid in rows:
-                if hid:
-                    refs.setdefault(base, set()).add(hid.upper())
+    qcom = sorted(h for h in hids if QCOM_ID.match(h))
+    print(f"  {len(qcom)} of them are QCOM ids: "
+          f"{' '.join(qcom[:12])}{' ...' if len(qcom) > 12 else ''}\n")
 
-    print(f"  {'block':<7} {'base':<12} referenced as            in the driver set")
-    covered = 0
-    for label, base, _len, node, _why in BLOCKS:
-        want = sorted(refs.get(base, []))
-        if not want:
-            print(f"  {label:<7} 0x{base:08X} (no reference name)      -")
-            continue
-        hits = [h for h in want if h in hids]
-        mark = "YES" if hits else "no"
-        note = ", ".join(hits) if hits else "none of " + "/".join(want)
-        if hits:
-            covered += 1
-        print(f"  {label:<7} 0x{base:08X} {note:<25} {mark}")
-    print()
-    print(f"  {covered} of {len(BLOCKS)} blocks have a reference name the driver set")
-    print("  answers to. For the rest, either the set is the wrong one or the")
-    print("  block is not one Windows drives on this device; the .inf that binds")
-    print("  it names the id to use, and that id is what the node must carry.")
+    kinds = {label: kind for label, kind in BLOCK_KIND.items()}
+    nokind = sorted(l for l, k in kinds.items() if not k)
+    best = []
+    for gen, table in GENERATIONS:
+        for byte in range(0x100):
+            fam = f"{byte:02X}"
+            # `None` in a generation's table means that generation's index for
+            # that kind was never measured, so no id can be built from it. The
+            # denominator shrinks with it rather than being faked.
+            want = {label: f"QCOM{fam}{table[kind]}"
+                    for label, kind in kinds.items()
+                    if kind and table.get(kind)}
+            hits = {label: h for label, h in want.items() if h in hids}
+            if hits:
+                best.append((len(hits), len(want), gen, fam, want, hits))
+    best.sort(key=lambda r: -r[0])
+
+    if nokind:
+        print(f"  Not covered by this search at all: {', '.join(nokind)} - the")
+        print("  corpus has no device of that kind, so there is no index to fill in.")
+        print()
+
+    if not best:
+        print("  No family byte under any measured index table makes this set")
+        print(f"  answer a name for any of gauguin's {len(BLOCKS)} blocks. So this")
+        print("  set is not the one for this device - it is a set for some other")
+        print("  SoC, and its ids say which one, above.")
+        return 0
+
+    print(f"  {'coverage':<10} {'generation':<36} family  blocks, and the id each gets")
+    for n, total, gen, fam, want, hits in best[:6]:
+        print(f"  {n}/{total:<8} {gen:<36} {fam}")
+        for label in sorted(want):
+            mark = "yes" if label in hits else " - "
+            print(f"  {'':<10} {'':<36} {'':<7}  {mark} {label:<6} {want[label]}")
+        print()
+    top = best[0]
+    if top[0] == top[1]:
+        print(f"  A complete match: family byte {top[3]} under {top[2].split()[0]},")
+        print("  and the ids above are the ones the nodes must carry. Check them")
+        print("  against BLOCKS before using them - a family byte that happens to")
+        print("  collide on a partial set is not the same as a full one.")
+    else:
+        print(f"  Best is {top[0]} of {top[1]} under family {top[3]}. A partial match")
+        print("  is not a family: it can happen by collision, so look at the ids")
+        print("  the set lists above before believing any byte.")
     return 0
 
 
@@ -341,12 +704,16 @@ def main():
                     help="where to keep the disassembled .dsl files")
     ap.add_argument("--blocks", action="store_true",
                     help="list gauguin's blocks and why each one is needed")
+    ap.add_argument("--functions", action="store_true",
+                    help="decompose the QCOM ids by device name (SoC vs block)")
     ap.add_argument("--drivers", metavar="DIR",
                     help="a Windows driver set to check coverage against")
     args = ap.parse_args()
     if args.blocks:
         cmd_blocks()
         return 0
+    if args.functions:
+        return cmd_functions(args)
     if args.drivers:
         return cmd_drivers(args)
     return cmd_census(args)

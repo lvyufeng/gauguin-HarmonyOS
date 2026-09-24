@@ -9459,6 +9459,17 @@ the ACPI and the device-tree worlds carry.
 
 36 reference DSDTs. Result:
 
+> **Superseded by Step 4.58.** The 36 was `*/DSDT.aml` alone; the corpus is 66
+> tables, and the board variants it skipped are where Qualcomm writes the
+> *complete* device list. Lahaina ships `DSDT_MTP` and `DSDT_Minimal` and no
+> plain `DSDT.aml` at all, so the trim-only glob read none of Lahaina's device
+> list in any form. TLMM's row should read **11 references, 5 names** — the
+> fifth being `QCOM0C0C`, and the count including Lahaina's `DSDT_MTP` and
+> Kailua's, which are the two that carry gauguin's exact window. SPMI's row
+> should not read 0: the test in it, not the corpus, is what returned that.
+> The `QCOM<soC><block>` reading below is right; the "block id is not a function
+> of the SE index either" conclusion is wrong, and Step 4.58 measures why.
+
 | block | window | references | distinct `_HID`s |
 |---|---|---|---|
 | TLMM | `0x0F100000` | 7 | **4** — `QCOM1A0C` ×3 (lemonade, venus, vili), `QCOM0A0C` ×2 (lisa, a52sxq), `QCOM250C` (alioth), `QCOM090C` (renoir) |
@@ -9488,6 +9499,15 @@ Two of the twelve blocks have no reference at all — not a wrong form, no form.
 The `_DSM` contracts are per-SoC in the same way: the GPIO node returns `0x0140`
 on vili, `0x0100` on alioth and `0x0180` on lisa, and nothing in the tree says
 what the number means.
+
+> **Corrected by Step 4.58.** Not two. The two this sentence means are TSENS0 and
+> TSENS1, and for those it is true for a stronger reason than the one given: the
+> corpus has no thermal-sensor device of any kind, at any address, on any SoC —
+> no `TSEN`, no `TSSC`, nothing. SPMI was the apparent third, and the test was
+> the cause: its window did not move, it is *coarse*. Every reference `SPMI`
+> declares `0x0C400000` for `0x02800000` — forty megabytes — and gauguin's
+> arbiter at `0x0C440000` is inside that region, so an equality test on the
+> address reports a miss where containment finds 22 tables.
 
 And the same measurement applies to the reference this file's form actually came
 from. `Platforms/Realme/bitra/DSDT.aml`, disassembled, has **exactly the five
@@ -9580,11 +9600,165 @@ nothing to do with the conclusion.
 
 | | |
 |---|---|
-| finds | the DSDT nodes P3 still asks for — I2C, SPI, GPIO, buttons, thermal — cannot be authored from the reference corpus, because `_HID` is a *declared* string and no two SoCs declare the same one: the TLMM window carries 4 distinct names across 7 references and no SM7225-family device declares any of them. The name is free to choose, so the block is a driver set, not a missing fact |
-| evidence | `tools/acpi-hid-census.py` over 36 reference DSDTs: the TLMM window carries 4 distinct `_HID`s, SE0 4, SE1 3, SE6 3, SE7 3, SE0-UART 2, SE3 2, SE5 2, SE2 0, SPMI 0, TSENS0 0, TSENS1 0. `Platforms/Realme/bitra/DSDT.aml` (SM7225) has exactly gauguin's five devices and no more; Moorea and Rennell ship no DSDT |
+| finds | the DSDT nodes P3 still asks for — I2C, SPI, GPIO, buttons, thermal — cannot be authored from the reference corpus, because `_HID` is a *declared* string and no two SoCs declare the same one: the TLMM window carries 4 distinct names across 7 references and no SM7225-family device declares any of them. The name is free to choose, so the block is a driver set, not a missing fact — **counts corrected by Step 4.58: 5 distinct names across 11 references** |
+| evidence | `tools/acpi-hid-census.py` over 36 reference DSDTs: the TLMM window carries 4 distinct `_HID`s, SE0 4, SE1 3, SE6 3, SE7 3, SE0-UART 2, SE3 2, SE5 2, SE2 0, SPMI 0, TSENS0 0, TSENS1 0. `Platforms/Realme/bitra/DSDT.aml` (SM7225) has exactly gauguin's five devices and no more; Moorea and Rennell ship no DSDT — **66 tables and TLMM 5; the SPMI 0 above is the instrument's address join failing, not the corpus, see Step 4.58** |
 | second method | the same negative was confirmed by plain text search over the disassembled corpus: `0x0F100000` in 7 files, `0x0C440000` in **0**, `0x0C263000` in **0**, `0x0C265000` in **0** |
+| third method, and why it was wrong | the text search above is a *third* usage of the same bad test, so it is not independent evidence: all 22 reference `SPMI` nodes contain `0x0C400000`, and gauguin's arbiter is 16 KB higher, inside the region they declare. The corpus does not lack SPMI; the test could not see a block named by containment. Only `0x0C263000` and `0x0C265000` survive as true negatives, and for a stronger reason than the search gives — Step 4.58 |
 | why it matters | a device node whose `_HID` no driver claims is absent from Device Manager with no error, no warning and no yellow mark — strictly worse than an omitted node, which is at least visibly missing. The file's own precedent (the three USB PHY wake GSIs) is the same rule at smaller scale |
 | unblocker | the Windows driver set's `.inf` files, which name the `ACPI\...` ids the drivers bind. `--drivers DIR` reports which of gauguin's twelve blocks a set covers. **Obtain the set before authoring these tables** — written first, every added node is a silent failure |
 | instrument bug | the census's first draft used `True` as a "address is on the next line" sentinel; `isinstance(True, int)` is true, so every window recorded base 1 and the tool reported zero references for all twelve blocks. Fixed with a string sentinel; the finding survived unchanged |
 | compiled | `iasl` still reports 0 errors on the edited `gauguin.asl` and the AML is still 1,520 bytes — the step adds a comment to its header and no node, deliberately |
 | does not close | the P2 gate, which is unchanged and still needs the glass, and P3 item 1's remainder, which now has a named precondition instead of an open item |
+
+## Step 4.58 — the id is two facts in one string, and the corpus carries the index half
+
+Host-side, and it began as a check on Step 4.57's numbers rather than as new
+work. 4.57's conclusion stands unchanged: these nodes cannot be read off the
+reference corpus, so the DSDT has to be written to a driver set. Three of the
+readings under it were wrong, all three in the same direction — toward "the
+corpus has nothing" — and correcting them turns *a name for each of twelve
+blocks is missing* into *one byte is missing, and ten of the twelve are then
+named mechanically*.
+
+### The corpus was 36 tables; it is 66
+
+The census's first line read `Platforms/*/*/DSDT.aml` and `Silicon/Qualcomm/*/DSDT.aml`.
+Qualcomm's reference tree also ships `DSDT_MTP`, `DSDT_QRD`, `DSDT_IDP` and
+`SSDT*.aml`, and the variants are where the *complete* device list lives — a
+platform's plain `DSDT.aml` is the trimmed one. Lahaina is the clearest case and
+the one that mattered: it ships `DSDT_MTP` with 152 `Device` nodes and
+`DSDT_Minimal` with 8, and **no plain `DSDT.aml` at all**. The old glob therefore
+read none of Lahaina's device list in any form, and Lahaina is the platform whose
+`GIO0` sits on gauguin's TLMM window *and* length.
+
+Corrected counts, and the row that changes meaning:
+
+| block | window | Step 4.57 | measured |
+|---|---|---|---|
+| TLMM | `0x0F100000` | 7 references, 4 names | **11 references, 5 names** |
+| SPMI | `0x0C440000` | **0** | **22 references, 9 names** — by containment, below |
+
+The fifth TLMM name is `QCOM0C0C`, and four of the new references are variants:
+`Qualcomm/Lahaina/DSDT_MTP`, `Qualcomm/Cedros/DSDT_IDP`, and Kailua's `DSDT_MTP`
+and `DSDT_QRD`. Counted by device name instead of by address, `GIO0` appears in
+21 of the 66 tables and `SPMI` in 22.
+
+### The second defect is the one worth remembering: an address was tested for equality
+
+`devices_in` recorded each `Memory32Fixed` base and the census looked for
+gauguin's addresses in that set. SPMI's node in every reference table reads:
+
+```
+        Device (SPMI)
+        {
+            Name (_HID, "QCOM1A0B")
+            ...
+                    Memory32Fixed (ReadWrite,
+                        0x0C400000,         // Address Base
+                        0x02800000,         // Address Length
+```
+
+Forty megabytes. gauguin's arbiter is at `0x0C440000`, sixteen kilobytes higher,
+**inside the region every one of those tables declares**. The 4.57 line "SPMI
+[`0x0C440000`] — **0**" was not a fact about the corpus; it was the wrong test.
+`_CRS` declares a region, so containment is the test that matches what the
+fields mean, and the tool now prints both: the census reports SPMI's 22
+containing references grouped by the window they claim, above the line that says
+no device sits at the exact address.
+
+The same bad test was used twice more in 4.57 and the doc, which is why the
+correction is worth writing down rather than quietly applying: the "second
+method" row confirmed the negative "by plain text search over the disassembled
+corpus", and a text search for `0x0C440000` is the same equality test in a
+different language. A negative result reproduced by three usages of one broken
+test is one result, not three.
+
+What survives is `TSENS0` and `TSENS1`. Neither window appears in any of the 66
+tables, and no device named `TSEN`, `TSSC` or anything else thermal is present
+either. That negative is real, and the thermal section below says what the
+corpus has instead.
+
+### Joining on the name instead: the id is two facts
+
+The key that does carry across SoCs is the device *name* — every reference table
+calls the GPIO controller `GIO0` and the arbiter `SPMI` wherever their windows
+are. `--functions` joins on that, and the result is a decomposition:
+
+| device | 02 | 05 | 08 | 09 | 0A | 0C | 14 | 1A | 25 | 60 |
+|---|---|---|---|---|---|---|---|---|---|---|
+| `SPMI` | 16 | 0C | 0C | 0B | 0B | 0B | 0C | 0B | 0B | — |
+| `GIO0` | 17 | 0D | 0D | 0C | 0C | 0C | 0D | 0C | 0C | 16 |
+| `MMU0` | 12 | 09 | 09 | 09 | 09 | 09 | 09 | 09 | 09 | — |
+| `QDSS` | 8C | 5A | 5A | 56 | 56 | 56 | 5A | 56 | 56 | — |
+| `RFS0` | 35 | 17 | 17 | 15 | 15 | 15 | 17 | 15 | 15 | — |
+| `GPU0` | 7E | 3A | 3A | 36 | 36 | 36 | 3A | 36 | 36 | — |
+
+A Qualcomm scoped `_HID` is `QCOM` + two hex pairs and the pairs are not
+independent. **The low pair is a block index that a whole generation of the table
+generator shares**: the families {09, 0A, 0C, 1A, 25} put the arbiter at 0B, GPIO
+at 0C, MMU at 09, QDSS at 56 and RFS at 15, and the older group {05, 08, 14} uses
+0C, 0D, 09, 5A, 17 for the same five devices. SDM850's 02 is a third group of its
+own. 4.57 read {02, 05, 08, 14} as one generation, which put the arbiter at the
+wrong index for one of its four families.
+
+`MMU0` is the exception that fixes what the axis is. It stayed at 09 — the same
+value the modern group uses — across 05 08 09 0A 0C 14 1A 25 and moved only for
+02. So the grouping is not a property of the silicon; it is a property of the
+generator that emitted the table, which happens to correlate with it.
+
+**And the high pair is not the SoC either.** Across the eleven tables where a
+`GIO0` and an OEM table id can both be read, the pairs are SDM850 02, SDM8150
+05, SDM8250 05, SDM8250 25, SDM7180 08, SDM7350 09, SDM7280 0A, SDM8550 0C,
+SDM7150 14, SDM8350 1A, SDM636 60. pipa and alioth both declare `SDM8250` and
+carry **05 and 25**. So the number cannot be interpolated from the marketing
+name of SM7225 or its neighbours; it is a token.
+
+### What the corpus can and cannot name now
+
+Ten of gauguin's twelve blocks — `TLMM`, `SPMI` and the eight GENI SE blocks —
+have a known index in each measured generation. `TSENS0` and `TSENS1` have none,
+for the reason above. So the unknown collapses to one byte, and the check on it
+is mechanical: a driver set either answers to `QCOM<byte><index>` for all ten
+blocks or it does not.
+
+`tools/acpi-hid-census.py --drivers DIR` is that check. It walks a directory of
+`.inf` files, collects every `ACPI\...` id they list, and then tries all 256
+family bytes against each measured index table — 768 combinations — reporting
+which byte and which generation make the set cover all ten blocks, printing the
+id each block would take. It was verified against four synthetic sets: a complete
+modern match at byte `2C` (10/10, every id as expected), a partial legacy match
+(2/10, reported as a partial and not as a family), an unrelated set (no
+combination, with the message that this is a set for some other SoC), and an
+empty directory (exit 1).
+
+Two things it does not and cannot do:
+
+- **`TSENS0` and `TSENS1`.** No driver set can supply an index for a block the
+  corpus has never seen. The DSDT will need these two nodes named some other way,
+  and the honest options are to leave them out or to find a vendor table that
+  declares them — not to guess.
+- **The thermal zones are a second namespace.** 20 of the 66 tables declare
+  `ThermalZone` objects, 147 distinct `_HID`s across 415 declarations, and most
+  of them reuse the table's own family prefix (`QCOM2558` on alioth, whose blocks
+  are 25). Nine do not: `QCOM04C0` through `QCOM04C8`, a consecutive block that
+  appears in six tables across four families — 09 (renoir, Cedros), 0A (lisa,
+  a52sxq) and 1A (lemonade, Lahaina) — fixed regardless of SoC. It is the only
+  portable zone group in the corpus. gauguin's device tree declares **40**
+  thermal zones, so the portable nine do not correspond to it one-for-one, and
+  mapping them is P3 work this step does not do.
+
+`BTNS` needs none of this: it is a standard `ACPI0011` Generic Buttons Device
+with Microsoft's `_DSD` UUID, so it can be authored now, ahead of the driver set.
+
+| | |
+|---|---|
+| finds | a Qualcomm scoped `_HID` is `QCOM<family byte><block index>`. The index is fixed per *generation of the table generator* — measured: ten of gauguin's twelve blocks have a known index in each of three generations, so naming them collapses to one unknown byte, which a driver set supplies |
+| evidence | `tools/acpi-hid-census.py --functions` over 66 tables: `SPMI` 0B/0C/16, `GIO0` 0C/0D/17/16, `QDSS` 56/5A/8C, `RFS0` 15/17/35, `GPU0` 36/3A/7E, `MMU0` 09 in every family but 02. The high pair is not the SoC: pipa and alioth both declare `SDM8250` and carry 05 and 25 |
+| the axis | `MMU0` is the discriminator: 09 across 05 08 09 0A 0C 14 1A 25, 12 for 02 — so the grouping is the generator that emitted the table, not the silicon |
+| counts corrected | the corpus is 66 tables, not 36 — Lahaina ships `DSDT_MTP` and `DSDT_Minimal` and no plain `DSDT.aml`, so the trim-only glob read none of its device list. TLMM is 11 references / 5 names, not 7/4 |
+| test corrected | an address was matched for equality. Every reference `SPMI` declares `0x0C400000` for `0x02800000` — forty megabytes — and gauguin's arbiter at `0x0C440000` is inside it, so 22 tables were reported as 0. The census now reports containment as well; `--functions` joins on the device name, which needs no such repair |
+| why it matters | the step's conclusion is unchanged — the DSDT is written to a driver, not to the SoC — but the search for the missing token is now finite and mechanical instead of a lookup that has to succeed |
+| verified on | four synthetic `.inf` sets: complete modern match at byte `2C` (10/10), partial legacy (2/10, reported as partial), unrelated set (no match), empty directory (exit 1) |
+| still open | `TSENS0`/`TSENS1` have no index in the corpus at all, and the thermal zones are a second namespace with 147 ids of their own; `SE2` has no reference at any address, exact or contained, and is disabled in the device tree anyway |
+| unchanged | nothing on the device. P2's gate still needs the glass; P4 is untouched; the stock `boot` and the restore path are as they were |
+

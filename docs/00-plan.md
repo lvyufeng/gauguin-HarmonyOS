@@ -327,13 +327,24 @@ in it yet — so item 1 is done for UFS and USB and *not* done for the rest.
 **And the rest is blocked on an input, not on effort.** Every one of those nodes
 needs an ACPI `_HID`, and a device tree does not carry ACPI names: it has registers
 and pins, which is the half that is knowable. `tools/acpi-hid-census.py` measures what
-the reference DSDTs supply, and across all 36 of them the same block at the same
+the reference DSDTs supply, and across all 66 of them the same block at the same
 address carries a different `_HID` on every SoC — the TLMM window `0xF100000` is
 `QCOM1A0C` on vili, lemonade and venus, `QCOM0A0C` on lisa and a52sxq, `QCOM250C` on
-alioth, `QCOM090C` on renoir — while the SPMI arbiter and both TSENS blocks are
-described by none of the 36 at all. No Bitra-family reference exists:
-`Platforms/Realme/bitra/DSDT.aml`, the source of this file's form, has the same five
-devices gauguin has and nothing more.
+alioth, `QCOM090C` on renoir, `QCOM0C0C` on Kailua. Both TSENS blocks are described
+by none of the 66: the corpus has no thermal-sensor device of any kind. No
+Bitra-family reference exists either: `Platforms/Realme/bitra/DSDT.aml`, the source
+of this file's form, has the same five devices gauguin has and nothing more.
+
+The count is not the point; the decomposition is. A Qualcomm scoped `_HID` is
+`QCOM<family byte><block index>`, and the *index* is fixed per generation of the
+table generator — measured across 66 tables, the GPIO controller is `..0C` under
+every modern family and `..0D` under the three older ones, the arbiter is `..0B`
+and `..0C` respectively. Ten of gauguin's twelve blocks therefore have a known
+index in each measured generation, and the only thing missing is which family
+byte SM7225 carries. That byte does not follow the marketing name — pipa and
+alioth both declare `SDM8250` and carry 05 and 25 — so it has to be read off a
+driver set, and `--drivers DIR` tries all 256 bytes against each measured index
+table and reports the one that names all ten blocks.
 
 Read that as the name being **a declaration rather than a hardware fact**: a device
 binds to the `_HID` its `.inf` lists and to nothing else, so the tables are written
@@ -345,7 +356,9 @@ hardware behind it is silently not there, which is worse than a node that is vis
 missing. **So obtaining the driver set is a precondition for authoring these tables,
 not a later step**, and `--drivers DIR` on the tool reports which of gauguin's twelve
 blocks a given set covers. This is the same mechanism P5 names as "re-bind the WoA
-driver INF"; P3's tables are its first instance.
+driver INF"; P3's tables are its first instance. `BTNS` is the exception: it is a
+standard `ACPI0011` Generic Buttons Device with Microsoft's `_DSD` UUID, so it needs
+no vendor INF and can be authored now.
 
 Items 2–4 have a shared precondition that is worth stating plainly: **the payload has
 760 bytes of free volume**, and the P2 debugging instrumentation (`P2BRINGUP`) is what
