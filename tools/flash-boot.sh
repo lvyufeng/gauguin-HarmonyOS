@@ -200,8 +200,17 @@ twrp)
     # Read back with dd rather than `head -c`: the toybox in a recovery image does
     # not reliably have `head -c`, and this is the one moment where a missing
     # coreutil would be discovered with the partition already overwritten.
+    #
+    # `status=none` is not decoration. TWRP's toybox 0.8.4 prints the transfer
+    # statistics to stderr, and `adb shell` merges stderr into the stream the host
+    # reads - which is why `2>/dev/null` above is load-bearing and why it is not
+    # enough on its own. Measured 2026-09-24: `adb exec-out dd ... | wc -c` for
+    # count=1 returns 4,174 bytes for a 4,096-byte read, and the 78-byte tail is
+    # `1+0 records in ... copied, ... M/s`. `tools/identify-boot.py` shipped with
+    # exactly that bug and certified a readback shifted by 80 bytes; the hash below
+    # would have gone the same way if the statistics had reached the pipe.
     log "== reading back"
-    dev=$(adb shell "dd if=/dev/block/by-name/boot bs=4096 count=$BLOCKS 2>/dev/null | sha256sum" \
+    dev=$(adb shell "dd if=/dev/block/by-name/boot bs=4096 count=$BLOCKS status=none | sha256sum" \
           | awk '{print $1}')
     if [ "$dev" != "$FLASH_SHA" ]; then
         die "read-back mismatch - the write did not land:

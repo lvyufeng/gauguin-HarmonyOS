@@ -52,6 +52,14 @@ blocks is 17,856 `adb` invocations, which on a link that drops about once a
 minute does not finish. Comparison granularity is separate from transfer
 granularity and stays at 64 bytes.
 
+**A readback is not evidence until something other than the host agrees with it.**
+So after reading, the tool hashes the same range *on the phone* and compares -
+and it passes `status=none` to `dd` and truncates each chunk, because TWRP's
+toybox `dd` prints its statistics to stdout where `adb exec-out` picks them up.
+Both are described at `dd_read`; the short version is that the unqualified
+version of this tool certified a readback that was shifted by 80 bytes, which is
+the one wrong answer a control-image check must not give.
+
 Exit status is 0 when the whole readback is explained by one candidate - an exact
 match, or a candidate that continues past the end of a short read - and 1 when no
 candidate does. A 1 is not a failure of the tool; it is the answer "the payload on
@@ -82,27 +90,68 @@ BY_NAME = "/dev/block/by-name/boot"
 DEFAULT_READ = 4 << 20
 
 
-def dd_read(device, size, out):
+def dd_read(device, size, out, verify=True):
     """Read `size` bytes off the phone in 1 MiB `dd` blocks.
 
     One `adb exec-out` per megabyte and not per comparison block: the granularity
     that makes the comparison legible is 64 bytes, and that granularity over the
     wire would be 17,856 invocations. A dropped link here costs one megabyte.
+
+    **`status=none`, and the truncation below it, are not defensive style.**
+    TWRP ships toybox 0.8.4, whose `dd` writes its statistics to **stdout** -
+    `1+0 records in\\n1+0 records out\\n1048576 bytes (1.0 M) copied, ...` - and
+    `adb exec-out` captures stdout. So an unqualified chunked read returns each
+    block's data with an 80-byte statistics tail glued to it, and the file is
+    shifted by 80 bytes after the first megabyte. Measured on 2026-09-24: the
+    readback differed from the image it was copied from in 1,385 of its last
+    1,472 blocks, and lining it up at a shift of 80 made all 94,208 of those
+    bytes match. A tool that reads the control image before it is overwritten
+    cannot have that failure mode; it would certify the wrong bytes as the
+    control. The truncation makes the read right even if `status=none` is
+    ignored, because the statistics are written *after* the data.
     """
     chunk = 1 << 20
     got = 0
     with open(out, "wb") as fh:
         while got < size:
             cmd = ["adb", "exec-out", "dd", f"if={device}", "bs=%d" % chunk,
-                   "skip=%d" % (got // chunk), "count=1"]
+                   "skip=%d" % (got // chunk), "count=1", "status=none"]
             r = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
             if r.returncode != 0 or not r.stdout:
                 print(f"  stopped at {got:,} bytes (rc={r.returncode},"
                       f" {len(r.stdout)} bytes back)", file=sys.stderr)
                 break
-            fh.write(r.stdout)
-            got += len(r.stdout)
+            # A chunk may come back short at the end of the partition; it can
+            # never legitimately come back long.
+            data = r.stdout[:chunk]
+            fh.write(data)
+            got += len(data)
+    if verify:
+        check = device_hash(device, got)
+        if check is not None:
+            local = hashlib.sha256(open(out, "rb").read()[:got] if got else b"")
+            mark = "ok" if check == local.hexdigest() else "MISMATCH"
+            print(f"  sha256 over the same {got:,} bytes, hashed on the phone: {mark}")
+            if mark != "ok":
+                print(f"    phone {check}", file=sys.stderr)
+                print(f"    host  {local.hexdigest()}", file=sys.stderr)
     return got
+
+
+def device_hash(device, size):
+    """sha256 of the first `size` bytes of `device`, computed *on the phone*.
+
+    The one check a readback cannot make about itself. Every other comparison in
+    this tool is between two copies made on the host, so a read that is wrong in
+    a way the host repeats faithfully - the statistics tail above is exactly
+    that - passes all of them. This one is computed from the partition by a
+    different program and travels as 64 hexadecimal characters.
+    """
+    blocks = max(1, size // 512)
+    cmd = ["adb", "shell", f"dd if={device} bs=512 count={blocks} status=none | sha256sum"]
+    r = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+    token = (r.stdout or "").split()
+    return token[0].lower() if token and len(token[0]) == 64 else None
 
 
 def header(text):
@@ -201,13 +250,15 @@ def main():
     ap.add_argument("--candidates", default=DEFAULT_CANDIDATES,
                     help="directory to search for *.img (this level and one below)")
     ap.add_argument("--out", default=os.path.join(ROOT, "work", "out", "boot-readback.bin"))
+    ap.add_argument("--no-verify", action="store_true",
+                    help="skip the on-device sha256 cross-check of the readback")
     args = ap.parse_args()
 
     if args.read:
         if not args.readback:
             args.readback = args.out
         print(f"reading up to {args.size:,} bytes from {args.device} ...")
-        n = dd_read(args.device, args.size, args.readback)
+        n = dd_read(args.device, args.size, args.readback, verify=not args.no_verify)
         print(f"  -> {args.readback} ({n:,} bytes)")
         if n < 2048:
             sys.exit("identify-boot: the read came back empty - the phone is not"

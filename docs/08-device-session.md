@@ -5156,6 +5156,139 @@ sentence showed can be wrong. One `dd` settles it, and the tool prints both hash
 | next | `tools/identify-boot.py --read`, then flash `work/out/p2-variants/Mu-gauguin-silicon-gzip.img` (`7c8fdb5a…`) over the identified control |
 
 
+## Step 4.33 — The control is `p2-4.20`, the tool read it wrong first, and the new probe is on the phone
+
+Step 4.32 ended with one unmeasured thing: which payload `boot` held. It has now been
+read, and getting the answer required fixing the tool that read it — which is the
+part worth recording, because the wrong answer it gave first was
+"the payload on the phone is not any image here. Do not assume it is one of them",
+against the partition that held the image the records named.
+
+### The wrong answer, and it was the read and not the partition
+
+The first `--read` produced a 4,194,624-byte readback (`4 × 1 MiB + 320`) and this:
+
+```
+  16,471/17,856   92.2%  work/out/p2-4.20/Mu-gauguin-silicon-gzip.img
+          first difference at offset 0x100000 (1,048,576)
+best match: ... at 16,471/17,856 blocks - NOT a match
+```
+
+A 1 MiB boundary is where a transfer artifact lands and not where a firmware
+difference does, so the bytes were dumped as text:
+
+```
+readback[0x100000:]  "1+0 records in\n1+0 records out\n1048576 bytes (1.0 M)
+                      copied, 0.016758 s, 60 M/s\n"  then binary
+```
+
+**TWRP's toybox 0.8.4 `dd` prints its transfer statistics, and `adb exec-out`
+delivers them on the captured stdout.** So a 1 MiB-chunked read is 1 MiB of data
+followed by ~80 bytes of `dd` status, per chunk, concatenated — the file is shifted
+by 80 bytes after the first megabyte, and 1,385 of the last 1,472 blocks differ for
+that reason alone. Lining the readback up at a shift of 80 makes **all 94,208** of
+those bytes match.
+
+Measured afterwards, to be sure of where the statistics go:
+
+| invocation | host received |
+|---|---|
+| `adb shell "dd ... count=1"` | 4,096 bytes on the pipe, statistics on the terminal — i.e. device **stderr** |
+| `adb shell "dd ... count=1 2>/dev/null"` | 4,096, statistics gone |
+| `adb exec-out dd ... count=1` | **4,174** = 4,096 + 78 |
+| `adb exec-out dd ... count=1 status=none` | 4,096 |
+
+So `adb shell` keeps the two streams apart and `adb exec-out` merges them. That is
+why the hand-made reads in earlier sessions were right and this one was not: they
+went through `adb shell` with a redirect, this went through `adb exec-out`. Two
+fixes, both now in the tool: `status=none`, and truncating each chunk to its
+requested length (the statistics are written after the data, so this holds even if a
+future toybox ignores the flag). The same hardening went into
+`tools/flash-boot.sh`'s read-back — it used `2>/dev/null` and was correct, but only
+because of which of the two adb entry points it happens to use.
+
+This is worth stating plainly because of what the tool is *for*: it exists so the
+control image is identified by content before it is overwritten, and an unfixed
+version of it would have certified 80-byte-shifted bytes as the control and then
+declared the real image unrecognisable. The failure would have looked like a
+firmware finding.
+
+### The check a readback cannot make about itself
+
+Every other comparison in the tool is between two copies made on the host, so a
+read that is wrong in a way the host repeats faithfully passes all of them —
+which is precisely what happened. So `--read` now also hashes the same range **on
+the phone** (`dd ... status=none | sha256sum`, 512-byte blocks) and compares the
+two; the first read is the one that would have failed that check. It is 64
+hexadecimal characters over the wire, and it is the only number in the transcript
+that the phone produced rather than the host.
+
+### The reading
+
+```
+  sha256 over the same 4,194,304 bytes, hashed on the phone: ok
+  17,856/17,856  100.0%  work/out/p2-4.20/Mu-gauguin-silicon-gzip.img  <- IDENTICAL over its whole length
+```
+
+`boot` held `work/out/p2-4.20/Mu-gauguin-silicon-gzip.img`, sha256
+`dbf131d254374646bfbc5e3da4cbfc3dc8e23f3d7ec4a2a7f6ca73dde692e40f`, over its whole
+1,142,784 bytes — exactly what step 4.25's flash record says and what step 4.32
+inferred from the records. The inference was right; it is now a measurement. The
+readback is kept at `work/out/boot-readback-0924.bin`, 4,194,304 bytes, sha256
+`77778cd624d2842be6ff4b84a5b21ece36177e80da83d01eebae4c46e3d70a72`.
+
+Step 4.30's verification sentence is now closed from the other side: the image it
+named is the image that was on the partition, and the sentence's *numbers* (280
+blocks vs 17,856 blocks vs 411) remain the three different measurements step 4.32
+separated.
+
+### And the new probe is written
+
+`work/out/p2-variants/Mu-gauguin-silicon-gzip.img`, 1,142,784 B, sha256
+`7c8fdb5a1a272ab65d806c2833eb849f441c3ef2092121aac0d5df40d0e1ef44`, written to
+`/dev/block/sde55` (`by-name/boot`) with `tools/flash-boot.sh --twrp`, 279 × 4096 B,
+read back identical. Its content was checked against the control inside the
+compressed volume, by walking `FVMAIN` rather than grepping the image (`the inner
+volume is LZMA, so a raw search finds nothing in either`):
+
+| string | control `dbf131d2…` | flashed `7c8fdb5a…` |
+|---|---|---|
+| `Loading driver at` | 1 | **0** |
+| `EntryPoint=0x` | 1 | **0** |
+| `K %d %c%c %d/%d free=%d %g` | 0 | **1** |
+| `KEY 0/%d` | 0 | **1** |
+| `KEY %d/%d err=` | 0 | **1** |
+| `P2 RETRY` / `P2 DIAG` / `P2 SEQ` | 1 / 1 / 2 | 1 / 1 / 2 |
+
+So the flood is out and the per-dispatch line is in, and the `P2` digest is
+untouched. The binary check for the reader is in the same table: **if
+`Loading Driver at …` is still on the panel, the flash did not take**, because no
+build after this one can print it.
+
+### What the panel is now for
+
+Two readings, and the bottom row distinguishes them:
+
+| bottom row | means |
+|---|---|
+| `K <n> <phase><status> <s>/<ap> free=<pages> <guid>` | the run stopped inside the dispatch loop. `<n>` is the last driver attempted, `free=` is the heap in pages at that instant, and the `guid` names it. This is the state the previous reading could not distinguish from anything — `Fat.efi` on the panel with no `P2` line |
+| `KEY <errors>/46 err=<name> at=<i> free=<pages> miss=<i>` | `CoreDispatcher` returned and the digest is being printed. The 41-copy flood did not hide the digest; the load flood did, and it is gone now. Then `P2 ERR` and the four `P2 BIN` lines are readable from the same screen |
+
+And a third outcome that is also information: if the panel shows `K` lines with the
+counter *advancing* on every pass of the loop and never settling, the run reaches
+the end of the dispatch loop and the value of `n` on the last line is the count of
+promoted entries.
+
+| | |
+|---|---|
+| reads | `boot` = `work/out/p2-4.20/Mu-gauguin-silicon-gzip.img`, `dbf131d2…`, 17,856/17,856 blocks identical, phone-side sha256 ok |
+| archived | `work/out/boot-readback-0924.bin`, 4,194,304 B, `77778cd6…` — the control, kept as bytes and not as a filename |
+| corrects | `tools/identify-boot.py`'s `--read`: `dd` statistics were being concatenated into the readback by way of `adb exec-out`; `status=none` plus per-chunk truncation, and an on-device sha256 cross-check that the first, wrong read would have failed |
+| corrects | `tools/flash-boot.sh`'s read-back the same way, which was correct only because it uses `adb shell` |
+| flashed | `work/out/p2-variants/Mu-gauguin-silicon-gzip.img`, `7c8fdb5a…`, read back identical; content verified to have lost `Loading driver at` and gained `K %d %c%c` |
+| still first | read the bottom row of the panel, and read it while the loop is showing the same line on every pass |
+
+
 ## Step 5 — Leave it bootable
 
 Whatever the outcome, end the session with the stock image back on `boot`:
