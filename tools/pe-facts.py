@@ -44,13 +44,14 @@ What is left, and what the tail of the output now measures, is the allocator
 side. **Ten** of the 46 promoted drivers are runtime drivers, and this tool said
 "every one" until that was checked against its own `subsys` column: the
 memory type a load requests is the image's *subsystem*, not the allocation
-strategy the fallback picks. On AArch64 a runtime type is rounded up to a 16-page
-multiple and forced to 64 KiB alignment inside `CoreInternalAllocatePages`
-(`Page.c:1196`, rounding at `:1217`), and nothing else is. So the rounding column
-is per-driver, and the cumulative column stays what it was for: it is what rules
-out a running-total boundary. `NpaDxe` is the last success, at 567 pages of
-demand as the allocator sees it, and `ShmBridgeDxe` succeeds again at 648 - with
-the *identical* request that `PdcDxe` failed at 592, 36,864 B and 9 pages and the
+strategy the fallback picks. That type is the one real consequence of the
+subsystem column: it decides which bin a request prefers, and the runtime family
+oversubscribes its 150-page code bin 5.8x over. It decides nothing else - see the
+`RUNTIME_PAGE_ALLOCATION_GRANULARITY` note below, which this tool modelled wrongly
+for one revision. The cumulative column is what it always was for: it is what
+rules out a running-total boundary. `NpaDxe` is the last success, at 566 pages of
+demand, and `ShmBridgeDxe` succeeds again at 647 - with
+the *identical* request that `PdcDxe` failed at 591, 36,864 B and 9 pages and the
 same subsystem 11. Identical request, opposite result, 56 pages apart.
 
 Two different sets are easy to conflate here and this paragraph did conflate them
@@ -58,11 +59,29 @@ once, so both are named: **eight** of the 80 DRIVER files carry
 `SectionAlignment` 0x10000 (the set the line above calls `sssLLLLL`), while
 **ten** of the 46 promoted are subsystem 12. `EnvDxe` and `SdccDxe` are in the
 second set and not the first - subsystem 12 with 0x1000 alignment - and they are
-where 7 of the arithmetic's pages come from; the tail follows the *subsystem*,
-because that is what the type, the rounding and the 64 KiB alignment all key off.
+the proof that the two partitions are independent: the subsystem decides the
+memory *type*, the link flags decide the `SectionAlignment`, and neither implies
+the other. The tail follows the *subsystem*, because the type is what the bin
+arithmetic keys off.
+
+**`RUNTIME_PAGE_ALLOCATION_GRANULARITY` is 0x1000 on this platform, so nothing is
+rounded and nothing is forced to 64 KiB.** `CoreInternalAllocatePages` does select
+that macro for the runtime family (`Page.c:1192-1198`) and does round by it
+(`Page.c:1217-1218`), but on AArch64 the macro is a compile-time choice between two
+branches and this build takes the 0x1000 one:
+`Silicon/Silicium/SiliciumPkg/SiliciumPkg.dsc.inc:14` defines
+`__DEPRECATED_AARCH64_4K_RUNTIME_GRANULARITY` for AARCH64, so
+`MdePkg/Include/AArch64/ProcessorBind.h:166-167` compiles and `:169` does not. The
+rounding is `+= 0` / `&= ~0`; `EFI_SIZE_TO_PAGES (Alignment)` is 1; `Page.c:1207`'s
+`NeedGuard = FALSE` guard never fires. This tool carried an `r16` column that
+applied a 16-page rounding to subsystem 12 until that was read back against the
+source - the column is gone, and with it the "+7 pages" it contributed. The
+`SectionAlignment` effect that *does* exist is separate, is on the image side
+(`Image.c:686-690`, `req = SizeOfImage + SectionAlignment`), and is inside the
+1562-page total below.
 
 The bin a runtime request prefers is 150 pages of `RuntimeServicesCode` against
-880 pages of runtime image demand, of which the four promoted before the failures
+873 pages of runtime image demand, of which the four promoted before the failures
 begin (`EnvDxe`, `ReportStatusCodeRouterRuntimeDxe`,
 `StatusCodeHandlerRuntimeDxe`, `RuntimeDxe`) take 336 - so it is exhausted within
 the first four promotions and the fallthrough to the default bin is load-bearing
@@ -368,33 +387,32 @@ def main():
     # to ImageSize when it exceeds a page, then rounds to pages. This is the number
     # CoreAllocatePages is asked for, not SizeOfImage.
     #
-    # The `r16` column beside it is the number the allocator actually sees, and it
-    # is not decoration - but it is **not** a property of being promoted, and an
-    # earlier version of this tool had it as one. The memory type passed to
-    # CoreAllocatePages is `Image->ImageContext.ImageCodeMemoryType`, which
-    # `CoreLoadImageCommon` sets from the PE's **subsystem** (`Image.c:630-645`):
-    # `EFI_IMAGE_SUBSYSTEM_EFI_RUNTIME_DRIVER` (12) -> `EfiRuntimeServicesCode`,
-    # `EFI_IMAGE_SUBSYSTEM_EFI_BOOT_SERVICE_DRIVER` (11) -> `EfiBootServicesCode`,
-    # `EFI_IMAGE_SUBSYSTEM_EFI_APPLICATION` (10) -> `EfiLoaderCode`. It is not the
-    # `!RelocationsStripped` fallback: that chooses between AllocateAddress,
-    # AllocateMaxAddress and AllocateAnyPages at `Image.c:713/724/733` and passes
-    # the same `ImageCodeMemoryType` to all three.
-    #
-    # Only then does `CoreInternalAllocatePages` (`Page.c:1196-1220`) force
-    # `Alignment = RUNTIME_PAGE_ALLOCATION_GRANULARITY` - for
-    # EfiReservedMemoryType, EfiACPIMemoryNVS, EfiRuntimeServicesCode and
-    # EfiRuntimeServicesData, and nothing else. On AArch64 that is 0x10000
-    # (`ProcessorBind.h:169`, against DEFAULT 0x1000 at `:165`), so only the
-    # runtime family is rounded up to a multiple of EFI_SIZE_TO_PAGES (Alignment)
-    # = 16 pages and required to land 64-KiB aligned. A 9-page runtime driver costs
-    # 16 pages; a 9-page `EfiBootServicesCode` driver costs exactly 9. So the
-    # subsystem column decides the r16 column, and the two are printed together so
-    # that it is visible rather than assumed.
+    # There is no second number. An earlier revision of this tool printed an `r16`
+    # column beside this one, on the theory that `CoreInternalAllocatePages` rounds a
+    # runtime request up to a 16-page multiple. That is true of the *code* and false
+    # for this *build*. The memory type passed to CoreAllocatePages is
+    # `Image->ImageContext.ImageCodeMemoryType`, which `CoreLoadImageCommon` sets from
+    # the PE's **subsystem** (`Image.c:630-645`) - `EFI_IMAGE_SUBSYSTEM_EFI_RUNTIME_DRIVER`
+    # (12) -> `EfiRuntimeServicesCode`, 11 -> `EfiBootServicesCode`, 10 ->
+    # `EfiLoaderCode` - and it is not the `!RelocationsStripped` fallback, which only
+    # chooses between AllocateAddress and AllocateAnyPages at `Image.c:713/733` and
+    # passes the same `ImageCodeMemoryType` to both. `CoreInternalAllocatePages` does
+    # then select `Alignment = RUNTIME_PAGE_ALLOCATION_GRANULARITY` for the runtime
+    # family (`Page.c:1192-1198`) and does round `NumberOfPages` by it at
+    # `:1217-1218`. But on AArch64 that macro is a compile-time choice of two branches
+    # and `Silicon/Silicium/SiliciumPkg/SiliciumPkg.dsc.inc:14` defines
+    # `__DEPRECATED_AARCH64_4K_RUNTIME_GRANULARITY`, so
+    # `MdePkg/Include/AArch64/ProcessorBind.h:166-167` is the arm that compiles and the
+    # value is **0x1000**, equal to DEFAULT_PAGE_ALLOCATION_GRANULARITY. The rounding
+    # reduces to `+= 0` / `&= ~0` - a no-op for every type, `EfiRuntimeServicesCode`
+    # included - and `Page.c:1207`'s NeedGuard guard never fires. The subsystem column
+    # is still printed because it still decides which *bin* a request prefers; it no
+    # longer changes the page count.
     print(f"\n{'res':>3} {'name':40} {'SizeOfImage':>11} {'saln':>8} "
-          f"{'subsys':>6} {'type':>3} {'req bytes':>10} {'pages':>6} {'r16':>4} "
-          f"{'cum pages':>10} {'cum r16':>8}")
-    cum, cum_s, cum_l, rcum = 0, 0, 0, 0
-    marks = []          # (ch, name, subsystem, pages, rounded, cumulative-rounded)
+          f"{'subsys':>6} {'type':>3} {'req bytes':>10} {'pages':>6} "
+          f"{'cum pages':>10}")
+    cum, cum_s, cum_l = 0, 0, 0
+    marks = []          # (ch, name, subsystem, pages, pages, cumulative)
     for k, ch in enumerate(args.seq):
         gs = apriori[k + 1] if k + 1 < len(apriori) else None
         if gs not in rows:
@@ -403,46 +421,44 @@ def main():
         req = pe["SizeOfImage"] + (pe["SectionAlignment"]
                                    if pe["SectionAlignment"] > 0x1000 else 0)
         pg = -(-req // 0x1000)
-        # RUNTIME_PAGE_ALLOCATION_GRANULARITY applies to EfiRuntimeServicesCode
-        # (subsystem 12) and EfiRuntimeServicesData, which is what the runtime
-        # family's code image is. Nothing else in this volume asks for a type on
-        # that list, so subsystem 12 is the whole of the rounded set.
-        rt16 = pe["Subsystem"] == 12
-        r16 = -(-pg // 16) * 16 if rt16 else pg
+        rt = pe["Subsystem"] == 12
         cum += pg
-        rcum += r16
         if ch == "s":
             cum_s += pg
         else:
             cum_l += pg
-        marks.append((ch, name, pe["Subsystem"], pg, r16, rcum))
+        marks.append((ch, name, pe["Subsystem"], pg, pg, cum))
         print(f"{ch:>3} {name:40} {pe['SizeOfImage']:>11} "
               f"{pe['SectionAlignment']:>#8x} {pe['Subsystem']:>6} "
-              f"{'rt' if rt16 else 'bs':>3} {req:>10} {pg:>6} {r16:>4} "
-              f"{cum:>10} {rcum:>8}")
+              f"{'rt' if rt else 'bs':>3} {req:>10} {pg:>6} "
+              f"{cum:>10}")
     print(f"\ntotal: {cum} pages = {cum * 0x1000} B "
           f"({cum * 0x1000 / (1024 * 1024):.2f} MiB)")
     print(f"  s: {cum_s} pages = {cum_s * 0x1000} B")
     print(f"  L: {cum_l} pages = {cum_l * 0x1000} B")
-    print(f"as the allocator sees it, at 16-page granularity for the runtime "
-          f"family only: {rcum} pages = "
-          f"{rcum * 0x1000} B ({rcum * 0x1000 / (1024 * 1024):.2f} MiB), "
-          f"+{rcum - cum} pages of rounding")
+    print("as the allocator sees it: the same numbers, to the page. "
+          "RUNTIME_PAGE_ALLOCATION_GRANULARITY is 0x1000 on this build "
+          "(SiliciumPkg.dsc.inc:14 satisfies the #ifdef), so no per-type rounding "
+          "applies to anyone. The +7 pages an earlier revision reported here were "
+          "read out of ProcessorBind.h's #else arm, which is not compiled.")
     rt_all = [m for m in marks if m[2] == 12]
     if rt_all:
-        print(f"  of which the rounding is entirely the {len(rt_all)} runtime "
-              f"drivers (subsystem 12): "
-              f"{sum(m[4] - m[3] for m in rt_all)} pages")
+        print(f"  the {len(rt_all)} runtime drivers (subsystem 12) are "
+              f"{sum(m[3] for m in rt_all)} pages of that demand, and they are "
+              f"rounding-free like everything else")
 
-    # The rounded column is what rules out a running-total threshold, and it is the
-    # only thing here that does. The strongest form of that argument is not "a
-    # later request succeeded" but "the *same* request succeeded later": a pair of
-    # promoted drivers, one failed and one succeeded, with the same subsystem and
-    # the same rounded page count, at strictly increasing cumulative demand. On
-    # this volume such a pair exists and is not adjacent (PdcDxe, ShmBridgeDxe),
-    # which is why it is searched for rather than assumed to be the run around the
-    # first failure. Printed as measured, because the two numbers and the order are
-    # the whole verdict.
+    # The cumulative column is what rules out a running-total threshold. The strongest
+    # form of that argument is not "a later request succeeded" but "the *same* request
+    # succeeded later": a pair of promoted drivers, one failed and one succeeded, with
+    # the same subsystem and the same page count, at strictly increasing cumulative
+    # demand. On this volume such a pair exists and is not adjacent (PdcDxe,
+    # ShmBridgeDxe), which is why it is searched for rather than assumed to be the run
+    # around the first failure. Printed as measured, because the two numbers and the
+    # order are the whole verdict.
+    #
+    # This used to key off the `r16` column, which no longer exists. It finds the same
+    # pair either way, because the rounding it applied was not applied by the
+    # allocator either - so the argument never rested on it.
     if marks:
         pair = next(
             ((k, l) for k in range(len(marks)) if marks[k][0] == "L"

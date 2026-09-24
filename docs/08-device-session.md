@@ -3007,37 +3007,56 @@ all three pass the same `ImageCodeMemoryType`; and that type comes from the PE
 `EfiBootServicesCode`/`EfiBootServicesData`, 12 → the runtime pair. Of the 46
 promoted, **10** are subsystem 12 and the other **36** are subsystem 11.
 
-So the 16-page rounding does apply in `CoreInternalAllocatePages` (`Page.c:1160`,
-rounding at `:1217`), because that function sets
-`Alignment = RUNTIME_PAGE_ALLOCATION_GRANULARITY` — **0x10000 on AArch64**
-(`ProcessorBind.h:169`, against `DEFAULT_PAGE_ALLOCATION_GRANULARITY` 0x1000 at
-`:165`) — but only for four types: `EfiReservedMemoryType`, `EfiACPIMemoryNVS`,
-`EfiRuntimeServicesCode`, `EfiRuntimeServicesData`. Of the 46 promoted, only the
-10 runtime images pay it, and between them they are the whole of it:
+So the 16-page rounding that step 4.12 predicted for the runtime family — and that
+this step briefly asserted as fact — **does not happen on this build**, and the
+disproof is in the same file step 4.12 read it from. `CoreInternalAllocatePages` does
+set `Alignment = RUNTIME_PAGE_ALLOCATION_GRANULARITY` (`Page.c:1190-1198`) for exactly
+four types — `EfiReservedMemoryType`, `EfiACPIMemoryNVS`, `EfiRuntimeServicesCode`,
+`EfiRuntimeServicesData` — and `Page.c:1217-1218` then rounds `NumberOfPages` up to a
+multiple of `EFI_SIZE_TO_PAGES (Alignment)`. But that macro's value is a
+*compile-time* choice of two branches on AArch64, and this build takes the 0x1000 one:
+`Silicon/Silicium/SiliciumPkg/SiliciumPkg.dsc.inc:14` defines
+`__DEPRECATED_AARCH64_4K_RUNTIME_GRANULARITY` for AARCH64, so
+`MdePkg/Include/AArch64/ProcessorBind.h:166-167` is the arm that compiles and
+`RUNTIME_PAGE_ALLOCATION_GRANULARITY` is **0x1000** — equal to
+`DEFAULT_PAGE_ALLOCATION_GRANULARITY`. The `#else` at `:169` is the 0x10000 arm and is
+**not compiled**. `Alignment` is therefore the same for every type,
+`EFI_SIZE_TO_PAGES (Alignment)` is 1, and `:1217-1218` reduce to `+= 0` then `&= ~0`:
+a no-op. Step 4.12 found this at the source and step 4.23 below relies on it; this
+step is where it was lost.
+
+There is consequently **no per-type page penalty at all** — not for the 10 runtime
+images, not for anyone:
 
 | | pages |
 |---|---|
-| the 46 promoted, `SizeOfImage` demand | 1562 = 6.10 MiB |
-| rounding, all of it in the 10 subsystem-12 images | +7 |
-| as the allocator sees it | **1569** = 6.13 MiB |
+| the 46 promoted, `SizeOfImage` + `SectionAlignment` demand | 1562 = 6.10 MiB |
+| rounding, on this build | **0** |
+| as the allocator sees it | **1562** = 6.10 MiB |
 
 The smallest request in the run is `PlatformInfoDxeDriver`'s and `CmdDbDxe`'s 8
-pages, both boot-service. The 7 pages of rounding is `EnvDxe`'s +1 and `SdccDxe`'s
-+6 — two subsystem-12 images whose `SectionAlignment` is 0x1000, which is why the
-rounding has to be keyed off the subsystem and not off the alignment.
+pages, both boot-service. The one alignment effect that *does* survive is on the
+image side rather than the allocator side, and it is already inside the 1562:
+`DXE_RUNTIME_DRIVER` links with `/ALIGN:0x10000` (`SiliciumPkg.dsc.inc:22-23`) against
+`/ALIGN:0x1000` for everything else (`:19-20`), `CoreLoadPeImage` adds a whole
+`SectionAlignment` when it exceeds a page (`Image.c:686-690`), and eight of the 46
+carry 0x10000 — so each of those eight asks for `SizeOfImage + 0x10000`. It is keyed
+off the *link* flags rather than off the subsystem: the ten-driver subsystem-12 set
+includes `EnvDxe` and `SdccDxe`, which are `DXE_DRIVER` and linked at 0x1000, so they
+pay nothing.
 
-### What that column rules out, which the unrounded one did not
+### What the cumulative column rules out, with or without the rounding this step retracted
 
 The promotion order is Apriori order, so each slot's cumulative demand is the
 running total up to that request:
 
 | | slot | request | cumulative | result |
 |---|---|---|---|---|
-| last success before the failures | 18 `NpaDxe` | 20 pages, `EfiBootServicesCode` | 567 | `s` |
-| first failure | 19 `RpmhDxe` | 16 pages, `EfiBootServicesCode` | 583 | `L` |
-| | 20 `PdcDxe` | 9 pages, `EfiBootServicesCode` | 592 | `L` |
-| | 21 `ClockDxe` | 47 pages, `EfiBootServicesCode` | 639 | `L` |
-| the lone success | 22 `ShmBridgeDxe` | 9 pages, `EfiBootServicesCode` | 648 | `s` |
+| last success before the failures | 18 `NpaDxe` | 20 pages, `EfiBootServicesCode` | 566 | `s` |
+| first failure | 19 `RpmhDxe` | 16 pages, `EfiBootServicesCode` | 582 | `L` |
+| | 20 `PdcDxe` | 9 pages, `EfiBootServicesCode` | 591 | `L` |
+| | 21 `ClockDxe` | 47 pages, `EfiBootServicesCode` | 638 | `L` |
+| the lone success | 22 `ShmBridgeDxe` | 9 pages, `EfiBootServicesCode` | 647 | `s` |
 
 > `PdcDxe` and `ShmBridgeDxe` make the byte-identical request — 36,864 B, 9 pages,
 > subsystem 11, so the same memory type and the same alignment, neither of them
@@ -3049,7 +3068,7 @@ alignment — and it is not a running total either, since a larger total came
 later and worked. This is the same fact as the `PdcDxe`/`ShmBridgeDxe` pairing
 from step 4.17 (both 36,9xx B, both 9 pages, opposite results), now stated in the
 unit that matters, and it is what makes "plain exhaustion" untenable rather than
-merely improbable: 648 pages is 2.53 MiB of a heap that is 35.4 MiB.
+merely improbable: 647 pages is 2.53 MiB of a heap that is 35.4 MiB.
 
 ### The heap is 35.4 MiB and it is the only conventional region
 
@@ -3111,9 +3130,11 @@ pages:
 
 **12 pages in total, unrounded** — and the number that was carried into this step
 as 131 was wrong; it is 12, and the tool computes it rather than a scratch
-session. At the 16-page granularity that applies to a runtime pool it is 96 pages
-across the family, against the 300-page `EfiRuntimeServicesData` bin below. The
-table's `s`/`L` split is also flat: the four that loaded and the six that did not
+session. This paragraph used to continue "at the 16-page granularity that applies to
+a runtime pool it is 96 pages"; that rounding is off on this build (step 4.12, and the
+retraction in step 4.18 above), so the family's relocation fixups stay at 12 pages —
+against the 300-page `EfiRuntimeServicesData` bin below, and far under it either way.
+The table's `s`/`L` split is also flat: the four that loaded and the six that did not
 are interleaved in the order they appear, so the fixup log does not separate them.
 **Not the mechanism**, and now measurably not.
 
@@ -3151,7 +3172,7 @@ this build. The chain, end to end, because each link is a different file:
   below the block.
 
 So 1.76 MiB of the heap is spoken for before the dispatcher starts, and the
-150-page `RuntimeServicesCode` bin is asked to hold **880 pages** of runtime image
+150-page `RuntimeServicesCode` bin is asked to hold **873 pages** of runtime image
 demand — 336 of them in the first four promotions, before any failure: it
 is exhausted within the first few drivers, and everything after that is served by
 the fallthrough — the default bin (the heap below the block), then
@@ -3198,8 +3219,10 @@ The two candidates the code offers are both in `FindFreePages`' ladder:
    `BaseAddress`/`MaximumAddress` window of 150 pages set at bin-creation time,
    and test 1 of the ladder only fires while `MaxAddress >= MaximumAddress`. Once
    the bin is full, the request is served *elsewhere*, and where it lands depends
-   on which rung has room — a 64-KiB-aligned run of the right size below
-   `mDefaultMaximumAddress`, or a promotion. A request can fail on rung 3 while a
+   on which rung has room — a page-aligned run of the right size below
+   `mDefaultMaximumAddress`, or a promotion. (`Alignment` here is 0x1000, not the
+   64 KiB the macro's name suggests: the 4K escape hatch is defined on this build,
+   which is the retraction in step 4.18.) A request can fail on rung 3 while a
    later one succeeds on rung 3 because `PromoteMemoryResource` added a region in
    between. **Step 4.23 withdraws this candidate for the failing pair**, which is
    boot-service: `EfiBootServicesCode` has no bin, so rung 1 is not gated on one —
@@ -3223,7 +3246,7 @@ attempts. Read with the `s`/`L` pattern it separates the two candidates:
 | `P2 FREE largest=` | what it means |
 |---|---|
 | `≥16` | a fresh request of the size that failed at slot 19 (16 pages) still succeeds *after* all 46 — so the failures are not about room at all, and the deciding factor is per-request state (a bin window, or an alignment run), not the total |
-| `0` | the heap really did run out by the end — which, with 1569 pages of demand against 9056 pages, means something other than the drivers is consuming it, and the search moves off the dispatcher |
+| `0` | the heap really did run out by the end — which, with 1562 pages of demand against 9056 pages, means something other than the drivers is consuming it, and the search moves off the dispatcher |
 | `4`, `1` | the residue is real but too small for any driver; the demand was paid down, and the 27 have to be explained by *when* it was paid, not how much was left |
 
 And the one value that would settle the heap's own size, which the host cannot
@@ -3240,8 +3263,8 @@ the allocator actually got.
 | image | **none** — this step changes no firmware, and the phone still carries step 4.13's `8c565681d1093b76c1cf184a549099aa2a957127c8be5ded439d934164535842` |
 | changed | `tools/pe-facts.py` — the rounded column and its cumulative, the running-total verdict, and the runtime-family bin arithmetic |
 | reproducible from | `python3 tools/pe-facts.py`; the bin sizes come from `SiliciumPkg.dsc.inc`, not from the volume |
-| what it corrects | the fixup-log total, 131 pages → **12** (96 at runtime granularity), and a first reading of `P2 DIAG`'s `Out of Resources`. Step 4.23 completes the second: the loader's pre-set status at `Image.c:697` is *not* its source. All 46 have `ImageBase` 0x0 and `RelocationsStripped` clear, so the `AllocateAddress` arm is unreachable, and `PcdLoadModuleAtFixAddressEnable` is 0, so the other arm is too — the only allocation that runs is `CoreAllocatePages (AllocateAnyPages, …)` at `:731`, and `:741` returns *its* status. `Out of Resources` is therefore a verdict about `FindFreePages` after all |
-| what it got wrong | the memory type of the 46 requests: not `EfiRuntimeServicesCode` for all of them but the PE subsystem's type, so 1569 pages and +7 of rounding rather than 1824 and 262. Withdrawn in step 4.23; the boundary verdict survives it |
+| what it corrects | the fixup-log total, 131 pages → **12** (the "96 at runtime granularity" that stood here is withdrawn with the same rounding, step 4.23), and a first reading of `P2 DIAG`'s `Out of Resources`. Step 4.23 completes the second: the loader's pre-set status at `Image.c:697` is *not* its source. All 46 have `ImageBase` 0x0 and `RelocationsStripped` clear, so the `AllocateAddress` arm is unreachable, and `PcdLoadModuleAtFixAddressEnable` is 0, so the other arm is too — the only allocation that runs is `CoreAllocatePages (AllocateAnyPages, …)` at `:731`, and `:741` returns *its* status. `Out of Resources` is therefore a verdict about `FindFreePages` after all |
+| what it got wrong | the memory type of the 46 requests: not `EfiRuntimeServicesCode` for all of them but the PE subsystem's type — and, in the same retraction, the per-type 16-page rounding it claimed for the 10 runtime images. The correct figure is **1562 pages with no rounding at all**, not 1824 and 262 before it and not 1569 and +7 after. Withdrawn in step 4.23; the boundary verdict survives both |
 
 ### What to read
 
@@ -3290,8 +3313,9 @@ state, which is exactly when the digest prints. So this step adds the probe.
 
 `P2Retry` makes four allocations at the assert and frees each one it gets back;
 `P2Bins` calls it once and then prints the bins. The four sizes are not arbitrary
-— they are the requests the slots either side of the failure actually made, after
-the 16-page rounding step 4.18 measured:
+— they are the requests the slots either side of the failure actually made, at the
+sizes those slots asked for (the "after the 16-page rounding step 4.18 measured" this
+paragraph used to say is withdrawn — there is no rounding, step 4.23):
 
 | request | who made it | outcome in the SEQ |
 |---|---|---|
@@ -3356,6 +3380,15 @@ P2 BIN def=%lx..%lx
 P2 RETRY rc16=%r rc48=%r rc112=%r rd16=%r
 ```
 
+**The order those five print in is not the order they are useful in.** `P2Bins`
+(`Dispatcher.c:326`) calls `P2Retry` *first* and only then emits the four `P2 BIN`
+lines, so `P2 RETRY` is the **last line of the whole digest** — it lands after the
+four `P2 BIN` lines, after `P2 FREE largest=`, after everything. Read it by scrolling
+to the bottom of the screen, not by looking near the `P2 BIN` block. The table below
+is in usefulness order; the count in `P2 BIN rc=… used=…/…` and the statuses in
+`P2 RETRY` therefore describe *the same instant*, which is what makes the pair
+readable together.
+
 | line | fields, in the order they print | what it decides |
 |---|---|---|
 | `P2 BIN init=` | `mMemoryTypeInformationInitialized` | whether the memory-type-information HOB arrived at all. `0` means `AllocateMemoryTypeInformationBins` never ran, the 450-page carve step 4.18 derived from `SiliciumPkg.dsc.inc` does not exist on this device, and the bin-boundary candidate is dead — the failure is then about the default bin and alignment alone |
@@ -3372,7 +3405,7 @@ P2 RETRY rc16=%r rc48=%r rc112=%r rd16=%r
 | `rc16=` | what it means |
 |---|---|
 | `Success` | a 16-page `EfiRuntimeServicesCode` request **still succeeds** at the assert, after all 46 attempts, with the heap in the state those attempts left it in — so runtime-typed room is not what ran out, and what decides the 27 is per-request state inside `FindFreePages`' ladder. **This row said "the exact size and type that failed at slots 19 and 20" and only half of that is true** — 16 pages is `RpmhDxe`'s size, and the type is not the one it asked for. The `bs9=` field step 4.23 adds is the one that carries the whole argument |
-| any named error | the heap really is empty at the point the assert fires. Against 1569 pages of demand and 9056 pages of heap that is not plain exhaustion by the drivers, so something else is holding the rest — and that is a different fault with a different fix, and it moves the search out of the dispatcher |
+| any named error | the heap really is empty at the point the assert fires. Against 1562 pages of demand and 9056 pages of heap that is not plain exhaustion by the drivers, so something else is holding the rest — and that is a different fault with a different fix, and it moves the search out of the dispatcher |
 
 Read with `P2 FREE largest=`, which is the same question asked by the ladder
 `{4096, 1024, 256, 64, 16, 4, 1}` that `P2LargestAlloc` walks, the four combinations
@@ -3385,7 +3418,7 @@ actually made of; the readings below are otherwise unchanged:
 | `Success` | `≥16` | room exists and both probes find it. The failures are the ladder's rules, not its supply: the bin window (`rc=`), the alignment requirement, or `PromoteMemoryResource` firing between slots. The next step is then a probe inside `FindFreePages` itself, not another census |
 | `Success` | `0` | the two probes disagree, which is itself the finding: `EfiRuntimeServicesCode` can be served while a `EfiBootServicesData` request of any size cannot, so the two are drawing on different regions and the "35.4 MiB heap" is not one pool in practice |
 | error | `≥16` | the type's own bin and its fallthrough rungs are exhausted for that type while other memory remains — the bin boundary is confirmed as the mechanism |
-| error | `0` | the heap is empty. The demand figure in step 4.18 is then wrong about something, and the item to check is what the 1569 pages were rounded *from* |
+| error | `0` | the heap is empty. The demand figure in step 4.18 is then wrong about something, and the item to check is what the 1562 pages are made of — in particular whether anything outside the dispatcher is holding the heap |
 
 ### What it does not do, and what it stands in for
 
@@ -3454,7 +3487,10 @@ names are gone. A symbol search would have been the second wrong check to reach 
 
 ### What to read
 
-Six lines now, and the first three are the ones this step exists for:
+Six lines now, and the first three are the ones this step exists for. This list is in
+priority order, which is deliberately **not** the order they print — `P2 RETRY` is the
+very last line of the digest (see above), so the reading is "find these six, in this
+order of importance", not "read the screen top to bottom":
 
 1. **`P2 ERR`** — unchanged first priority. It names the status the 27 report, and
    everything in steps 4.18 and 4.19 is a guess about the mechanism behind that name
@@ -3463,10 +3499,13 @@ Six lines now, and the first three are the ones this step exists for:
    and the table above turns that one word into the choice between "the ladder's
    rules" and "the heap's supply". `bs9` is the field step 4.23 adds for the reason
    given there: it is the request `PdcDxe` failed and `ShmBridgeDxe` succeeded with,
-   and it is the only one of the six that is literally that request.
+   and it is the only one of the six that is literally that request. Printed last,
+   after the `P2 BIN` block.
 3. **The four `P2 BIN` lines** — `init=`, `hob_rc=`/`hob_rd=` against the derived
    150/300, and `rc=`/`rd=`/`def=` against each other. `init=0` is the one reading
-   that would invalidate the whole bin story.
+   that would invalidate the whole bin story; `init=1` is expected, because the only
+   call site (`Page.c:585`, inside `CoreAddMemoryDescriptor`) passes the real
+   `&mMemoryTypeInformationInitialized` and runs at DXE init, long before dispatch.
 4. Then the list from step 4.18: **`P2 FREE largest=`**, which pairs with `bs9`;
    `P2 DIAG`'s 27 records; `P2 APRI`'s `bytes=`/`entries=`/`sum=` against
    `P2 STATS apriori=46/70` or `46/47`; `P2 WHY`, still never read; the five
@@ -3949,7 +3988,7 @@ On this fleet the distinction is not academic, because the fleet is mixed. Of th
 promoted drivers, **36 are subsystem 11** and only **10 are subsystem 12**:
 
 ```
-runtime family (Subsystem 12): 10 of the 46 promoted, 880 pages of image demand
+runtime family (Subsystem 12): 10 of the 46 promoted, 873 pages of image demand
 ```
 
 The other 36 ask for `EfiBootServicesCode`, including every driver in the failing
@@ -3962,53 +4001,75 @@ arriving at this from `pe-facts.py`'s alignment column will trip over:
 
 | set | size | members | why the number is what it is |
 |---|---|---|---|
-| promoted drivers that are **subsystem 12** | 10 | the eight above plus `EnvDxe`, `SdccDxe` | these are the requests the runtime memory type and 64-KiB granularity apply to |
-| DRIVER files carrying **`SectionAlignment` 0x10000** | 8 | `ReportStatusCodeRouterRuntimeDxe`, `StatusCodeHandlerRuntimeDxe`, `RuntimeDxe`, `VariableRuntimeDxe`, `ResetSystemRuntimeDxe`, `EmbeddedMonotonicCounter`, `RealTimeClock`, `CapsuleRuntimeDxe` | these are the ones whose *sections* need 64-KiB alignment |
+| promoted drivers that are **subsystem 12** | 10 | the eight above plus `EnvDxe`, `SdccDxe` | these are the requests that get the runtime *memory type* (`EfiRuntimeServicesCode`); they do **not** get a 64-KiB allocator granularity, for the reason below |
+| DRIVER files carrying **`SectionAlignment` 0x10000`** | 8 | `ReportStatusCodeRouterRuntimeDxe`, `StatusCodeHandlerRuntimeDxe`, `RuntimeDxe`, `VariableRuntimeDxe`, `ResetSystemRuntimeDxe`, `EmbeddedMonotonicCounter`, `RealTimeClock`, `CapsuleRuntimeDxe` | these are the ones whose *image* costs an extra 0x10000, through `Image.c:686-690` |
 
 The eight are a subset of the ten; `EnvDxe` and `SdccDxe` are subsystem 12 with
-`SectionAlignment` 0x1000, which is why they are the only two that are *rounded*.
-`CoreInternalAllocatePages` (`Mem/Page.c:1196-1220`) forces
-`Alignment = RUNTIME_PAGE_ALLOCATION_GRANULARITY` — 0x10000 on AArch64
-(`ProcessorBind.h:169`, against `DEFAULT` 0x1000 at `:165`) — for `EfiReservedMemoryType`,
+`SectionAlignment` 0x1000, which is why they are the two the two partitions disagree
+about. `CoreInternalAllocatePages` (`Mem/Page.c:1190-1198`) does force
+`Alignment = RUNTIME_PAGE_ALLOCATION_GRANULARITY` for `EfiReservedMemoryType`,
 `EfiACPIMemoryNVS`, `EfiRuntimeServicesCode` and `EfiRuntimeServicesData` only, and
-then rounds the page count up to that alignment:
+`:1217-1218` does round the page count up to that alignment:
 
 ```c
 NumberOfPages += EFI_SIZE_TO_PAGES (Alignment) - 1;
 NumberOfPages &= ~(EFI_SIZE_TO_PAGES (Alignment) - 1);
 ```
 
-The eight big ones already have a 64-KiB-multiple `SizeOfImage`, so the rounding is a
-no-op for them. `EnvDxe` (15 pages) and `SdccDxe` (26 pages) do not, and they are
-where the whole penalty comes from: 15 → 16 and 26 → 32, **+7 pages**, and nothing
-else in the run pays it.
+**But `RUNTIME_PAGE_ALLOCATION_GRANULARITY` is `0x1000` on this build, so both lines
+are no-ops and no driver pays anything.** This paragraph said 0x10000 and "`EnvDxe`
+15 → 16, `SdccDxe` 26 → 32, +7 pages" until it was read back against the source. The
+macro is a compile-time choice on AArch64:
+
+```c
+#define DEFAULT_PAGE_ALLOCATION_GRANULARITY  (0x1000)          // ProcessorBind.h:165
+#ifdef __DEPRECATED_AARCH64_4K_RUNTIME_GRANULARITY
+#define RUNTIME_PAGE_ALLOCATION_GRANULARITY  (0x1000)          // :167  <- this one
+#else
+#define RUNTIME_PAGE_ALLOCATION_GRANULARITY  (0x10000)         // :169  not compiled
+#endif
+```
+
+`Silicon/Silicium/SiliciumPkg/SiliciumPkg.dsc.inc:14` is where the `#ifdef` is
+satisfied for AARCH64 — `*_CLANGPDB_AARCH64_CC_FLAGS = -D
+__DEPRECATED_AARCH64_4K_RUNTIME_GRANULARITY` — and it reaches this platform because
+`gauguin.dsc` has no `[BuildOptions]` of its own and its only `!include` chain
+(`BitraPkg.dsc.inc` → `QcomPkg.dsc.inc` → `SiliciumPkg.dsc.inc`) ends there. It is not
+inference: 218 generated `GNUmakefile`s under `Build/gauguinPkg/DEBUG_CLANGPDB/` carry
+the define on their `CC_FLAGS` line. So `EFI_SIZE_TO_PAGES (Alignment)` is 1,
+`Alignment == DEFAULT_PAGE_ALLOCATION_GRANULARITY`, `Page.c:1207`'s
+`NeedGuard = FALSE` guard is not triggered, and the allocator sees exactly the
+byte counts the loader asks for.
 
 ### The corrected arithmetic
 
 | | pages | bytes |
 |---|---|---|
-| `SizeOfImage` demand, all 46 promoted | 1562 | 6,397,952 (6.10 MiB) |
+| `SizeOfImage` + `SectionAlignment` demand, all 46 promoted | 1562 | 6,397,952 (6.10 MiB) |
 | of which the 19 that started (`s`) | 575 | 2,355,200 |
 | of which the 27 that failed (`L`) | 987 | 4,042,752 |
-| rounding, `EnvDxe` +1 and `SdccDxe` +6 | **+7** | +28,672 |
-| **as the allocator sees it** | **1569** | **6,426,624 (6.13 MiB)** |
+| per-type rounding (`EfiRuntimeServicesCode`) | **0** | 0 |
+| **as the allocator sees it** | **1562** | **6,397,952 (6.10 MiB)** |
 
 Step 4.18's numbers were 1824 and 262. The retraction removes 255 pages of an
-imaginary penalty; the heap arithmetic that follows from it is otherwise unchanged,
-because the heap is 9056 pages (35.4 MiB) and the ratio was never close.
+imaginary per-image type penalty, and this step removes a further 7 pages of an
+imaginary per-type granularity penalty. The heap arithmetic that follows from it is
+otherwise unchanged, because the heap is 9056 pages (35.4 MiB) and the ratio was never
+close — it is, in fact, now *further* from close, which makes the boundary verdict
+stronger rather than weaker.
 
 What the retraction *does* change is where the room is expected to be tight, and it
 turns out to sharpen the picture rather than blur it:
 
 ```
-runtime family (Subsystem 12): 880 pages of image demand
+runtime family (Subsystem 12): 873 pages of image demand
   against PcdMemoryTypeEfiRuntimeServicesCode = 150 pages
   their RuntimeData pools add 160 more pages of EfiRuntimeServicesData
   against PcdMemoryTypeEfiRuntimeServicesData = 300
 ```
 
-880 pages of runtime-typed image demand against a 150-page runtime-code bin is a
-5.9× oversubscription, and 160 pages of runtime-data pools against a 300-page bin is
+873 pages of runtime-typed image demand against a 150-page runtime-code bin is a
+5.8× oversubscription, and 160 pages of runtime-data pools against a 300-page bin is
 0.53×. That asymmetry is the live one: the code bin cannot hold the runtime family and
 must fall through to the default bin, while the data bin holds. It matters because of
 where the bins are carved — see below. The 36 boot-service images make the *opposite*
@@ -4077,11 +4138,12 @@ LastBinAddress         = BaseAddress + RequiredSize;
 The array it carves is the five-entry one from the HOB, so on this board
 `RequiredSize` is 300 + 150 = **450 pages = 1.76 MiB** — the same figure step 4.18
 had, arrived at without the two dead boot-services PCDs — taken as one
-64-KiB-aligned block, with `RuntimeServicesData` getting the top 300 pages and
-`RuntimeServicesCode` the 150 below it, and `mDefaultMaximumAddress` dropped to
-`BaseAddress - 1`.
+page-aligned block (the alignment argument is `RUNTIME_PAGE_ALLOCATION_GRANULARITY`,
+which is 0x1000 here, not 64 KiB; the carve's size and position are unaffected), with
+`RuntimeServicesData` getting the top 300 pages and `RuntimeServicesCode` the 150
+below it, and `mDefaultMaximumAddress` dropped to `BaseAddress - 1`.
 
-So the runtime family's 880 pages of code demand against a 150-page window
+So the runtime family's 873 pages of code demand against a 150-page window
 oversubscribes rung 1 five times over and the fallthrough below the carve is
 load-bearing for it — that is a real and unchanged consequence, and it is about
 the 10 runtime drivers, not the 27 failures. For the 36 boot-service images the
@@ -4098,7 +4160,7 @@ space** — the carve region included, since the whole block is freed back to
 `EfiConventionalMemory` immediately after it is carved. For `PdcDxe`'s 9 pages to
 have been refused, there must have been no 9-contiguous-page
 `EfiConventionalMemory` run anywhere, at that instant, in a heap of 9056 pages
-with 592 pages of cumulative demand standing on it. That is a strong statement
+with 591 pages of cumulative demand standing on it. That is a strong statement
 about this memory map and not a subtle one about a bin, and it is the thing
 `bs9=` and `P2 FREE largest=` between them measure: `bs9` asks the same question
 again at the assert, and `P2 FREE largest=` reports the largest run a fresh
@@ -4113,8 +4175,8 @@ contains a pair of requests that are **byte-for-byte identical in every field th
 allocator reads**.
 
 ```
-the boundary is not a running total. PdcDxe fails at 592 pages of
-demand, and ShmBridgeDxe succeeds at 648 pages, on the identical request:
+the boundary is not a running total. PdcDxe fails at 591 pages of
+demand, and ShmBridgeDxe succeeds at 647 pages, on the identical request:
 subsystem 11, 9 pages. 1 more failure in between, so the deciding
 factor is neither the request nor the total: it is heap state at the moment
 each one arrives.
@@ -4125,7 +4187,7 @@ both 9 pages, neither rounded, so both enter `CoreInternalAllocatePages` with th
 `MemoryType`, the same `NumberOfPages` and the same strategy. One fails and one
 succeeds, **56 pages apart, with one more failure in between** (`ClockDxe`). No
 property of the request can separate them, because there is no difference between the
-requests. 648 pages of cumulative demand is 2.53 MiB of a 35.4 MiB heap, so it is not
+requests. 647 pages of cumulative demand is 2.53 MiB of a 35.4 MiB heap, so it is not
 exhaustion either. What is left is the state of the heap and of the carve at the
 instant each one arrives — which is precisely the quantity `P2 BIN` and
 `P2 RETRY` were added to read, and the reason they are still worth a cable.
@@ -4176,7 +4238,7 @@ is the single field that carries the argument: `bs9=Success` means 9 pages of
 boot-service memory *are* still obtainable after all 46 attempts, so the 27 were never
 about the ladder running out of room, and the deciding factor is per-request state
 inside `FindFreePages`; a named error instead means the memory map really has no 9
-contiguous free pages at the end of the run — which, against 1569 pages of demand and
+contiguous free pages at the end of the run — which, against 1562 pages of demand and
 a 9056-page heap, is a fault not in the drivers at all, and it moves the search to
 what else is standing on the heap. `bs16` is the same question at `RpmhDxe`'s size,
 and is there to separate "9 pages specifically" from "boot-service generally".
@@ -4220,31 +4282,142 @@ All five literals resolve, each with exactly one `adrp`/`add` pair, to
 
 ### What to read when it lands
 
-Order matters, and the first two are the ones this step changed:
+Order matters, and the first two are the ones this step changed. As in step 4.19 this
+is priority order, not screen order: **`P2 RETRY` prints last**, below the four
+`P2 BIN` lines, because `P2Bins` calls `P2Retry` before it prints anything.
 
 1. **`P2 ERR`** — still first, still never read, still the line that answers the 27.
-2. **`P2 RETRY bs9=`** — the decisive field. `Success` means 9 boot-service pages
-   *are* still obtainable after all 46 attempts, so nothing in the ladder was ever
-   exhausted and the 27 are a per-request-state failure; a named error means the
-   memory map really could not produce 9 contiguous free pages, which is a much
-   larger claim than a bin filling and points at `P2 FREE largest=` and at what
-   else is standing on the heap.
+2. **`P2 RETRY bs9=`** — the decisive field, and the **last line of the digest**.
+   `Success` means 9 boot-service pages *are* still obtainable after all 46 attempts,
+   so nothing in the ladder was ever exhausted and the 27 are a per-request-state
+   failure; a named error means the memory map really could not produce 9 contiguous
+   free pages, which is a much larger claim than a bin filling and points at
+   `P2 FREE largest=` and at what else is standing on the heap.
 3. `P2 DIAG`, `P2 STATS discovered=`/`apriori=`, `P2 WALK`, `P2 APRI unhit=`/`miss=`
    (`miss=47` validates the driver-name tables, per step 4.21).
 4. The four `P2 BIN` lines, `P2 FREE largest=`, `P2 SEQ`, `P2 WHY`.
 
 | | |
 |---|---|
-| instrument | `Image.c:630-645`, `:697`, `:702/:719/:730`, `:713/:724/:733`, `:741`; `Page.c:36-53`, `:1060-1130`, `:1196-1220`, `:1314`; `MemoryBin.c:281-319`, `:447-527`; `PrePiHobLib/Hob.c:891-905`; `SiliciumPkg.dsc.inc:45-53`; `ProcessorBind.h:165/:169`; plus the built `DxeCore.efi` and `FVMAIN.Fv` |
-| retracts | step 4.18's memory-type claim: the type comes from the PE subsystem, not from the `!RelocationsStripped` fallback. 10 of the 46 are `EfiRuntimeServicesCode`, 36 are `EfiBootServicesCode`. 1569 pages and +7 of rounding, not 1824 and 262 |
+| instrument | `Image.c:630-645`, `:686-690`, `:697`, `:702/:719/:730`, `:713/:724/:733`, `:741`; `Page.c:36-53`, `:1060-1130`, `:1190-1198`, `:1217-1218`, `:1314`; `MemoryBin.c:281-319`, `:447-527`; `PrePiHobLib/Hob.c:891-905`; `SiliciumPkg.dsc.inc:14`, `:19-23`, `:45-53`; `ProcessorBind.h:165-169`; plus the built `DxeCore.efi` and `FVMAIN.Fv` |
+| retracts | step 4.18's memory-type claim: the type comes from the PE subsystem, not from the `!RelocationsStripped` fallback. 10 of the 46 are `EfiRuntimeServicesCode`, 36 are `EfiBootServicesCode` — and, with `SiliciumPkg.dsc.inc:14`, **no per-type page rounding applies to any of them**, so the total is 1562 pages, not 1824 and 262 and not 1569 and +7 |
 | strengthens | the boundary verdict: `PdcDxe` and `ShmBridgeDxe` are byte-identical requests 56 pages apart with opposite results, so the deciding factor is neither the request nor the total |
-| keeps | the bins and the carve — 450 pages carved as one block off the top of the heap, `mDefaultMaximumAddress` dropped below it, and the runtime family's 880 pages of demand oversubscribing the 150-page code window |
+| keeps | the bins and the carve — 450 pages carved as one block off the top of the heap, `mDefaultMaximumAddress` dropped below it, and the runtime family's 873 pages of demand oversubscribing the 150-page code window |
 | also corrects | the mechanism step 4.18 gave for the boot-services hole. Not `Special`, and not `PcdMemoryTypeEfiBootServicesCode` (the DSC says 1000; nothing reads it — the HOB builder emits five entries and no boot-services one). It is `InitializeBinStatisticsFromRange` clamping `MaximumAddress` to `*DefaultMaximumAddress`, so rung 1 fires and collapses into rung 2 |
 | which means | a bin boundary cannot refuse the failing pair. Rung 3 is not bin-gated, so `PdcDxe`'s refusal means no 9 contiguous conventional pages existed **anywhere** at that instant — a claim about the whole memory map, which is what `P2 FREE largest=` measures |
 | withdraws | the `Image.c:697` reading of `P2 DIAG`'s `Out of Resources`. All 46 take `AllocateAnyPages` at `:731` and `:741` returns its status, so the pre-set cannot survive |
 | finds | a real bug in the step 4.19 probe: it re-attempted four runtime-typed requests, while every one of the 27 is boot-service. Corrected here with `bs9`/`bs16` |
 | rebuilds | `work/out/p2-4.20/Mu-gauguin-silicon-gzip.img`, 1,142,784 B, sha256 `dbf131d2…`, gated and archived, never flashed. Present by content: `bs9=%r bs16=%r` ×1 in the inner FV, `.rdata`/`.data` vsz +0x10 each, five `adrp`/`add` pairs in the window `0x119e8`–`0x11a5c` |
 | does not close | the 27. It corrects the instrument that will read them, and it does not touch the phone |
+
+
+## Step 4.24 — The granularity this step assumed away, and the `P2 RETRY` line reads last
+
+Two corrections, both found by reading back what step 4.23 asserted rather than by
+reading anything new off the phone. Neither changes the boundary verdict; the first
+strengthens it.
+
+**`RUNTIME_PAGE_ALLOCATION_GRANULARITY` is `0x1000` on this build, so there is no
+per-type page rounding and the demand is 1562 pages, not 1569.** Step 4.23 cited
+`ProcessorBind.h:169` for 0x10000. That is the `#else` arm of a two-branch
+`#ifdef`, and it is **not compiled**: `Silicon/Silicium/SiliciumPkg/SiliciumPkg.dsc.inc:14`
+puts `-D __DEPRECATED_AARCH64_4K_RUNTIME_GRANULARITY` on
+`*_CLANGPDB_AARCH64_CC_FLAGS`, so `:167` wins and the macro equals
+`DEFAULT_PAGE_ALLOCATION_GRANULARITY`. `CoreInternalAllocatePages`'s
+`Page.c:1217-1218` rounding is therefore `+= 0` / `&= ~0` for every memory type,
+`EfiRuntimeServicesCode` included, and `Page.c:1207`'s `NeedGuard = FALSE` guard is
+never triggered either. The "+7 pages, `EnvDxe` 15 → 16 and `SdccDxe` 26 → 32" that
+stood in step 4.23 is the arithmetic of a rounding that does not run.
+
+This is not inference from a header. `SiliciumPkg.dsc.inc` reaches the platform
+because `gauguin.dsc` has no `[BuildOptions]` of its own and its only `!include`
+chain is `BitraPkg.dsc.inc` → `QcomPkg.dsc.inc` → `SiliciumPkg.dsc.inc`; and 218
+generated `GNUmakefile`s under `Build/gauguinPkg/DEBUG_CLANGPDB/` carry the define on
+their `CC_FLAGS` line, one of which was read verbatim. `tools/pe-facts.py` modelled
+the rounding (`rt16 = Subsystem == 12`, `r16 = ceil(pg/16)*16`) and has been corrected
+to model its absence; its own output now prints `1562` on both the plain and the
+"as the allocator sees it" line, and the pair it searches for (`PdcDxe` fails at 591,
+`ShmBridgeDxe` succeeds at 647, identical request) is found on the *unrounded*
+numbers, so the argument never depended on the rounding column.
+
+Step 4.12 had this right at `SiliciumPkg.dsc.inc:14` and drew the correct conclusion
+from it — "the 64 KiB-alignment theory is dead at the source". Step 4.23 re-derived
+the macro without re-reading that line and lost it. The fix here is in the doc
+(steps 4.18, 4.19 and 4.23 above), in `tools/pe-facts.py`, and in the project memory
+file; no firmware change follows from it, because no firmware branch depended on the
+value.
+
+**The alignment effect that survives is a different one and was never missing.**
+`EDKII.DXE_RUNTIME_DRIVER` links with `/ALIGN:0x10000` (`SiliciumPkg.dsc.inc:22-23`)
+against `/ALIGN:0x1000` for everything else (`:19-20`), and `CoreLoadPeImage`
+(`Image.c:686-690`) adds a whole `SectionAlignment` to the allocation size when it
+exceeds a page. Eight of the 46 carry `SectionAlignment` 0x10000, so each asks for
+`SizeOfImage + 0x10000`; that is 128 pages / 0.5 MiB across the set, and it is
+already inside the 1562 — `pe-facts.py` computes `req = SizeOfImage + SectionAlignment`
+and always did. It is keyed off the *link* flags, not off the subsystem: the
+ten-driver subsystem-12 set includes `EnvDxe` and `SdccDxe`, which are
+`MODULE_TYPE = DXE_DRIVER`, linked at 0x1000, and pay nothing.
+
+**`P2 RETRY` is the last line of the digest, not one near the top.** `P2Bins`
+(`Dispatcher.c:326`) calls `P2Retry` *before* it prints anything, so the five lines
+come out as four `P2 BIN` lines and then `P2 RETRY` — and `P2 RETRY` therefore lands
+below `P2 FREE largest=` as well, at the very bottom of the repeating block. The read
+lists in steps 4.19 and 4.23 above have been corrected; the priority order they give
+is unchanged, it is just not screen order.
+
+**One open question closed on the way, against the source.** `PromoteMemoryResource`
+does *not* re-attempt the bin allocation, so step 4.20's "cannot fire here" mechanism
+stands as written: the function (`Page.c:382-460`) is driven purely by the GCD map's
+own `EfiGcdMemoryTypeReserved` entries and their `EFI_MEMORY_PRESENT|INITIALIZED`
+capabilities, with no path to `AllocateMemoryTypeInformationBins`.
+`AllocateMemoryTypeInformationBins` has exactly **one** call site in DXE —
+`Page.c:585`, inside `CoreAddMemoryDescriptor` — and it is passed the real
+`&mMemoryTypeInformationInitialized`, not a dummy. So `P2 BIN init=` should read
+**`1`**; `init=0` would mean `CoreAddMemoryDescriptor` never ran the carve, which is a
+much larger fault than anything step 4.18 or 4.20 considered.
+
+| | |
+|---|---|
+| instrument | `SiliciumPkg.dsc.inc:14`, `:19-23`; `ProcessorBind.h:165-169`; `Page.c:382-460`, `:585`, `:1190-1198`, `:1207`, `:1217-1218`; `Image.c:686-690`; `Dispatcher.c:326`; the 218 build-tree `GNUmakefile`s |
+| corrects | step 4.23's granularity: `RUNTIME_PAGE_ALLOCATION_GRANULARITY` is 0x1000, not 0x10000. Demand 1562 pages, not 1569 |
+| corrects | step 4.19's and step 4.23's read order: `P2 RETRY` prints last, after the four `P2 BIN` lines |
+| confirms | step 4.20's mechanism. `PromoteMemoryResource` has no route to the bin allocation, so "the gate never passes here" is the whole reason it cannot fire |
+| does not change | the firmware. No build shipped from this step; the image flashed below is step 4.23's |
+| strengthens | the boundary verdict, since the demand is 7 pages *smaller* than the version of it that was already far from close |
+
+
+## Step 4.25 — The 4.23 probe goes onto the phone
+
+`work/out/p2-4.20/Mu-gauguin-silicon-gzip.img`, 1,142,784 B, sha256
+`dbf131d254374646bfbc5e3da4cbfc3dc8e23f3d7ec4a2a7f6ca73dde692e40f`, was written to
+`boot` over the TWRP route on 2026-09-24 and read back byte-identical.
+
+The control was read **before** the write, which is the standing rule for this
+device and the reason the readback means anything: `boot` carried
+`work/out/p2-silicon-gzip-preread-0923d.img`'s exact bytes,
+sha256 `8c565681d1093b76…`, 1,140,736 B — step 4.13's image, the one steps 4.16 and
+4.19 superseded without either reaching the phone. So this flash is the first change
+to `boot` since step 4.13, and the payload it replaced is identified by content rather
+than by assumption.
+
+The route was TWRP, not fastboot, for the reason step 1b recorded: ABL's fastboot is
+what the P2 payload appears to wedge, and a dropped link during `fastboot flash` has
+no cancel, where a dropped `adb push` fails only the push. The write is 279 × 4096 B
+and the verification is a readback of the first 1,142,784 bytes of `sde55`, not the
+absence of a `dd` error.
+
+What the phone is doing now is the loop this step has been building toward: the digest
+is drawn on the panel, DXE asserts on the missing arch protocols, and the APSS watchdog
+resets it — so the summary repeats and `P2 ERR` stays readable. Nothing about the
+`userdata` / partition-table / firmware-LUN constraints is touched by this; the
+relaxation is still `boot` only.
+
+| | |
+|---|---|
+| flashed | `work/out/p2-4.20/Mu-gauguin-silicon-gzip.img`, 1,142,784 B, sha256 `dbf131d254374646bfbc5e3da4cbfc3dc8e23f3d7ec4a2a7f6ca73dde692e40f` → `/dev/block/sde55` (`by-name/boot`), read back identical |
+| replaced | `work/out/p2-silicon-gzip-preread-0923d.img` = `8c565681d1093b76…`, 1,140,736 B, identified from the partition itself before the write |
+| route | `tools/flash-boot.sh --twrp` — TWRP `adb push` + `dd`, verified by readback |
+| next | read `P2 ERR` (first) and `P2 RETRY bs9=` (last line, after the four `P2 BIN`) off the panel |
 
 
 ## Step 5 — Leave it bootable
