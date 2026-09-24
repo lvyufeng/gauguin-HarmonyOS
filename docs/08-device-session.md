@@ -4931,6 +4931,122 @@ build, and the header read back off the partition — v1, 2048-byte pages,
 kernel 1,136,759 bytes at `0x10008000`, tags `0x10000100` — is that image's own.
 
 
+## Step 4.31 — The panel was holding the load flood, and no `P2` line has ever been on it
+
+The reading this step is built on is one row, and it is the first panel reading
+in five sessions that names a line the host could place:
+
+```
+Loading Driver at 0x0009CBE3000 EntryPoint=0x0009CBE41DC Fat.efi
+```
+
+with, in the same answer, **not one line beginning with `P2` anywhere on the
+screen**. That pair is the finding, and it is worth being exact about what each
+half rules out.
+
+**The row is DxeCore's own, and it is a success.** It is printed by
+`CoreLoadPeImage` (`Image.c:862`, `DEBUG_INFO | DEBUG_LOAD`) and it is printed
+*after* the PE is parsed, the pages are taken and the relocations are applied —
+look at the position in the function: the `goto Done` that frees the pages is
+below it. So `Fat.efi` was loaded into memory. Nothing was rejected.
+
+**The address is inside this device's DXE heap, two thirds of the way up it.**
+`device/config/uefiplat.cfg:16` declares `DXE Heap` at `0x9B800000 + 0x02360000`
+= `0x9B800000..0x9DB60000`, 28.4 MiB, the window step 4.28 established. `0x9CBE3000`
+is `0x13E3000` into it: **20.9 MiB of 28.4 MiB allocated**, 7.5 MiB left, at the
+moment `Fat.efi` went in. `Fat` is FV file 37 of 123 (`961578FE-B6B7-44C3-AF35-6BC705CD2B1F`)
+and entry 30 of the Apriori list, so this is mid-batch, not near the end of it.
+
+**No `P2` line has ever been on that panel, and that is a statement about when
+the digest prints.** Every bring-up line — `P2 NOLOAD`, `P2 APRI`, `P2 SEQ`,
+`P2 WHY`, `P2 ERR`, `P2 DIAG`, `P2 STATS`, `P2 WALK`, `P2 FREE`, `P2 BIN`,
+`P2 RETRY`, `KEY` — is printed by `CoreDisplayDiscoveredNotDispatched`, which
+`DxeMain` calls at `DxeMain.c:576`, **after `CoreDispatcher ()` returns at
+`:562`**. There is no bring-up line anywhere in the dispatch loop. So a panel
+showing the load flood and no `P2` line is a panel photographed at a moment when
+`CoreDispatcher` had not returned — and a panel photographed *after* it returns
+cannot look like this, because the digest is printed 41 times with a multi-second
+pause between copies (`P2Hold`), which over 41 copies and ~45 rows is about 1800
+rows against a panel that holds 99.
+
+That asymmetry is the useful half, because it does not depend on catching a
+frame. If dispatch had completed, the last thing printed before the assert would
+have been 41 copies of the digest, and the panel would hold digest rows and then
+the assert row. It holds neither. **So the run being read did not reach the end
+of `CoreDispatcher`.** The alternative explanation for a `P2`-less panel — that
+the payload is not ours at all, i.e. that `boot` no longer holds
+`work/out/p2-4.20/` — is not excluded by the row alone (`Qualcomm's own DXE
+prints the same text from the same function`), and step 4.30's block-for-block
+verification of `boot` was taken in a *previous* TWRP session. Both readings
+predict this screen, which is why the first thing this step asks for is a
+read-back of `boot` and not another photograph.)
+
+**What the panel cannot say, and the line that makes it say it.** The flood
+cannot distinguish `CoreDispatcher` *stopped* from `CoreDispatcher` *still
+running* — the console has no scrollback, so a panel mid-dispatch and a panel
+that died mid-dispatch are the same image. A tick printed once per attempted
+dispatch separates them: a number that keeps advancing is a run in progress, and
+a number that stops is the last driver attempted, with the free-page count at
+that instant beside it. That is `P2Tick`, added in this step:
+
+```
+K 30 Ss 18/46 free=4096 961578FE-B6B7-44C3-AF35-6BC705CD2B1F
+  |  |  |   |     |     |
+  |  |  |   |     |     +-- the driver, the same GUID P2 DIAG names
+  |  |  |   |     +-------- P2 FREE largest=, the allocator's rung
+  |  |  |   +-------------- started / Apriori-promoted, P2 STATS' two numbers
+  |  |  +------------------ the stage ('L' load, 'S' start) and the status letter
+  |  +--------------------- P2WhyLetter's letter, the same alphabet as P2 WHY
+  +------------------------ the tick: a sequence number, so a stall shows as a stop
+```
+
+It is printed after the load and after the start of every driver, success and
+failure alike, so it is the last row on the panel whenever a run stops inside
+dispatch — which is the state the reading above came back in. It measures nothing
+new: every field is a line that already existed, and it is placed where a reader
+will be, not where the digest is.
+
+**`PcdDebugPrintErrorLevel` is inert on this platform, and that is why the flood
+is silenced by deletion rather than by a level.** The obvious way to get the
+digest onto the screen is to raise the flood's level past the platform's mask.
+That does not work here, and the reason is worth recording because it applies to
+every module in the tree: `BaseDebugLibSerialPort`'s `DebugPrintLevelEnabled`
+tests its argument against **`PcdFixedDebugPrintErrorLevel`**, not against
+`PcdDebugPrintErrorLevel`. This platform sets `PcdDebugPrintErrorLevel|0x8007EE0F`
+(`SiliciumPkg.dsc.inc:69`) and never sets the fixed one, so it takes the
+`MdePkg.dec` default — `0xFFFFFFFF` — and **every level is enabled**. That is not
+an inference: `PcdFixedDebugPrintErrorLevel`'s compiled value is `0xFFFFFFFF` in
+this module's own generated `AutoGen.c` (`_PCD_VALUE_PcdFixedDebugPrintErrorLevel`).
+So `DEBUG_VERBOSE` there would print exactly as loudly as `DEBUG_INFO | DEBUG_LOAD`
+did, and the platform's carefully chosen print mask has never filtered anything
+for any module linked against this DebugLib. Raising the level cannot silence the
+line and lowering the mask would silence far more than it, so the three calls are
+removed (`Image.c`, `P2BRINGUP`-marked, with the restore instruction in place).
+The build is the check: `FVMAIN.Fv` contains `Loading driver at 0x%11p EntryPoint`
+one time before this step and **zero** times after, while `KEY 0/%d` and
+`P2 RETRY` are still there.
+
+**Still unread.** Everything above is an argument about a screen; the screen is
+unchanged. What this step produces is a build that can be read from the bottom
+row in either state, and the two readings it is worth flashing for:
+
+| state | the reading | what it means |
+| --- | --- | --- |
+| run stops in dispatch | `K <n> <phase><status> <s>/46 free=<pages> <guid>` as the bottom row, `n` short of ~123 | the run died at that driver, and `free=` is the heap at that instant — the first heap number ever taken *during* dispatch rather than at the end of it |
+| run completes dispatch | `KEY <errors>/46 err=<name> at=<i> free=<pages> miss=<i>` as the bottom row | the digest was there all along and the flood was hiding it; `P2 ERR` and `bs9=` are then read from the same screen |
+
+| | |
+| --- | --- |
+| finding | the panel holds DxeCore's load flood and no `P2` line, from a run that did not reach the end of `CoreDispatcher` |
+| the row that says so | `Loading driver at 0x0009CBE3000 ... Fat.efi` — printed only after a successful PE load, at 20.9 MiB into a 28.4 MiB heap |
+| why no `P2` line | every bring-up line prints from `CoreDisplayDiscoveredNotDispatched`, which `DxeMain.c:576` calls after `CoreDispatcher` returns at `:562` |
+| why the flood cannot be silenced by level | `DebugPrintLevelEnabled` tests `PcdFixedDebugPrintErrorLevel`, which is `0xFFFFFFFF` (MdePkg.dec default, confirmed in the module's `AutoGen.c`), so `PcdDebugPrintErrorLevel|0x8007EE0F` filters nothing |
+| instrument added | `P2Tick`: one `K <n> <phase><status> <s>/<ap> free=<pages> <guid>` row per attempted dispatch, 70 columns, printed last |
+| instrument removed | the three `DEBUG_INFO \| DEBUG_LOAD` prints in `CoreLoadPeImage` (`Image.c:862`, `:916`, `:919`), `P2BRINGUP`-marked |
+| build | payload of record `work/out/p2-variants/Mu-gauguin-silicon-gzip.img`, sha256 `7c8fdb5a…0e1ef44`, 1,142,784 B — verified to carry `K %d %c%c %d/%d free=%d %g`, `KEY 0/%d` and `P2 RETRY`, and verified *not* to carry `Loading driver at` |
+| still first | read `boot` back and compare it block-for-block before concluding anything about "our payload stops mid-dispatch" |
+
+
 ## Step 5 — Leave it bootable
 
 Whatever the outcome, end the session with the stock image back on `boot`:

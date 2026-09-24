@@ -329,10 +329,10 @@ index 39668123..8405bc31 100644
  #define  USB_INTERFACE_SIGNATURE  SIGNATURE_32 ('U', 'S', 'B', 'I')
  #define  USB_BUS_SIGNATURE        SIGNATURE_32 ('U', 'S', 'B', 'B')
 diff --git a/MdeModulePkg/Core/Dxe/Dispatcher/Dispatcher.c b/MdeModulePkg/Core/Dxe/Dispatcher/Dispatcher.c
-index d7c7147e..165a559d 100644
+index d7c7147e..11e72604 100644
 --- a/MdeModulePkg/Core/Dxe/Dispatcher/Dispatcher.c
 +++ b/MdeModulePkg/Core/Dxe/Dispatcher/Dispatcher.c
-@@ -60,6 +60,440 @@ EFI_LOCK  mDispatcherLock = EFI_INITIALIZE_LOCK_VARIABLE (TPL_HIGH_LEVEL);
+@@ -60,6 +60,571 @@ EFI_LOCK  mDispatcherLock = EFI_INITIALIZE_LOCK_VARIABLE (TPL_HIGH_LEVEL);
  //
  BOOLEAN  gDispatcherRunning = FALSE;
  
@@ -477,6 +477,82 @@ index d7c7147e..165a559d 100644
 +  }
 +
 +  return 0;
++}
++
++//
++// P2BRINGUP: the whole reading on one line, printed last.
++//
++// Everything above this is detail. A copy of the digest is about 45 rows against
++// a panel that holds 99, so a reader photographing a phone has to find the two
++// rows that matter among the rest - and that is what four sessions failed to do.
++// Two things make it harder than it looks: the console wipes rather than
++// scrolls, and the widest line in the digest (`P2 RETRY`, 86 to 152 columns) is
++// the one nearest the bottom, so the rows a reader reaches last are the ones
++// most likely to have wrapped.
++//
++// This is one line, printed after everything else, carrying the four facts the
++// phase turns on: how many Apriori entries failed and with what status, which
++// entry failed first, what the page allocator will still satisfy, and the first
++// Apriori entry above 0 that matched nothing. It is bounded at 59 columns
++// against the panel's 90, so it never wraps; being last it is the last populated
++// row in every state, including after a wipe - a wipe lands inside a copy, and
++// the rest of that copy prints from the top of the cleared panel and ends here.
++//
++// `miss` is printed signed on purpose: `mP2ApriMiss` is (UINTN)-1 when nothing
++// above 0 failed to match, so the cast renders that as -1 rather than as a
++// twenty-digit number, and -1 can never be a real index.
++//
++STATIC
++VOID
++P2Key (
++  VOID
++  )
++{
++  UINTN       Index;
++  UINTN       SeqLen;
++  UINTN       Errors;
++  UINTN       First;
++  EFI_STATUS  FirstStatus;
++
++  SeqLen = mP2Apriori;
++  if (SeqLen > P2BRINGUP_APRIORI_MAX) {
++    SeqLen = P2BRINGUP_APRIORI_MAX;
++  }
++
++  Errors      = 0;
++  First       = (UINTN)-1;
++  FirstStatus = EFI_SUCCESS;
++  for (Index = 0; Index < SeqLen; Index++) {
++    if (mP2ApriSt[Index] != EFI_SUCCESS) {
++      if (First == (UINTN)-1) {
++        First       = Index;
++        FirstStatus = mP2ApriSt[Index];
++      }
++
++      Errors++;
++    }
++  }
++
++  if (Errors == 0) {
++    DEBUG ((
++      DEBUG_ERROR,
++      "KEY 0/%d err=none free=%d miss=%d\n",
++      SeqLen,
++      P2LargestAlloc (),
++      (INTN)mP2ApriMiss
++      ));
++  } else {
++    DEBUG ((
++      DEBUG_ERROR,
++      "KEY %d/%d err=%r at=%d free=%d miss=%d\n",
++      Errors,
++      SeqLen,
++      FirstStatus,
++      First,
++      P2LargestAlloc (),
++      (INTN)mP2ApriMiss
++      ));
++  }
 +}
 +
 +//
@@ -770,10 +846,65 @@ index d7c7147e..165a559d 100644
 +  P2MarkSeq (Guid, (Phase == 'L') ? 'L' : 'S', Status);
 +}
 +
++//
++// P2BRINGUP: one short line per dispatch attempt, so that the panel does not have
++// to be read at the end of a run to say where the run got to.
++//
++// Everything else in this block is printed from CoreDisplayDiscoveredNotDispatched,
++// which DxeMain calls only *after* CoreDispatcher returns. That is the right place
++// for a digest and the wrong place for this question: the panel reading that
++// prompted this line came back full of `Loading driver at ...` rows and no digest
++// row at all, and that row is printed by CoreLoadPeImage only once a load has
++// succeeded - from the DXE heap window 0x9B800000..0x9DB60000, at 0x9CBE3000, about
++// 21 MiB into a 28.4 MiB heap. A digest printed once at the end cannot report on a
++// run that does not reach the end.
++//
++// So this is printed after every attempted dispatch, a load failure and a start
++// success alike, which makes the last row of whatever the panel happens to hold the
++// last dispatch attempt. The fields are the ones already read off other lines, so
++// this is a third spelling and not a fourth measurement: `st=`/`ap=` are P2 STATS'
++// started/apriori, `free=` is P2 FREE largest=, and the GUID is the driver P2 DIAG
++// names by GUID. The count is a sequence number so that a stall is visible as a
++// number that stops advancing rather than as an absence - absence is what the panel
++// cannot show, because it holds no history.
++//
++STATIC UINTN  mP2Tick = 0;
++
++STATIC
++VOID
++P2Tick (
++  IN CHAR8       Phase,
++  IN EFI_STATUS  Status,
++  IN EFI_GUID    *Guid
++  )
++{
++  mP2Tick++;
++
++  //
++  // `Phase` says which stage the attempt reached ('L' load, 'S' start) and the
++  // second letter is P2WhyLetter's, which P2 WHY already prints for the same
++  // statuses at the same positions. Two letters and not the status name: the name
++  // is up to 18 columns and the GUID is 36, and both together would leave the
++  // line close enough to the panel's 90 to wrap on the one row that has to be
++  // readable.
++  //
++  DEBUG ((
++    DEBUG_ERROR,
++    "K %d %c%c %d/%d free=%d %g\n",
++    mP2Tick,
++    Phase,
++    P2WhyLetter (Status),
++    mP2Started,
++    mP2Apriori,
++    P2LargestAlloc (),
++    Guid
++    ));
++}
++
  //
  // Module globals to manage the FwVol registration notification event
  //
-@@ -483,6 +917,8 @@ CoreDispatcher (
+@@ -483,11 +1048,19 @@ CoreDispatcher (
              DriverEntry->Initialized = TRUE;
            }
  
@@ -782,7 +913,18 @@ index d7c7147e..165a559d 100644
            DriverEntry->Scheduled = FALSE;
            RemoveEntryList (&DriverEntry->ScheduledLink);
  
-@@ -519,6 +955,13 @@ CoreDispatcher (
+           CoreReleaseDispatcherLock ();
+ 
++          //
++          // P2BRINGUP: after the lock is dropped, because the tick reads the page
++          // allocator and that must not happen inside the dispatcher's own lock.
++          //
++          P2Tick ('L', Status, &DriverEntry->FileName);
++
+           //
+           // If it's an error don't try the StartImage
+           //
+@@ -519,6 +1092,20 @@ CoreDispatcher (
  
          Status = CoreStartImage (DriverEntry->ImageHandle, NULL, NULL);
  
@@ -793,10 +935,17 @@ index d7c7147e..165a559d 100644
 +          mP2Started++;
 +        }
 +
++        //
++        // P2BRINGUP: one row per dispatched driver, success and failure alike, so
++        // that the last row on the panel is the last driver attempted rather than
++        // the last one whose load happened to be printed.
++        //
++        P2Tick ('S', Status, &DriverEntry->FileName);
++
          REPORT_STATUS_CODE_WITH_EXTENDED_DATA (
            EFI_PROGRESS_CODE,
            (EFI_SOFTWARE_DXE_CORE | EFI_SW_PC_INIT_END),
-@@ -896,6 +1339,8 @@ CoreAddToDriverList (
+@@ -896,6 +1483,8 @@ CoreAddToDriverList (
  
    CoreReleaseDispatcherLock ();
  
@@ -805,7 +954,7 @@ index d7c7147e..165a559d 100644
    return EFI_SUCCESS;
  }
  
-@@ -1309,6 +1754,16 @@ CoreFwVolEventProtocolNotify (
+@@ -1309,6 +1898,16 @@ CoreFwVolEventProtocolNotify (
                                    &Attributes,
                                    &Size
                                    );
@@ -822,7 +971,7 @@ index d7c7147e..165a559d 100644
          if (!EFI_ERROR (GetNextFileStatus)) {
            if (Type == EFI_FV_FILETYPE_DXE_CORE) {
              //
-@@ -1412,6 +1867,26 @@ CoreFwVolEventProtocolNotify (
+@@ -1412,6 +2011,26 @@ CoreFwVolEventProtocolNotify (
                          );
      if (!EFI_ERROR (Status)) {
        AprioriEntryCount = SizeOfBuffer / sizeof (EFI_GUID);
@@ -849,7 +998,7 @@ index d7c7147e..165a559d 100644
      } else {
        AprioriEntryCount = 0;
      }
-@@ -1433,11 +1908,69 @@ CoreFwVolEventProtocolNotify (
+@@ -1433,11 +2052,69 @@ CoreFwVolEventProtocolNotify (
            DriverEntry->Scheduled = TRUE;
            InsertTailList (&mScheduledQueue, &DriverEntry->ScheduledLink);
            CoreReleaseDispatcherLock ();
@@ -919,7 +1068,7 @@ index d7c7147e..165a559d 100644
      }
  
      //
-@@ -1470,6 +2003,235 @@ CoreInitializeDispatcher (
+@@ -1470,6 +2147,241 @@ CoreInitializeDispatcher (
    PERF_FUNCTION_END ();
  }
  
@@ -1150,12 +1299,18 @@ index d7c7147e..165a559d 100644
 +  DEBUG ((DEBUG_ERROR, "P2 FREE largest=%d pages\n", P2LargestAlloc ()));
 +
 +  P2Bins ();
++
++  //
++  // Last, so that it is the last populated row of the panel. Everything above
++  // it is a spelling of the same reading; this is the one line to photograph.
++  //
++  P2Key ();
 +}
 +
  //
  // Function only used in debug builds
  //
-@@ -1486,11 +2248,73 @@ CoreDisplayDiscoveredNotDispatched (
+@@ -1486,11 +2398,73 @@ CoreDisplayDiscoveredNotDispatched (
  {
    LIST_ENTRY             *Link;
    EFI_CORE_DRIVER_ENTRY  *DriverEntry;
@@ -1231,6 +1386,70 @@ index d7c7147e..165a559d 100644
 +    P2Digest ();
 +  }
  }
+diff --git a/MdeModulePkg/Core/Dxe/Image/Image.c b/MdeModulePkg/Core/Dxe/Image/Image.c
+index 84b1ee80..474fbd60 100644
+--- a/MdeModulePkg/Core/Dxe/Image/Image.c
++++ b/MdeModulePkg/Core/Dxe/Image/Image.c
+@@ -859,12 +859,40 @@ CoreLoadPeImage (
+   // Print the load address and the PDB file name if it is available
+   //
+ 
+-  DEBUG ((
+-    DEBUG_INFO | DEBUG_LOAD,
+-    "Loading driver at 0x%11p EntryPoint=0x%11p ",
+-    (VOID *)(UINTN)Image->ImageContext.ImageAddress,
+-    FUNCTION_ENTRY_POINT (Image->ImageContext.EntryPoint)
+-    ));
++  //
++  // P2BRINGUP: this print and the two below it - the load address, the driver
++  // name, the newline - are the whole of what the panel holds during DXE
++  // dispatch, and they are why four sessions of panel readings came back with the
++  // flood and none of the digest. They are silenced here, and the reason it is a
++  // deletion rather than a level change is worth stating because the level change
++  // is the obvious move and it does not work:
++  //
++  //   `BaseDebugLibSerialPort`'s `DebugPrintLevelEnabled` tests the level against
++  //   `PcdFixedDebugPrintErrorLevel`, not against `PcdDebugPrintErrorLevel`. This
++  //   platform sets `PcdDebugPrintErrorLevel|0x8007EE0F` and never sets the fixed
++  //   one, so it takes the MdePkg.dec default - 0xFFFFFFFF - and every level is
++  //   enabled. `PcdFixedDebugPrintErrorLevel`'s compiled value is 0xFFFFFFFF in
++  //   this module's own AutoGen.c, which is where that was read. So DEBUG_VERBOSE
++  //   here would print exactly as loudly as DEBUG_INFO | DEBUG_LOAD did, and the
++  //   platform's print mask is inert for every module that uses this DebugLib.
++  //   (That is a finding about the platform and not only about this print.)
++  //
++  // Raising the level cannot silence it and lowering the mask would silence far
++  // more than this, so the three calls go. The name computation below is left in
++  // place rather than removed with its print - it is dead once the print is gone
++  // and the compiler drops it, so keeping it makes this diff exactly "the three
++  // prints stopped" and nothing else.
++  //
++  // To restore: put back the three DEBUG calls this block replaced. Nothing else
++  // in the tree depends on them being absent; the bring-up lines are all
++  // DEBUG_ERROR and are unaffected either way.
++  //
++  // DEBUG ((
++  //   DEBUG_INFO | DEBUG_LOAD,
++  //   "Loading driver at 0x%11p EntryPoint=0x%11p ",
++  //   (VOID *)(UINTN)Image->ImageContext.ImageAddress,
++  //   FUNCTION_ENTRY_POINT (Image->ImageContext.EntryPoint)
++  //   ));
+ 
+   //
+   // Print Module Name by Pdb file path.
+@@ -902,10 +930,10 @@ CoreLoadPeImage (
+       EfiFileName[Index] = 0;
+     }
+ 
+-    DEBUG ((DEBUG_INFO | DEBUG_LOAD, "%a", EfiFileName));   // &Image->ImageContext.PdbPointer[StartIndex]));
++    // P2BRINGUP: silenced - was DEBUG ((DEBUG_INFO | DEBUG_LOAD, "%a", EfiFileName));
+   }
+ 
+-  DEBUG ((DEBUG_INFO | DEBUG_LOAD, "\n"));
++  // P2BRINGUP: silenced - was DEBUG ((DEBUG_INFO | DEBUG_LOAD, "\n"));
+ 
+   return EFI_SUCCESS;
+ 
 diff --git a/SecurityPkg/Library/AuthVariableLib/AuthService.c b/SecurityPkg/Library/AuthVariableLib/AuthService.c
 index 7f7c91e9..aa8632ad 100644
 --- a/SecurityPkg/Library/AuthVariableLib/AuthService.c

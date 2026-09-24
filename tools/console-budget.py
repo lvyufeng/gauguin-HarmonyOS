@@ -226,7 +226,7 @@ def main():
 
     body = read(os.path.join(mu, DISPATCHER_C))
     lines = []
-    for name in ("P2Retry", "P2Bins", "P2Digest"):
+    for name in ("P2Retry", "P2Bins", "P2Digest", "P2Key"):
         for fmt in debug_literals(function_body(body, name)):
             lines.append((name, fmt))
 
@@ -298,25 +298,47 @@ def main():
             print()
             break
 
-    print("Where the RETRY line sits on the panel, and why that is the one row to read.")
-    print("`P2Bins` calls `P2Retry()` to take the readings and prints its line last, so")
-    print("the RETRY line is the last line of every copy, and every copy is followed by")
-    print("P2Hold's pause - 2e9 volatile read-modify-writes, seconds each, 40 of them.")
-    print("So the printing stops on that line and does not resume for seconds:")
-    ordered = [fmt for name, fmt in lines if name == "P2Bins"]
+    print("Where the KEY line sits on the panel, and why that is the one row to read.")
+    print("`P2Digest` prints everything above, then `P2Bins` (eight `P2 BIN` rows and a")
+    print("RETRY line), and calls `P2Key()` last - so the KEY line is the last line of")
+    print("every copy, and every copy is followed by P2Hold's pause: 2e9 volatile")
+    print("read-modify-writes, seconds each, 40 of them. So the printing stops on that")
+    print("line and does not resume for seconds:")
+    ordered = [fmt for name, fmt in lines if name == "P2Key"]
     for n, fmt in enumerate(reversed(ordered), 1):
         print(f"  {n} from the bottom of a copy: {fmt}")
     print()
     print("  And the wipe does not move it: when the cursor crosses the last row the")
     print("  panel is cleared and the *rest of the copy in progress* prints from the top,")
-    print(f"  which ends on the same line. So the last populated row of the panel is the")
-    print("  RETRY line in every state, with blank rows beneath it - not a filled panel")
+    print("  which ends on the same line. So the last populated row of the panel is the")
+    print("  KEY line in every state, with blank rows beneath it - not a filled panel")
     print("  whose bottom row is the reading.")
     print()
-    print(f"  `bs9=` is the second field from the end. If the line ran past {columns} columns it")
-    print("  wrapped, and then its *tail* is the last populated row: `bs9=` and `bs16=` go")
-    print("  there and the row above ends mid-field. Either way - one row or two - the last")
-    print("  text on the panel carries `bs9=`. That is the row to photograph.")
+    print(f"  The KEY line is one of two spellings and each is bounded well inside {columns}:")
+    print("  the all-success form is 7 + the `free=`/`miss=` digits, and the failure form")
+    print("  adds the status name (at most 18) and `at=` (at most 3). The widths are")
+    print("  printed above, so this is a statement about them and not a second measurement.")
+    print()
+    print("  The RETRY line is the other candidate, and it is the one to skip: it is the")
+    print(f"  only line in a copy that can exceed {columns} columns, and it sits one row")
+    print("  above the KEY line. Read the bottom row, not the one above it.")
+    print()
+
+    # The per-dispatch line, which is not part of the digest and is the one that now
+    # dominates what the panel holds: P2Tick prints once per attempted dispatch -
+    # about 123 times - where the whole digest is printed 41 times *and* is mostly
+    # wiped between copies by the 40 P2Hold pauses. So on the flood side of the
+    # instrument this line is the reading, and on the digest side it is the last
+    # thing printed before the digest begins.
+    for fmt in debug_literals(function_body(body, "P2Tick")):
+        w = render_width(fmt, args.strlen, STATUS_WIDEST)
+        per_dispatch = 123
+        print(f"the per-dispatch line: `{fmt.strip()}` at {w} columns")
+        print(f"  -> one row per attempted dispatch, so about {per_dispatch} rows per run,")
+        print(f"     against the digest's {total} rows x 41 copies. Printed after the load and")
+        print("     the start of each driver and therefore the last row on the panel whenever")
+        print("     a run stops inside dispatch - which is the state the panel was in when the")
+        print("     last reading came back as `Loading driver at ... Fat.efi` and no P2 line.")
     return 0
 
 
