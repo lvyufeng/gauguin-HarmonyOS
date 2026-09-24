@@ -195,6 +195,26 @@ NAME_CID = re.compile(r'Name \(_CID, "(?:EisaId \(")?([^"]+)"')
 INF_ACPI = re.compile(r"ACPI\\\s*([A-Za-z0-9_]{3,16})", re.I)
 
 
+def read_win_text(path):
+    """A Windows text file as `str`, whatever it was encoded in.
+
+    Measured the hard way: every `.inf` in a Windows Update driver package is
+    UTF-16 with a BOM, and reading one as UTF-8 does not fail - it succeeds and
+    returns text whose every other byte is NUL, so `ACPI\\QCOM0A0C` arrives as
+    `A\\x00C\\x00P\\x00I\\x00...` and *no* regex matches it. That produced the
+    worst kind of wrong answer: `--drivers` reported 0 ids for a set that lists
+    157 of them, and then concluded the set was "for some other SoC". A reader
+    that silently sees nothing is not a reader, so the BOM is checked first and
+    the NULs are used as a second signal for the files that lack one.
+    """
+    raw = open(path, "rb").read()
+    if raw[:2] in (b"\xff\xfe", b"\xfe\xff"):
+        return raw.decode("utf-16", errors="replace")
+    if b"\x00" in raw[:4096]:
+        return raw.decode("utf-16-le", errors="replace")
+    return raw.decode("utf-8", errors="replace")
+
+
 def disassemble(aml, cache):
     """(dsl_path or None) - iasl -d, cached, because 36 trees take ~90 s."""
     rel = os.path.relpath(aml, DEFAULT_TREE)
@@ -636,14 +656,24 @@ def cmd_drivers(args):
         print(f"no .inf files under {args.drivers}")
         return 1
     hids = {}      # ACPI id -> [inf paths]
+    encodings = {}  # what each .inf turned out to be, for the summary line
     for inf in inffiles:
         try:
-            text = open(inf, errors="replace").read()
+            raw = open(inf, "rb").read()
         except OSError:
             continue
+        if raw[:2] in (b"\xff\xfe", b"\xfe\xff"):
+            enc = "utf-16 (BOM)"
+        elif b"\x00" in raw[:4096]:
+            enc = "utf-16 (no BOM)"
+        else:
+            enc = "utf-8"
+        encodings[enc] = encodings.get(enc, 0) + 1
+        text = read_win_text(inf)
         for m in INF_ACPI.finditer(text):
             hids.setdefault(m.group(1).upper(), []).append(os.path.relpath(inf, args.drivers))
-    print(f"{len(inffiles)} .inf files, {len(hids)} distinct ACPI hardware ids\n")
+    print(f"{len(inffiles)} .inf files, {len(hids)} distinct ACPI hardware ids")
+    print(f"  encodings: {', '.join(f'{v} {k}' for k, v in sorted(encodings.items()))}\n")
 
     qcom = sorted(h for h in hids if QCOM_ID.match(h))
     print(f"  {len(qcom)} of them are QCOM ids: "
