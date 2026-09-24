@@ -310,11 +310,22 @@ def bind_asl(args, hids):
     for hid in used:
         where = sorted({f"{d} (line {n})" for n, d, h in found if h == hid})
         who = hids.get(hid, [])
-        if not QCOM_ID.match(hid):
+        if ACPI_ID.match(hid):
             # ACPI0007 is a processor, ACPI0011 a generic button device: the OS
             # ships the driver and no vendor .inf is involved. Not a gap.
             standard.append(hid)
             verdict = "standard id - the OS supplies the driver"
+        elif PNP_ID.match(hid):
+            # A PNP id is a vendor CIM, not a Microsoft one: PNP0CA1, PNP0CA2
+            # and PNP0CA3 are Qualcomm's own for the URS, the SPMI arbiter and
+            # the PMIC. Calling these "the OS supplies the driver" was this
+            # tool describing its own rule - "not QCOM, so not looked up" - as a
+            # fact about the hardware. They are covered by whatever claims the
+            # `_HID` beside them, and this set lists QCOM ids, so there is
+            # nothing here to check them against.
+            standard.append(hid)
+            verdict = ("PNP id - a vendor CIM, not looked up in this set; the "
+                       "_HID beside it is what binds")
         elif who:
             verdict = f"claimed by {', '.join(who[:3])}" + \
                       (f" +{len(who) - 3}" if len(who) > 3 else "")
@@ -587,6 +598,8 @@ def cmd_blocks():
 
 
 QCOM_ID = re.compile(r"^QCOM([0-9A-F]{2})([0-9A-F]{2})$")
+ACPI_ID = re.compile(r"^ACPI[0-9A-F]{4}$")
+PNP_ID = re.compile(r"^PNP[0-9A-F]{4}$")
 
 
 def collect_by_name(tree, cache):

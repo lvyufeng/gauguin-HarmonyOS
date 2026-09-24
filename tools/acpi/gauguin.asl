@@ -62,32 +62,49 @@
  * parameters have not been derived, and an unverified _LPI is worse than none.
  *
  * P3 also asks for I2C, SPI, GPIO, buttons and thermal zones, and none of them
- * is here. That is not an omission - it is measured, and the measurement is the
- * reason. Every one of those nodes needs a `_HID` (and for the GPIO and I2C
- * blocks a `_DSM` whose contract is documented nowhere in this tree), and the
- * device tree carries no ACPI name: it has registers and pins, which are the
- * half that is knowable. Across the 36 reference DSDTs in Silicium-ACPI the
- * same block at the same address carries a different `_HID` on every SoC - the
- * TLMM window 0xF100000 is QCOM1A0C on vili and lemonade, QCOM0A0C on lisa and
- * a52sxq, QCOM250C on alioth and QCOM090C on renoir - and the SPMI and both
- * TSENS windows are described by none of the 36. No Bitra-family reference
- * exists: Platforms/Realme/bitra/DSDT.aml, which this file's form comes from,
- * has the same five devices this one has and nothing more.
+ * is here. What is here, as of Step 4.63, is the PMIC family - SPMI, PMIC and
+ * PM01 - because unlike those, its names turned out not to be a guess. The note
+ * above those three nodes is how each value was settled.
  *
- * The consequence of copying a name from another SoC is specific and bad. A
- * node whose `_HID` no driver claims does not fail, warn or fall back; it is
- * absent from Device Manager and the hardware behind it is simply not there.
- * That is worse than a missing node, which at least reads as missing.
+ * The rest stays out for a measured reason. Every one of those nodes needs a
+ * `_HID` (and for the GPIO and I2C blocks a `_DSM` whose contract is documented
+ * nowhere in this tree), and the device tree carries no ACPI name: it has
+ * registers and pins, which are the half that is knowable.
  *
- * But the lesson is not that this board has a hidden name. ACPI's `_HID` is not
- * a hardware fact - it is a string this port chooses, and the corpus choosing
- * differently on every SoC is evidence the choice is free. What constrains it is
- * the driver: a device binds to the name its .inf lists and to nothing else. So
- * the tables here are written *to a driver*, not *to the SoC*, and the order of
- * work is to adopt a Windows driver set and then name every block after it.
- * tools/acpi-hid-census.py reproduces the measurement above and, given a driver
- * set, reports which of gauguin's twelve blocks it covers - and which SoC's set
- * it is, read off the names it answers to. Run it before adding any node here.
+ * The PM01 census is what changed the picture, and it is worth stating in full.
+ * Across the 21 tables in Silicium-ACPI that carry a PMIC-GPIO node at all - one
+ * block, one function, every one of them with the same interrupt at 0x201 and
+ * the same `_UID One` - the `_HID` takes nine different values, and the middle
+ * byte is the SoC family and nothing else:
+ *
+ *   QCOM0269  02  caymanslm         QCOM1430  14  surya
+ *   QCOM0530  05  mh2 cepheus       QCOM1A2D  1A  lemonade venus
+ *                 nabu pipa vayu                   vili Lahaina
+ *   QCOM0830  08  a52q miatoll      QCOM252D  25  alioth
+ *   QCOM092D  09  renoir Cedros     QCOM0C2D  0C  Kailua Waipio
+ *   QCOM0A2D  0A  lisa a52sxq
+ *
+ * gauguin's family byte is 0A, and that is measured rather than chosen: the
+ * SC7280/Kodiak Windows driver set names 8 of gauguin's 10 blocks under it and 0
+ * of 10 under every other byte. So this file's PMIC-GPIO node is `QCOM0A2D`, and
+ * qcpmicgpio7280.inf claims exactly that. The same byte settles the TLMM block
+ * that is still outstanding: the TLMM window 0xF100000 is QCOM1A0C on vili and
+ * lemonade, QCOM0A0C on lisa and a52sxq, QCOM250C on alioth and QCOM090C on
+ * renoir - and the 7280 set claims QCOM0A0C, for qcgpio7280.inf.
+ *
+ * So the earlier reading of this file's own header was half wrong. The choice of
+ * `_HID` here is not free and not arbitrary; it is patterned, and the byte that
+ * patterns it is the same byte that decides which driver set binds. Copying a
+ * name from a table on another family is therefore not merely unverified, it is
+ * predictably wrong.
+ *
+ * The consequence of getting it wrong is specific and bad. A node whose `_HID`
+ * no driver claims does not fail, warn or fall back; it is absent from Device
+ * Manager and the hardware behind it is simply not there. That is worse than a
+ * missing node, which at least reads as missing. So every id added below was
+ * checked against the driver set first - tools/acpi-hid-census.py
+ * --drivers DIR --bind ID does exactly that and exits 1 on an unclaimed QCOM id.
+ * Run it before adding any node here.
  */
 DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
 {
@@ -556,6 +573,284 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
                 {
                     Name (CFG0, Package (0x00){})
                     Return (CFG0) /* \_SB_.URS0.UFN0.PHYC.CFG0 */
+                }
+            }
+        }
+
+        /*
+         * ---------------------------------------------------------------------
+         * The PMIC family: SPMI, PMIC, PM01.  Step 4.63.
+         *
+         * Three nodes, and every number in them is either gauguin's own or a
+         * constant measured across the corpus - nothing is inherited by
+         * resemblance. The ids are the three the 7280 driver set claims:
+         *
+         *   QCOM0A0B  qcspmi7280.inf        QCOM0A2B  qcpmic7280.inf
+         *   QCOM0A2D  qcpmicgpio7280.inf
+         *
+         * SPMI's window. gauguin's device tree gives the arbiter five regions:
+         *
+         *   core   0x0C440000 + 0x1100        obsrvr 0x0E600000 + 0x100000
+         *   chnls  0x0C600000 + 0x2000000     intr   0x0E700000 + 0xA0000
+         *   cnfg   0x0C40A000 + 0x26000
+         *
+         * which union to [0x0C40A000, 0x0E7A0000). _CRS states one window,
+         * 0x0C400000 + 0x2800000, and that is not a copy: it is the value 18 of
+         * the 20 SPMI _CRS in Silicium-ACPI carry - across SM8150, SM8250,
+         * SM8350, SM7150, SM7125, SM6250 and SDM7280 alike - and it contains
+         * every one of the five regions above. The same eight bytes appear
+         * little-endian at offset 0x12 of SPMI.CONF, which is the same window
+         * restated. The other two tables are Kailua's, and theirs is a different
+         * window (0x0C400000 + 0x500000) for a different arbiter.
+         *
+         * SPMI.CONF is byte-identical in all 18 of those tables, Kailua's being
+         * the sole variant, so it is copied verbatim rather than reconstructed:
+         * 26 bytes whose only platform-dependent part is the window _CRS
+         * already states. What the other 18 bytes configure is not established.
+         *
+         * PMIC.PMCF is the one method here with real platform content. 19 of the
+         * 22 tables in Silicium-ACPI that have an SPMI node carry it, and no
+         * table calls it: the PMIC driver calls it by name, so it is not
+         * optional for a table that means to bind. (The three that omit it -
+         * vili, kebab and Waipio - also omit PMAP and PMBM, and vili's whole
+         * PMIC section is PMIC and PM01 and nothing else.) Its package is
+         * <count>, then one entry per SPMI USID from 0 to the maximum, where a
+         * present USID is the key and an absent one is keyed 0x10, and the
+         * paired value is 0x10 on the newer platforms:
+         *
+         *   lisa, a52sxq (both 0A)   {0A, 0>10, 1>10, 2>10, 3>10, 4>10, 10>10 x5}
+         *   Lahaina, venus, lemonade {0B, 0..5>10, 10>10 x4}
+         *   renoir, Cedros (both 09) {06, 0,1,2,3>10, 10>10, 5>10}
+         *   Kailua, Waipio (0C)      {0D, 0..7>10, 10>10 x4, 0C>16}
+         *
+         * Two readings of this package fit the older tables and only one fits
+         * the newer. On SM8150/SM8250/SM7125 the values step by two -
+         * alioth's is {04, 0>1, 2>3, 4>5, 6>7} - which reads as <primary USID,
+         * companion USID>, one entry per PMIC, and that reading cannot explain
+         * lisa's consecutive keys 0,1,2,3,4 or renoir's key 0x10 sitting between
+         * 3 and 5. The reading that fits both is the one above: one entry per
+         * USID from 0 up, placeholders for the gaps, and a value whose meaning
+         * differs by generation - a companion on the old platforms, a peripheral
+         * type on the new, where 0x16 appears once (Kailua, USID 12) and shows
+         * the field is not a USID at all. The entry count is a per-family
+         * constant: 10 for family 0A, 10 for 1A, 13 for 0C, 6 for 09.
+         *
+         * gauguin's device tree populates USIDs 0 through 6 - pm6350 at 0 and 1,
+         * pm7250b at 2 and 3, pm6150l at 4 and 5, pmk8350 at 6, all seven
+         * children of spmi@c440000 and none of them disabled, the pm8008 at
+         * USID 8 being on I2C - and it is family 0A, so the package is lisa's
+         * with USID 5 present instead of absent. What 0x10 means is still not
+         * established; it is the value 12 tables give for every populated USID,
+         * including renoir, which is SM7350 to gauguin's SM7225 and the closest
+         * relative in the corpus.
+         *
+         * PM01's interrupt is the arbiter's own. The dts gives spmi@c440000
+         * interrupts-extended = <0x62 0x01 0x04> - PDC pin 1 - and 512 + 1 is
+         * 513 = 0x201, which all 21 PMIC-GPIO nodes in the corpus carry, Level,
+         * ActiveHigh, Shared, except Kailua and Waipio, whose PMIC on PDC pin 3
+         * adds a second. gauguin has no PMIC on pin 3.
+         *
+         * PM01._DSM: the GPIO Controller UUID, function 0 returning the bitmap
+         * 0x03 (functions 1 and 2), function 1 returning Package (0x02){0x07,
+         * 0x06}. The UUID, the bitmap and the pair are each constant across
+         * every table that carries them; the pair's meaning is not established.
+         * Four older tables return Buffer (One){0x00} at function 1 instead, and
+         * those are all pre-0A families.
+         *
+         * _STA returning 0x0F is this file's convention on every device it
+         * defines; the reference tables leave it out and are present by default.
+         *
+         * Deliberately not added here, with the reason each time. PMAP exists in
+         * 19 tables and the 7280 set claims QCOM0A2C, but its _DEP names
+         * \_SB.ABD and \_SB.SCM0 and neither node is in this file, so it would
+         * be a dangling dependency. PMBM (QCOM0A2A) and PMGK (QCOM0A8E) are in
+         * the corpus and are NOT claimed by the 7280 set, so adding them would
+         * put two devices in Device Manager that nothing binds. PML0
+         * (QCOM0AD3) is claimed, but it is an I2C-attached PMIC - lisa's _CRS
+         * gives it four I2C addresses on \_SB.I2C2 - and this file has no I2C
+         * controller and gauguin's pm8008 is at a different address. PEP0
+         * (QCOM0A17, qcpep.wd7280.inf) is claimed and is the largest remaining
+         * single node in the reference, 13,000 lines in lisa, and it is the
+         * power engine - its own step.
+         */
+        Device (SPMI)
+        {
+            Method (_STA, 0, NotSerialized)  // _STA: Status
+            {
+                Return (0x0F)
+            }
+
+            Name (_HID, "QCOM0A0B")  // _HID: Hardware ID
+            Alias (^PSUB, _SUB)
+            Name (_CID, "PNP0CA2")  // _CID: Compatible ID
+            Name (_UID, One)  // _UID: Unique ID
+            Name (_CCA, Zero)  // _CCA: Cache Coherency Attribute
+            Method (_CRS, 0, NotSerialized)  // _CRS: Current Resource Settings
+            {
+                Name (RBUF, ResourceTemplate ()
+                {
+                    Memory32Fixed (ReadWrite,
+                        0x0C400000,         // Address Base
+                        0x02800000,         // Address Length
+                        )
+                })
+                Return (RBUF) /* \_SB_.SPMI._CRS.RBUF */
+            }
+
+            Method (CONF, 0, NotSerialized)
+            {
+                Name (XBUF, Buffer (0x1A)
+                {
+                    /* 0000 */  0x00, 0x01, 0x01, 0x01, 0xFF, 0x00, 0x02, 0x00,
+                    /* 0008 */  0x0A, 0x07, 0x04, 0x07, 0x01, 0xFF, 0x10, 0x01,
+                    /* 0010 */  0x00, 0x01, 0x0C, 0x40, 0x00, 0x00, 0x02, 0x80,
+                    /* 0018 */  0x00, 0x00
+                })
+                Return (XBUF) /* \_SB_.SPMI.CONF.XBUF */
+            }
+        }
+
+        Device (PMIC)
+        {
+            Method (_STA, 0, NotSerialized)  // _STA: Status
+            {
+                Return (0x0F)
+            }
+
+            Name (_HID, "QCOM0A2B")  // _HID: Hardware ID
+            Name (_CID, "PNP0CA3")  // _CID: Compatible ID
+            Alias (^PSUB, _SUB)
+            Name (_DEP, Package (One)  // _DEP: Dependencies
+            {
+                \_SB.SPMI
+            })
+            Method (PMCF, 0, NotSerialized)
+            {
+                Name (CFG0, Package (0x0B)
+                {
+                    0x0A,
+                    Package (0x02)
+                    {
+                        Zero,
+                        0x10
+                    },
+
+                    Package (0x02)
+                    {
+                        One,
+                        0x10
+                    },
+
+                    Package (0x02)
+                    {
+                        0x02,
+                        0x10
+                    },
+
+                    Package (0x02)
+                    {
+                        0x03,
+                        0x10
+                    },
+
+                    Package (0x02)
+                    {
+                        0x04,
+                        0x10
+                    },
+
+                    Package (0x02)
+                    {
+                        0x05,
+                        0x10
+                    },
+
+                    Package (0x02)
+                    {
+                        0x06,
+                        0x10
+                    },
+
+                    Package (0x02)
+                    {
+                        0x10,
+                        0x10
+                    },
+
+                    Package (0x02)
+                    {
+                        0x10,
+                        0x10
+                    },
+
+                    Package (0x02)
+                    {
+                        0x10,
+                        0x10
+                    }
+                })
+                Return (CFG0) /* \_SB_.PMIC.PMCF.CFG0 */
+            }
+        }
+
+        Device (PM01)
+        {
+            Method (_STA, 0, NotSerialized)  // _STA: Status
+            {
+                Return (0x0F)
+            }
+
+            Name (_HID, "QCOM0A2D")  // _HID: Hardware ID
+            Alias (^PSUB, _SUB)
+            Name (_UID, One)  // _UID: Unique ID
+            Name (_DEP, Package (One)  // _DEP: Dependencies
+            {
+                \_SB.PMIC
+            })
+            Method (_CRS, 0, NotSerialized)  // _CRS: Current Resource Settings
+            {
+                Name (RBUF, ResourceTemplate ()
+                {
+                    Interrupt (ResourceConsumer, Level, ActiveHigh, Shared, ,, )
+                    {
+                        0x00000201,
+                    }
+                })
+                Return (RBUF) /* \_SB_.PM01._CRS.RBUF */
+            }
+
+            // The missing return path is the reference's, not an oversight: a
+            // matching UUID with a revision above 1 falls out of the method and
+            // returns implicit zero, which is what every corpus table does. iasl
+            // warns about it (3115 and 3107) and the warning is the cost of
+            // carrying the reference's behaviour rather than a tidier guess.
+            Method (_DSM, 4, NotSerialized)  // _DSM: Device-Specific Method
+            {
+                If ((ToBuffer (Arg0) == ToUUID ("4f248f40-d5e2-499f-834c-27758ea1cd3f") /* GPIO Controller */))
+                {
+                    If ((ToInteger (Arg2) == Zero))
+                    {
+                        Return (Buffer (One)
+                        {
+                             0x03
+                        })
+                    }
+
+                    If ((ToInteger (Arg2) == One))
+                    {
+                        Return (Package (0x02)
+                        {
+                            0x07,
+                            0x06
+                        })
+                    }
+                }
+                Else
+                {
+                    Return (Buffer (One)
+                    {
+                         0x00
+                    })
                 }
             }
         }

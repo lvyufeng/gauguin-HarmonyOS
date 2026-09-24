@@ -10170,3 +10170,224 @@ audit will keep producing.
   and the restore net is unchanged. `p2-freewhy-g` is still the payload of record on
   the phone until a `p2-phywake` reading exists, and the gate before that is the same
   one as before: read the panel first, then flash.
+
+## Step 4.63 — the `_HID` is not a free choice, and the PMIC family is what proves it
+
+`tools/acpi/gauguin.asl`'s own header said the opposite of what this step measured.
+It recorded the `_HID` question as open and the choice as unconstrained, and that
+reading survived several audits because the file's five nodes were all copied from
+`Platforms/Realme/bitra`, which is the same SM7225 line — so the ids arrived correct
+without anyone having to decide them. The moment a node has to come from a *different*
+platform, the question stops being academic, and Step 4.57 had already concluded that
+the remaining P3 nodes have no SM7225 reference to copy from at all.
+
+**The `_HID` is `QCOM` plus two hex pairs, and the two pairs are not independent.**
+`tools/acpi-hid-census.py --functions` joins every reference device to the block it
+describes *by name* — `GIO0` for the GPIO controller, `SPMI` for the arbiter, whatever
+address each platform puts them at — and the low pair comes out as a per-generation
+constant:
+
+| block | 02 | 05 | 08 | 09 | **0A** | 0C | 14 | 1A | 25 | 60 |
+|---|---|---|---|---|---|---|---|---|---|---|
+| `GIO0` TLMM | 17 | 0D | 0D | 0C | **0C** | 0C | 0D | 0C | 0C | 16 |
+| `SPMI` | 16 | 0C | 0C | 0B | **0B** | 0B | 0C | 0B | 0B | — |
+| `MMU0` | 12 | 09 | 09 | 09 | **09** | 09 | 09 | 09 | 09 | — |
+| `QDSS` | 8C | 5A | 5A | 56 | **56** | 56 | 5A | 56 | 56 | — |
+| `RFS0` | 35 | 17 | 17 | 15 | **15** | 15 | 17 | 15 | 15 | — |
+
+So the *high* pair is the SoC family and the *low* pair is the block index, and the
+indices are shared by whole generations: `{09, 0A, 0C, 1A, 25}` put the arbiter at
+`0B` and the GPIO controller at `0C`, `{05, 08, 14}` use a different table, and `02`
+is off on its own. **Which means copying an id across families is not merely
+unverified — it is predictably wrong**, and the earlier header's claim that the choice
+was free was wrong in exactly the direction that costs a driver.
+
+### gauguin's family byte is `0A`, and that is measured three ways
+
+1. **The name join above.** `GIO0` is `QCOM0C` on lisa, a52sxq, renoir, Cedros,
+   Kailua, Waipio, venus, vili, lemonade and Lahaina — twelve tables — and gauguin's
+   `pinctrl@f100000` sits on `0x0F100000 + 0x300000`, which is lisa's window and
+   Lahaina's window exactly. `SPMI` is `QCOM0B` on the same families.
+2. **The driver set.** `tools/acpi-hid-census.py --drivers ~/work/woa-ref/inf-7280`
+   (112 `.inf`, 158 distinct ids, all UTF-16 with BOM) enumerates the ids for every
+   candidate family byte and reports what claims them:
+
+   | family byte | distinct index ids claimed | gauguin blocks covered |
+   |---|---|---|
+   | **0A** | **4 of 5** — `0B` qcspmi7280, `0C` qcgpio7280, `10` qci2c7280, `16` qcuart7280 | **8 of 10** |
+   | 02, 05, 08, 09, 0C, 14, 1A, 25 | 0 of 5 | 0 of 10 |
+
+   The two uncovered blocks under `0A` are `SE0` and `SE6`, both index `0E`, which no
+   `.inf` in the set names — a real gap in the SC7280/Kodiak set rather than a reason
+   to doubt the byte.
+3. **The SC7280 set's own claims.** `qcpmicgpio7280.inf` claims `QCOM0A2D` and
+   `qcgpio7280.inf` claims `QCOM0A0C`, independently of the census.
+
+### The PM01 census, which is what made the family byte readable
+
+Twenty-one of the 66 tables in `Silicium-ACPI` carry a PMIC-GPIO node, and across
+those 21 the `_HID` takes nine values whose middle byte is the SoC family and nothing
+else:
+
+```
+QCOM0269  02  caymanslm          QCOM1430  14  surya
+QCOM0530  05  mh2 cepheus nabu   QCOM1A2D  1A  lemonade venus vili
+              pipa vayu                            Lahaina
+QCOM0830  08  a52q miatoll       QCOM252D  25  alioth
+QCOM092D  09  renoir Cedros      QCOM0C2D  0C  Kailua Waipio
+QCOM0A2D  0A  lisa a52sxq
+```
+
+One block, one function, every one of the 21 with `_UID One` and the same interrupt.
+So the nine values are nine families, not nine variants of a name — and gauguin is
+`QCOM0A2D`.
+
+### What went in
+
+Three nodes, immediately before `Device (CPU0)`:
+
+| node | `_HID` | `_CID` | what it carries |
+|---|---|---|---|
+| `SPMI` | `QCOM0A0B` | `PNP0CA2` | `_CRS` window, `CONF` buffer |
+| `PMIC` | `QCOM0A2B` | `PNP0CA3` | `_DEP` on `\_SB.SPMI`, `PMCF` package |
+| `PM01` | `QCOM0A2D` | — | `_CRS` interrupt `0x201`, `_DSM` GPIO-controller UUID |
+
+Each value was checked against either gauguin's own device tree or a measured corpus
+constant, and none was inherited because a sibling table had it:
+
+- **The SPMI `_CRS`** is `Memory32Fixed (ReadWrite, 0x0C400000, 0x02800000)` — the
+  value 18 of the 20 SPMI-carrying tables give, across SM8150, SM8250, SM8350,
+  SM7150, SM7125, SM6250 and SDM7280 alike. gauguin's five arbiter regions union to
+  `[0x0C40A000, 0x0E7A0000)`, which is contained in that window; the window is coarser
+  than the block, which is normal for this corpus and is why the census joins on names
+  rather than addresses.
+- **`SPMI.CONF`** is 26 bytes, byte-identical in all 18 of those tables (Kailua's is
+  the sole variant, alongside its different window), so it is copied verbatim rather
+  than reconstructed. The window appears in it again at offset `0x12`. **What the
+  other 18 bytes configure is not established** — they are copied because 18 platform
+  tables agree, not because they are understood.
+- **`PMIC.PMCF`** is the one method with real platform content. 19 of the 22
+  SPMI-carrying tables have it and **no table calls it** — the PMIC driver calls it by
+  name — so it is not optional for a table that means to bind. Its package is a count,
+  then one entry per SPMI USID from 0 up, keyed by the USID or by `0x10` for a gap:
+
+  | family | package |
+  |---|---|
+  | lisa, a52sxq (0A) | `{0A, 0>10, 1>10, 2>10, 3>10, 4>10, 10>10 ×5}` |
+  | Lahaina, venus, lemonade | `{0B, 0..5>10, 10>10 ×4}` |
+  | renoir, Cedros (09) | `{06, 0..3>10, 10>10, 5>10}` |
+  | Kailua, Waipio (0C) | `{0D, 0..7>10, 10>10 ×4, 0C>16}` |
+
+  **Two readings fit the older tables and only one fits the newer.** On SM8150/SM8250/
+  SM7125 the values step by two — alioth's is `{04, 0>1, 2>3, 4>5, 6>7}` — which reads
+  as *⟨primary USID, companion USID⟩*, one entry per PMIC. That reading cannot explain
+  lisa's consecutive keys `0,1,2,3,4`, and it cannot explain renoir's `0x10` sitting
+  *between* keys 3 and 5. The reading that fits both is one entry per USID from 0 up,
+  gaps keyed `0x10`, with the value's meaning changing by generation — a companion on
+  the old platforms, a peripheral type on the new, where Kailua's single `0x16` at USID
+  12 shows the field is not a USID at all. gauguin's dts populates USIDs 0–6 (pm6350
+  at 0/1, pm7250b at 2/3, pm6150l at 4/5, pmk8350 at 6; the pm8008 at USID 8 is on I2C,
+  not SPMI), so the package is **lisa's with USID 5 present instead of absent**.
+- **`PM01`'s interrupt** is `0x00000201` = 513 = 512 + PDC pin 1, and gauguin's
+  `spmi@c440000` states pin 1 directly (`interrupts-extended = <0x62 0x01 0x04>`). All
+  21 PMIC-GPIO nodes in the corpus carry it, Level/ActiveHigh/Shared; Kailua and
+  Waipio add a second for a PMIC on pin 3, and gauguin has none.
+- **`PM01._DSM`** returns `Buffer (One){0x03}` at revision 0 and `Package (0x02){0x07,
+  0x06}` at revision 1, under the GPIO Controller UUID
+  `4f248f40-d5e2-499f-834c-27758ea1cd3f`. All three constants are invariant across every
+  table that carries them; four pre-0A tables return `Buffer (One){0x00}` at revision 1
+  instead. The method's missing return path for a revision above 1 is **the
+  reference's behaviour, not an oversight** — it falls out and returns implicit zero,
+  which is what every corpus table does, and `iasl` warns about it (3115, 3107). The
+  warning is the cost of carrying the reference's behaviour rather than a tidier guess,
+  and it is recorded above the node so the next reader does not "fix" it.
+
+### Four nodes were researched and deliberately left out
+
+| node | the 7280 set | why it is not here |
+|---|---|---|
+| `PMAP` | claims `QCOM0A2C` | its `_DEP` names `\_SB.ABD` and `\_SB.SCM0`, and neither is in this file — adding it would be a dangling dependency |
+| `PMBM` | **does not claim** `QCOM0A2A` | in the corpus, but nothing binds it: two more devices in Device Manager and no driver |
+| `PMGK` | **does not claim** `QCOM0A8E` | same |
+| `PML0` | claims `QCOM0AD3` | an I2C-attached PMIC — lisa's `_CRS` gives it four I2C addresses on `\_SB.I2C2` — and this file has no I2C controller |
+| `PEP0` | claims `QCOM0A17` | 13,000 lines in lisa; the power engine, and its own step |
+
+The two "does not claim" rows are the ones the census tool earns its keep on. The
+obvious move — the corpus has the node, so add the node — would have produced two
+devices that Windows reports as present and never starts.
+
+### The census tool was describing its own rule as a fact about hardware
+
+`--bind --asl` classified `PNP0CA1/2/3` as *"standard id — the OS supplies the driver"*.
+That is the tool stating its own "not a `QCOM` id, so nothing is looked up" rule as
+though it were a property of the id. PNP ids are vendor-assigned CIMs; the OS supplies
+nothing. The classification now splits three ways — `ACPI…` is the ACPI-specified set,
+`PNP…` reports *"a vendor CIM, not looked up in this set; the `_HID` beside it is what
+binds"*, and anything else is reported with whatever the set says. Pool mode is
+unchanged, and the `QCOM0497`/`QCOM24A5` unclaimed cases still exit 1.
+
+### What it cost, and the room left
+
+`iasl` compiles the source with **0 errors, 21 warnings, 18 remarks**, and the AML goes
+**1,547 → 2,017 bytes**. This is a second ASL change that moves a byte of AML, so the
+whole chain was re-run and then read back rather than assumed:
+
+| | control `p2-phywake` | new `p2-pmic` |
+|---|---|---|
+| `Mu-gauguin-silicon-gzip.img` sha256 | `09f4f1f6…a2df7` | `bb9c7185…43c50` |
+| `AcpiTables` FFS file | 2,906 B | 3,378 B (**+472**) |
+| `DSDT` in the payload | `0x54d4c8`, **1,547** B | `0x54d4c8`, **2,017** B |
+| `APIC` / `FACP` / `FACS` / `GTDT` | `0x54dad8` / `0x54ddb0` / `0x54dec8` / `0x54df0c` | `0x54dcb0` / `0x54df88` / `0x54e0a0` / `0x54e0e4` |
+| `--expect P2FreeWhy` | rc=0 | rc=0 |
+| ABL's own offline checks | pass | pass |
+| volume vs GenFv's map | 123 offsets/GUIDs, 0 mismatches | 123 offsets/GUIDs, 0 mismatches |
+
+The `DSDT` stays at the same offset because the `AcpiTables` FFS file is padded and the
+`SSDT` precedes it; only the tables *after* the `DSDT` shift. The FFS file grows by 472
+where the table grows by 470 — the same two bytes of slack both builds carry, so the
+delta is the AML and nothing else.
+
+**The readback goes one step further than a length check, because a length is not a
+table.** The `DSDT` was extracted from the built payload, disassembled, and
+recompiled — `iasl -d` then `iasl -p` — and the result is **byte-identical to the
+extracted table at 2,017 bytes**. So the AML in the payload is exactly what the source
+in this repository says, through the generator, the sync script and the build.
+
+The three nodes survive the round trip with every value intact: `QCOM0A0B`/`PNP0CA2`
+with the `0x0C400000 + 0x02800000` window and the 26-byte `CONF`; `QCOM0A2B`/`PNP0CA3`
+with `_DEP` on the arbiter and `PMCF`'s eleven-element package; `QCOM0A2D` with
+`0x00000201` and the `_DSM` pair.
+
+**`FVMAIN` is now 99% full: `7352064 used, 256 (0x100) free`.** Step 4.62 left 728
+bytes; the three nodes and their comments took 472 of them. This is the first time the
+volume has been within 256 bytes of failing, and it is worth stating plainly because
+the next node will not fit: `PEP0` alone is 13,000 lines in lisa. Two things free room
+— the `P2BRINGUP` block's removal once DXE reaches BDS, and the fact that
+`FVMAIN_COMPACT` is only 34% full, which is a different volume and not spare room for
+this one. **The capacity, not the knowledge, is now the binding constraint on the next
+ACPI node.**
+
+### The honest limits
+
+- **Nothing in this step has been exercised on hardware, and none of the three drivers
+  has run.** The nodes are correct with respect to gauguin's device tree and to the
+  driver set's own id claims; whether `qcspmi7280` binds and enumerates pm6350/pm7250b/
+  pm6150l/pmk8350 is a question only the device can answer, and the device is not
+  connected.
+- **What `0x10` means in `PMCF`, and what the 18 unexplained `CONF` bytes configure, are
+  both unestablished.** They are carried because 12 and 18 platform tables respectively
+  agree on them — evidence, not understanding. If the PMIC stack misbehaves, these two
+  are the first places to look, and the way to look is to diff against a *shipping*
+  Windows table for a 0A-family device rather than against the corpus again.
+- **The family byte is established for the blocks the census can index.** TSENS0 and
+  TSENS1 have no index at all in this corpus — no platform table declares a thermal
+  sensor — so `0A` says nothing about them, and Step 4.57's finding that the thermal
+  zone needs a name no SM7225 reference carries still stands.
+- **`QCOM0A0E` (`SE0`, the touchscreen's SPI bus) and `QCOM0A0F`/`QCOM0A18` are not in
+  the 7280 set.** The family byte is right for them; the driver is not in this set, so
+  the touchscreen and the IR blaster are not reachable through `inf-7280` whatever this
+  file declares.
+- **The device was not touched.** Nothing was written to `boot`, nothing was flashed,
+  and the restore net is unchanged. `p2-variants` is still the payload of record on the
+  phone, `p2-phywake` has never been read, and the gate before either `p2-phywake` or
+  `p2-pmic` goes on is the same one as before: **read the panel first, then flash.**

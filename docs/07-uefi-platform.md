@@ -2513,8 +2513,9 @@ author is small: the CPU devices (`ACPI0007`, `_UID` 0–7, which
 `dp_hs_phy_irq` / `dm_hs_phy_irq` / `ss_phy_irq` GSIs from gauguin's `PM7250B`, and
 the header's `OEM Table ID`. The UFS and USB blocks are copied from bitra with their
 numbers checked against the device tree, not assumed. *(All of those are now in the
-file; the three wake GSIs were the last, and the note directly below is how they
-were settled.)*
+file; the three wake GSIs were the last of them, on 2026-09-25, and the note directly
+below is how they were settled. The PMIC family — `SPMI`, `PMIC` and `PM01` — followed
+in Step 4.63, and the `_HID`-family section further down is what made it possible.)*
 
 ### USB PHY wake interrupts
 
@@ -2575,7 +2576,50 @@ earlier audit of this file even though the table above lists it. It is right:
 gauguin's own dts gives `pwr_event` as SPI 130 → INTID 162, which is bitra's *other*
 `A2`-shaped hole filled from this device rather than inherited. It stays.
 
-**What exists and what is missing, so the next session starts from the right
+### The `_HID` is patterned by SoC family, and that retires the "names are free" reading
+
+**Every earlier note in this file about the `_HID` question treated the choice as open.
+It is not, and Step 4.63 measured the pattern.** A Qualcomm `_HID` is `QCOM` plus two
+hex pairs, and the pairs are not independent: the **low** pair is a block index shared
+by a whole generation of the table generator, and the **high** pair is the SoC family.
+Joining by *name* rather than by address — because a reference `_CRS` is often much
+coarser than the block it declares, which is the correction this file already records
+about the address join — `tools/acpi-hid-census.py --functions` gives five blocks whose
+index is constant across families:
+
+| block | 02 | 05 | 08 | 09 | **0A** | 0C | 14 | 1A | 25 | 60 |
+|---|---|---|---|---|---|---|---|---|---|---|
+| `GIO0` (TLMM) | 17 | 0D | 0D | 0C | **0C** | 0C | 0D | 0C | 0C | 16 |
+| `SPMI` | 16 | 0C | 0C | 0B | **0B** | 0B | 0C | 0B | 0B | — |
+| `MMU0` | 12 | 09 | 09 | 09 | **09** | 09 | 09 | 09 | 09 | — |
+| `QDSS` | 8C | 5A | 5A | 56 | **56** | 56 | 5A | 56 | 56 | — |
+| `RFS0` | 35 | 17 | 17 | 15 | **15** | 15 | 17 | 15 | 15 | — |
+
+`{09, 0A, 0C, 1A, 25}` are one generation — arbiter `0B`, GPIO controller `0C`, MMU
+`09`, QDSS `56`, RFS `15` — and `{05, 08, 14}` are another. **So copying an id from a
+table on another family is predictably wrong, and the failure is silent:** a device node
+whose `_HID` no driver claims does not warn, fail or fall back, it is simply absent
+from Device Manager. That is worse than a missing node, which at least reads as
+missing.
+
+The family byte for gauguin is **`0A`**, and it is measured three ways, by three
+sources that do not share a method:
+
+| source | what it says |
+|---|---|
+| the name join above | `GIO0` = `QCOM0C` and `SPMI` = `QCOM0B` on lisa, a52sxq, renoir, Cedros, Kailua, Waipio, venus, vili, lemonade and Lahaina — twelve tables — and gauguin's `pinctrl@f100000` is `0x0F100000 + 0x300000`, which is lisa's window exactly |
+| the 21 PMIC-GPIO nodes in the 66-table corpus | nine distinct `_HID`s whose middle byte is a family and nothing else — `QCOM0269`/02, `QCOM0530`/05, `QCOM0830`/08, `QCOM092D`/09, `QCOM0A2D`/**0A**, `QCOM0C2D`/0C, `QCOM1430`/14, `QCOM1A2D`/1A, `QCOM252D`/25. gauguin is `QCOM0A2D` |
+| the SC7280/Kodiak Windows driver set | 112 `.inf`, 158 ids. Under `0A` it claims 4 of the 5 distinct index ids — `0B` qcspmi7280, `0C` qcgpio7280, `10` qci2c7280, `16` qcuart7280 — covering **8 of gauguin's 10 indexable blocks**. Under each of the other eight candidate bytes it claims **0 of 5**, covering 0 of 10 |
+
+The two blocks `0A` does not cover are `SE0` and `SE6` (both index `0E`), which no
+`.inf` in the set names — a real gap in that set, not a doubt about the byte. And the
+set states `QCOM0A2D` and `QCOM0A0C` itself in `qcpmicgpio7280.inf` and
+`qcgpio7280.inf`, independently of anything the census computed.
+
+**The outstanding TLMM node is `QCOM0A0C`.** That is the one decision this settles
+that was still open in this file's P3 list, and it was previously held to be a choice.
+
+### What exists and what is missing, so the next session starts from the right
 place.** Present: the table sets above, `iasl` at `/usr/bin/iasl`, the ASL source
 for the CPU skeleton at `Silicon/Qualcomm/Moorea/DSDT_Minimal.asl`, and 20 platform
 `AcpiTables.inf` files to copy the shape from — all of them
@@ -2667,6 +2711,28 @@ for the CPU skeleton at `Silicon/Qualcomm/Moorea/DSDT_Minimal.asl`, and 20 platf
 > the same offset — and the control and this build differ in exactly that one place,
 > which is what makes the pair a comparison rather than two builds.
 >
+> **A fourth build moved them again on 2026-09-25 05:48, by much more.** Step 4.63
+> adds the PMIC family — `SPMI`, `PMIC` and `PM01` — and the DSDT goes **1,547 →
+> 2,017 bytes**. `DSDT` is *still* at `0x54d4c8` (the `AcpiTables` FFS file is padded
+> and the `SSDT` precedes it), and the tables after it shift by 470 + 2 pad: `APIC`
+> `0x54dcb0`, `FACP` `0x54df88`, `FACS` `0x54e0a0`, `GTDT` `0x54e0e4`. Read back out
+> of the payload (`work/out/p2-pmic/Mu-gauguin-silicon-gzip.img`), the `AcpiTables`
+> FFS file is 3,378 bytes against the previous build's 2,906.
+>
+> **And this time the table was disassembled and recompiled, not just measured.**
+> Lengths are not tables; `iasl -d` on the extracted `DSDT` followed by `iasl -p` on
+> the result produces a **byte-identical 2,017-byte** table, so the AML in the payload
+> is exactly what `tools/acpi/gauguin.asl` says, through the generator, the sync script
+> and the build. The three new nodes survive with every value intact. That is now the
+> standard for an ASL change in this port: a length check says a table is there, a
+> round trip says it is the right table.
+>
+> **`FVMAIN` after this step is `7352064 used, 256 (0x100) free` of 7,352,320 — 99%
+> full.** Step 4.62 had left 728 bytes and the three nodes took 472 of them. The
+> `FVMAIN_COMPACT` figure (34% full) is a different volume and is not spare room for
+> this one. So the binding constraint on the next ACPI node is capacity, not knowledge:
+> deleting the `P2BRINGUP` block once DXE reaches BDS is what frees the space back.
+>
 > `FACP` and `FACS` do not checksum in *any* of these builds, and that is the
 > un-patched state rather than a fault: `AcpiTableDxe` installs them at runtime and
 > writes the `DSDT`/`FACS` addresses into `FACP` on the way (all four pointer fields
@@ -2711,3 +2777,4 @@ table above is the corrected one.
 | set `Platforms/Realme/bitra` uses | Kona — matches nothing |
 | DSDT | authored for gauguin, but its UFS and USB values are verified equal to bitra's |
 | next step | **done as of 2026-09-25** — `gauguin/AcpiTables.inf` and the DSDT exist, are wired into `gauguin.fdf`/`gauguin.dsc`, and are in the built payload with every GICC field read back correct (see the superseded note above). What remains for P3 is USB host and input, not ACPI |
+| where ACPI got to | the DSDT now carries UFS, USB (with the PHY wake lines), the eight CPUs **and the PMIC family** — `SPMI`, `PMIC` and `PM01`, Step 4.63 — and the AML is **2,017 bytes** in the `work/out/p2-pmic/` payload. `FVMAIN` is 99% full at 256 bytes free, so the next node needs room freed first |
