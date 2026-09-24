@@ -3392,7 +3392,7 @@ readable together.
 | line | fields, in the order they print | what it decides |
 |---|---|---|
 | `P2 BIN init=` | `mMemoryTypeInformationInitialized` | whether the memory-type-information HOB arrived at all. `0` means `AllocateMemoryTypeInformationBins` never ran, the 450-page carve step 4.18 derived from `SiliciumPkg.dsc.inc` does not exist on this device, and the bin-boundary candidate is dead — the failure is then about the default bin and alignment alone |
-| `P2 BIN …hob_rc=/hob_rd=` | `gMemoryTypeInformation[…].NumberOfPages` | the 150 and 300 **as the device's own HOB carries them**, not as the DSC file declares them. This is the check on the host-side derivation: `rc=150 rd=300` confirms it, anything else and every page count in step 4.18 describes a different machine |
+| `P2 BIN …hob_rc=/hob_rd=` | `gMemoryTypeInformation[…].NumberOfPages` | **dead fields — read `0` on every boot, see step 4.27.** They index the array by type, but `PopulateMemoryTypeInformation` fills it positionally, so `hob_rc` lands on the HOB's `EfiMaxMemoryType` terminator and `hob_rd` past the copy. They were meant to be the check on the host-side derivation (`rc=150 rd=300`); that check is now `used=../..` on the two lines below, and `init=` above |
 | `P2 BIN rc=` | `BaseAddress..MaximumAddress used=Current/Number` | the `EfiRuntimeServicesCode` bin's window and fill. `used==total` says the type's own bin was full and every later request fell through the ladder — which is the mechanism step 4.18 predicts; a `used` well under 150 says the requests never got into their own bin |
 | `P2 BIN rd=` | same, for `EfiRuntimeServicesData` | the 300-page window against the 160 pages of runtime pools |
 | `P2 BIN def=` | `mDefaultBaseAddress..mDefaultMaximumAddress` | where the fallthrough rung starts. `AllocateMemoryTypeInformationBins` drops `*DefaultMaximumAddress` to `BaseAddress - 1` of the carved block, so this pair is the 450-page carve seen from below, and `def=` above `rc=`/`rd=` would mean the carve did not happen in that order |
@@ -3428,8 +3428,9 @@ DxeCore instead, and the reason is that it costs one patched file rather than tw
 the two bins sit at the top of the heap and `def=` is the boundary the carve drops
 below them, so `rc=`, `rd=` and `def=` locate the carved block in the address space
 without leaving the module that is already patched. If the read comes back with
-`init=1`, non-zero windows below `def=`, and `hob_rc=150 hob_rd=300`, then the
-host-side derivation is confirmed on the device and the `Gcd.c` line is not needed.
+`init=1`, non-zero windows below `def=`, and `used=../..` filling them from the top,
+then the host-side derivation is confirmed on the device and the `Gcd.c` line is not
+needed. (`hob_rc=/hob_rd=` used to be part of that list and cannot be — step 4.27.)
 The one outcome that would make it necessary is a `BIN` block that is all zeros
 while the `RETRY` line still fails — which would say the memory-type-information
 mechanism is not running here and the bins are a story about a different platform.
@@ -3501,11 +3502,12 @@ order of importance", not "read the screen top to bottom":
    given there: it is the request `PdcDxe` failed and `ShmBridgeDxe` succeeded with,
    and it is the only one of the six that is literally that request. Printed last,
    after the `P2 BIN` block.
-3. **The four `P2 BIN` lines** — `init=`, `hob_rc=`/`hob_rd=` against the derived
-   150/300, and `rc=`/`rd=`/`def=` against each other. `init=0` is the one reading
-   that would invalidate the whole bin story; `init=1` is expected, because the only
-   call site (`Page.c:585`, inside `CoreAddMemoryDescriptor`) passes the real
-   `&mMemoryTypeInformationInitialized` and runs at DXE init, long before dispatch.
+3. **The four `P2 BIN` lines** — `init=`, then `rc=`/`rd=`/`def=` against each other.
+   `hob_rc=`/`hob_rd=` are on the first line and read `0` structurally (step 4.27), so
+   ignore them. `init=0` is the one reading that would invalidate the whole bin story;
+   `init=1` is expected, because the only call site (`Page.c:585`, inside
+   `CoreAddMemoryDescriptor`) passes the real `&mMemoryTypeInformationInitialized` and
+   runs at DXE init, long before dispatch.
 4. Then the list from step 4.18: **`P2 FREE largest=`**, which pairs with `bs9`;
    `P2 DIAG`'s 27 records; `P2 APRI`'s `bytes=`/`entries=`/`sum=` against
    `P2 STATS apriori=46/70` or `46/47`; `P2 WHY`, still never read; the five
@@ -4508,7 +4510,7 @@ source that licenses it.
 emits five types, verbatim: `EfiACPIReclaimMemory`, `EfiACPIMemoryNVS`,
 `EfiReservedMemoryType`, `EfiRuntimeServicesData`, `EfiRuntimeServicesCode`, from the
 `PcdMemoryTypeEfi*` set. In `SiliciumPkg.dsc.inc:45-53` those are 0, 0, 0, 300 and 150,
-so `RequiredSize` is **450 pages, 1.84 MiB** — and `PcdMemoryTypeEfiBootServicesCode|1000`
+so `RequiredSize` is **450 pages, 1.76 MiB** — and `PcdMemoryTypeEfiBootServicesCode|1000`
 and `…BootServicesData|800` two lines below feed nothing, as step 4.23 said.
 
 `AllocateMemoryTypeInformationBins` (`Mem/MemoryBin.c:495-560`) then does something the
@@ -4545,6 +4547,77 @@ worth reading precisely because of what each alternative would mean:
 | corrects | the bin model: 450 pages of `RequiredSize` are allocated, then freed, and survive only as address windows — no bin consumes a page |
 | predicts | `bs9=Success`, because 1562 pages of demand cannot exhaust 9056 |
 | cannot answer | whether the core actually held all 9056 of them at the moment `PdcDxe` ran — that is `P2 FREE largest=` and `bs9=` on the panel, and nothing on the host |
+
+
+## Step 4.27 — Two of the four `P2 BIN` fields cannot carry a reading, and one of them I asked for
+
+Step 4.19 put four facts on three `P2 BIN` lines and step 4.24 told the reader to
+expect `init=1`. Reading the same two fields back against the array they index
+shows that half of them are structurally zero and always have been:
+
+```
+"P2 BIN init=%d hob_rc=%d hob_rd=%d\n"
+```
+
+`hob_rc` and `hob_rd` are `gMemoryTypeInformation[EfiRuntimeServicesCode]` and
+`gMemoryTypeInformation[EfiRuntimeServicesData]` — indexed **by type**. That read
+is correct against the array's *initialiser*, which `Mem/Page.c:59-77` writes by
+type (`arr[i].Type == i` at all 17 positions) and which `DxeMain.h:267` declares as
+`[EfiMaxMemoryType + 1]`. It is wrong against the array's *contents*, because two
+other files write it in a different vocabulary:
+
+- `BuildMemoryTypeInformationHob` (`PrePiHobLib/Hob.c:884-905`) fills a six-entry
+  HOB **by position**, in its own order: `ACPIReclaimMemory, ACPIMemoryNVS,
+  ReservedMemoryType, RuntimeServicesData, RuntimeServicesCode`, then the
+  `EfiMaxMemoryType` terminator.
+- `PopulateMemoryTypeInformation` (`MemoryBin.c:145`) moves it with a plain
+  `CopyMem (MemoryTypeInformation, EfiMemoryTypeInformation, DataSize)` — 48 bytes,
+  positional, with no merge keyed on `.Type`.
+
+So position 5 — `EfiRuntimeServicesCode`'s ordinal, which is 5 — receives the
+**HOB's terminator** `{ EfiMaxMemoryType, 0 }`, and position 6 is past the 48-byte
+copy and keeps the initialiser's 0. `hob_rc=0 hob_rd=0` on every boot, with or
+without the HOB.
+
+**Why the bins are still right, and why both facts coexist.** The loops walk
+`.Type` and stop at `EfiMaxMemoryType`:
+
+```c
+for (Index = 0; MemoryTypeInformation[Index].Type != EfiMaxMemoryType; Index++) {
+  Type = (EFI_MEMORY_TYPE)(MemoryTypeInformation[Index].Type);
+  ...
+  MemoryTypeStatistics[Type].BaseAddress = ...;
+```
+
+so they read the five HOB entries wherever they landed and assign into
+`mMemoryTypeStatistics`, which *is* indexed by type. `P2 BIN rc=.. used=../..` reads
+that array and is sound; only the two fields that index `gMemoryTypeInformation`
+directly are dead. The same walk, run on the host, prints the two nonzero entries —
+`RuntimeServicesData(300)` and `RuntimeServicesCode(150)` — for
+**`RequiredSize` = 450 pages**, which is the figure step 4.26 derived independently
+from the PCDs. Two routes, one number.
+
+**What to do about it: nothing on the phone.** The fields to read are `init=`, which
+carries on its own whether a producer ran, and `used=../..`, which carries what
+`hob_rc`/`hob_rd` were meant to. Fixing the two dead fields means patching
+`P2Bins` to walk `.Type` instead of indexing — worth doing in the next build that
+happens for another reason, not worth a flash of its own, because the information is
+already on the line below.
+
+`tools/bin-field-check.py` is the instrument and it reads the four sources rather
+than restating them: it parses the enum out of `UefiMultiPhase.h` for the ordinals,
+the initialiser out of `Page.c`, the `Info[]` assignments out of `Hob.c` paired with
+their PCDs out of `SiliciumPkg.dsc.inc`, and applies the positional copy. Run it when
+a probe field looks wrong; it answers "can this field carry information at all"
+before any time is spent reading a panel for it.
+
+| | |
+|---|---|
+| finds | `hob_rc` reads `gMemoryTypeInformation[5]`, which `PopulateMemoryTypeInformation`'s positional `CopyMem` overwrites with the HOB's terminator; `hob_rd` reads `[6]`, past the copy. Both always 0 |
+| mechanism | the array is initialised **by type** (`Page.c:59-77`, `arr[i].Type == i`) and overwritten **by position** (`MemoryBin.c:145`); index-by-type reads are only valid against the former |
+| does not contradict | the bins: the loops walk `.Type` and assign into `mMemoryTypeStatistics`, which is indexed by type, so `init=` and `used=../..` are sound and the carve is 450 pages — the same `RequiredSize` step 4.26 got from the PCDs |
+| instrument | `tools/bin-field-check.py` — parses the ordinals, the initialiser, the HOB and the PCDs, and applies the copy; prints what each field resolves to |
+| action | read `init=` and `used=../..`; fix `P2Bins` to walk `.Type` only in a build that is happening anyway |
 
 
 ## Step 5 — Leave it bootable
