@@ -18,11 +18,11 @@ answers, and it answers it the same way for a payload and for a readback of
 
 The three images are a ladder, and the ladder is the point:
 
-    P2 FREE (digest)   P2 SEQ   P2 WHY   P2 ERR   P2 APRI   P2 BIN   P2 RETRY   P2 KEY   P2 TICK
-    -----------------  ------   ------   ------   -------   ------   --------   ------   -------
-    boot-now-0923        yes      yes      no       no        no       no         no       no
-    p2-4.20              yes      yes     yes      yes       yes      yes        yes       no
-    p2-variants          yes      yes     yes      yes       yes      yes        yes      yes
+    P2 FREE (digest)   P2 SEQ   P2 WHY   P2 ERR   P2 APRI   P2 BIN   P2 RETRY   P2 KEY   P2 TICK   P2 FW
+    -----------------  ------   ------   ------   -------   ------   --------   ------   -------   -----
+    boot-now-0923        yes      yes      no       no        no       no         no       no       no
+    p2-4.20              yes      yes     yes      yes       yes      yes        yes       no       no
+    p2-variants          yes      yes     yes      yes       yes      yes        yes      yes       no
 
 **`P2 WHY` and `P2 ERR` are why this ladder has nine rungs and not six, and they are
 the two rows that decide whether a reading is even possible.** `boot-now-0923`
@@ -41,6 +41,28 @@ answer to "did the batch fail for one reason or twenty-seven". So:
     `boot-now-0923`, and no amount of reading that screen can produce the status.**
     `--expect P2ErrRow` is the gate that makes the next flash worth making.
 
+**`P2 FW` is the tenth rung and the only one that is not Dispatcher.c's.** Nine of the
+ten instruments print from the digest, which runs *after* the batch, so every one of
+them describes the heap the run left behind. The question they were built to answer -
+why a request byte for byte identical to one that succeeded a few milliseconds later
+was refused - is about the heap *at the failure*, and the only place that state exists
+is inside `FindFreePages`, at the instruction where the allocator gives up
+(`Mem/Page.c`: `if (!PromoteMemoryResource ())`, the one place a failure becomes
+terminal). So the record is taken there and printed by the digest, as two lines and
+never more - rows are the scarce thing, and a third would cost the panel its second
+copy. `P2 FWTY` is the terminal failures counted by memory type, which falsifies
+cheaply the belief that all 27 asked for `EfiBootServicesCode`; `n` is the whole
+count, so `n=0` is no terminal failure at all and `n` above zero with no second
+line is terminal failures that were all smaller than four pages. `P2 FWHY` is the
+first image-sized refusal and the map it was refused in: `t=`/`np=`/`a=` the
+request, `big=` the largest free run the same search would have accepted, `raw=`
+the largest run before the alignment clip, `free=` every conventional page left,
+`c=` the descriptor count. `big` against the request decides whether a run existed
+at all; `free` against `big` separates a full heap from a fragmented one; `raw`
+against `big` says whether the alignment clip was the cost. **`n=0` in `P2 FWTY`,
+beside 27 recorded `L`s, is also an answer** - it puts the failure outside the page
+allocator entirely, in `CoreLoadPeImage`'s own `AllocateRuntimePool`.
+
 **`P2 KEY` is what makes the bottom row of the panel readable, and it is in exactly
 one of the three.** `P2Digest` calls `P2Bins()` and then `P2Key()` last
 (`Dispatcher.c:2376`, `:2382`, with the comment at `:2378` saying so), and `P2Key`
@@ -58,7 +80,7 @@ Which gives the categorical discriminator this tool was written for:
     one.** On the newest build that row is followed by `P2Key` with nothing in
     between, so it cannot be the last row of a run that got that far.
 
-So the markers are read out of `Dispatcher.c` rather than typed here. That is not
+So the markers are read out of the sources rather than typed here. That is not
 tidiness: the first draft of this tool carried a hand-typed `err=%a at=%d` for
 `P2Key`, the real format is `err=%r at=%d` (`:271`), and the tool therefore
 reported `P2Key` absent from an image that has it. A tool whose job is to tell
@@ -92,9 +114,10 @@ import subprocess
 import sys
 
 ROOT = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
-DISPATCHER = os.path.join(
-    ROOT, "work", "uefi", "Mu-Silicium", "Mu_Basecore",
-    "MdeModulePkg", "Core", "Dxe", "Dispatcher", "Dispatcher.c")
+DXE = os.path.join(ROOT, "work", "uefi", "Mu-Silicium", "Mu_Basecore",
+                   "MdeModulePkg", "Core", "Dxe")
+DISPATCHER = os.path.join(DXE, "Dispatcher", "Dispatcher.c")
+PAGE = os.path.join(DXE, "Mem", "Page.c")
 BY_NAME = "/dev/block/by-name/boot"
 READ_SIZE = 4 << 20
 
@@ -110,31 +133,46 @@ def load_sibling(name, filename):
     return mod
 
 
-# An instrument is (the function that owns the line, a token that picks it out of
-# that function). Both halves are resolved against `Dispatcher.c` at run time, so
-# renaming a function or editing a format string breaks this loudly instead of
-# quietly reporting the wrong thing. `note` is what the instrument lets a reader
-# see, which is the reason anyone cares whether it is present.
+# An instrument is (name, source file, the function that owns the lines, a token
+# that picks them out of that function, what it lets a reader see). Every part is
+# resolved against the sources at run time, so renaming a function or editing a
+# format string breaks this loudly instead of quietly reporting the wrong thing.
+#
+# The source column is why `P2 FW` is a different kind of entry from the other nine:
+# nine of the ten instruments are Dispatcher.c's, and `P2FreeWhy` is Mem/Page.c's,
+# because the record it prints has to be taken where the free map is - inside
+# FindFreePages, at the moment an allocation becomes terminal - and that state
+# cannot be recovered from anywhere else.
 INSTRUMENTS = [
-    ("P2Digest", "P2Digest", "P2 FREE largest=",
+    ("P2FreeWhy", PAGE, "P2FreeWhyReport", "P2 FW",
+     "the free map at the moment a page allocation became terminal: the request, "
+     "the largest run the search would have accepted, and how much of the map is "
+     "still conventional"),
+    ("P2Digest", DISPATCHER, "P2Digest", "P2 FREE largest=",
      "the per-record census: P2 DIAG, P2 ERR, P2 WALK, and the largest allocation"),
-    ("P2Apri",   "P2Digest", "P2 APRI",
+    ("P2Apri",   DISPATCHER, "P2Digest", "P2 APRI",
      "what the Apriori file read as, and which entries matched nothing"),
-    ("P2Seq",    "P2Digest", "P2 SEQ [",
+    ("P2Seq",    DISPATCHER, "P2Digest", "P2 SEQ [",
      "the batch as one character per entry, in dispatch order"),
-    ("P2Why",    "P2Digest", "P2 WHY [",
+    ("P2Why",    DISPATCHER, "P2Digest", "P2 WHY [",
      "the same positions as status classes - the row that has never been read"),
-    ("P2ErrRow", "P2Digest", "P2 ERR ",
+    ("P2ErrRow", DISPATCHER, "P2Digest", "P2 ERR ",
      "the failures grouped by status and counted, in words - the readable spelling"),
-    ("P2Bins",   "P2Bins",   "P2 BIN init=",
+    ("P2Bins",   DISPATCHER, "P2Bins",   "P2 BIN init=",
      "the runtime bins' windows and the memory type information HOB"),
-    ("P2Retry",  "P2Bins",   "P2 RETRY",
+    ("P2Retry",  DISPATCHER, "P2Bins",   "P2 RETRY",
      "the six re-issued allocations, bs9= and bs16= among them"),
-    ("P2Key",    "P2Key",    "KEY ",
+    ("P2Key",    DISPATCHER, "P2Key",    "KEY ",
      "the one-line reading, printed last - the bottom row of the panel"),
-    ("P2Tick",   "P2Tick",   "K %d %c%c",
+    ("P2Tick",   DISPATCHER, "P2Tick",   "K %d %c%c",
      "one row per attempted dispatch, so a run that stops inside the loop says where"),
 ]
+
+# The ladder, in the order the rows appear on the panel. Three payloads of record
+# were built before `P2FreeWhy` existed, so the column is 'no' for all three and the
+# 10-rung rung is unbuilt until the next one - which is the point of `--expect`.
+# `P2 FW` is what a build has to carry before the free map at the failure is worth
+# a flash: see docs/08-device-session.md, step 4.18 onward.
 
 
 def literal_unescape(raw):
@@ -194,7 +232,7 @@ def debug_literals(body):
 
 
 def resolve_markers():
-    """[(name, function, [marker bytes], note)] - or exit, naming what broke.
+    """[(name, source, function, [marker bytes], note)] - or exit, naming what broke.
 
     An instrument is a *group* of format strings, and it counts as present only
     when all of them are in the image. That is not a convenience: a `DEBUG` call
@@ -205,18 +243,28 @@ def resolve_markers():
     stronger test and the honest one: `P2 APRI` alone is six literals, an if/else
     on each of three counts, and finding one of the six says nothing about whether
     the census is there.
+
+    Each instrument names its own source file, and a source is read once however
+    many instruments live in it. That is the whole reason this is a loop over
+    sources rather than the one `open` it used to be: `P2FreeWhy` is Mem/Page.c's,
+    and a tool that resolved every marker out of the Dispatcher would report it
+    absent from an image that has it - the same failure mode as the hand-typed
+    format string this docstring's caller records.
     """
-    try:
-        text = open(DISPATCHER, encoding="utf-8", errors="replace").read()
-    except OSError as exc:
-        sys.exit(f"probe-fingerprint: cannot read the Dispatcher: {exc}")
+    texts = {}
+    for path in {src for _n, src, _f, _t, _no in INSTRUMENTS}:
+        try:
+            texts[path] = open(path, encoding="utf-8", errors="replace").read()
+        except OSError as exc:
+            sys.exit(f"probe-fingerprint: cannot read"
+                     f" {os.path.relpath(path, ROOT)}: {exc}")
 
     resolved = []
-    for name, func, token, note in INSTRUMENTS:
-        body = function_body(text, func)
+    for name, src, func, token, note in INSTRUMENTS:
+        body = function_body(texts[src], func)
         if body is None:
             sys.exit(f"probe-fingerprint: {func}() is no longer defined in"
-                     f" {os.path.relpath(DISPATCHER, ROOT)} - the instrument list"
+                     f" {os.path.relpath(src, ROOT)} - the instrument list"
                      f" needs revisiting, not patching")
         token_b = token.encode()
         hits = [lit for lit in debug_literals(body) if token_b in lit]
@@ -224,7 +272,7 @@ def resolve_markers():
             sys.exit(f"probe-fingerprint: no line in {func}() contains {token!r}."
                      f" The source moved; the marker is stale, and a stale marker"
                      f" reports an instrument absent that is present.")
-        resolved.append((name, func, hits, note))
+        resolved.append((name, src, func, hits, note))
     return resolved
 
 
@@ -255,14 +303,14 @@ def instruments_in(img, markers, verbose=True):
                                  f" decompressible FVMAIN - nothing to fingerprint")
 
     where, found = {}, set()
-    for name, _func, marker, _note in markers:
+    for name, _src, _func, marker, _note in markers:
         for (g, _t, s, nm, _st), o in zip(files, offs):
             body = inner[o:o + s]
             if all(lit in body for lit in marker):
                 found.add(name)
                 where[name] = f"{nm or g} ({len(marker)} line{'s' if len(marker) > 1 else ''})"
                 break
-    missing = {n for n, _f, _m, _n2 in markers} - found
+    missing = {n for n, _s, _f, _m, _n2 in markers} - found
     return found, missing, where, None
 
 
@@ -312,12 +360,14 @@ def main():
     markers = resolve_markers()
 
     if args.markers:
-        print(f"markers read from {os.path.relpath(DISPATCHER, ROOT)}\n")
-        for name, func, marker, note in markers:
-            print(f"  {name:9s} {func}()  {len(marker)} line"
+        print("markers read from the sources under"
+              f" {os.path.relpath(DXE, ROOT)}\n")
+        for name, src, func, marker, note in markers:
+            print(f"  {name:10s} {os.path.relpath(src, DXE)}  {func}()")
+            print(f"  {'':10s} {len(marker)} line"
                   f"{'s' if len(marker) > 1 else ' '}  {marker[0]!r}"
                   f"{f' (+{len(marker) - 1} more)' if len(marker) > 1 else ''}")
-            print(f"  {'':9s} {note}")
+            print(f"  {'':10s} {note}")
         return 0
 
     images = list(args.images)
@@ -334,7 +384,7 @@ def main():
         sys.exit("probe-fingerprint: give an image, or --read to take one off the"
                  " phone. `--markers` prints what the names mean.")
 
-    names = [n for n, _f, _m, _n in markers]
+    names = [n for n, _s, _f, _m, _n in markers]
     bad = 0
     for img in images:
         if not os.path.isfile(img):
@@ -352,9 +402,9 @@ def main():
             continue
         for name in names:
             if name in found:
-                print(f"  {name:9s} present   in {where[name]}")
+                print(f"  {name:10s} present   in {where[name]}")
             else:
-                print(f"  {name:9s} ABSENT")
+                print(f"  {name:10s} ABSENT")
         absent = [n for n in names if n in missing]
         if absent:
             print(f"  -> carries {len(found)}/{len(names)}; missing: {', '.join(absent)}")

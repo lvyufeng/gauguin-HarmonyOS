@@ -31,12 +31,22 @@
 #
 # Usage:  tools/build-p2-payloads.sh
 #         FD=... BOOTSHIM=... DTBO=... to override the inputs.
+#         P2DIR=... to write somewhere other than work/out/p2-variants.
+#
+# `P2DIR` exists because of a rule this repo keeps relearning: the payload on the
+# phone is the *control*, and a build that overwrites it destroys the comparison it
+# exists for - `tools/restore-stock-boot.sh` pins a sha256 for exactly this reason,
+# and `identify-boot.py` reconciles archived readbacks against the images they were
+# taken from. So a new probe gets its own directory and the old payload stays where
+# it is until there is a reading of it.
+#
+#     P2DIR=$ROOT/work/out/p2-freewhy tools/build-p2-payloads.sh
 #
 set -eu
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 OUT="$ROOT/work/out"
-P2="$OUT/p2-variants"
+P2="${P2DIR:-$OUT/p2-variants}"
 MK="$ROOT/tools/make_boot_image.py"
 
 MU="${MU:-$ROOT/work/uefi/Mu-Silicium}"

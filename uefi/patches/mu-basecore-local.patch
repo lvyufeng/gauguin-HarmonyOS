@@ -329,10 +329,10 @@ index 39668123..8405bc31 100644
  #define  USB_INTERFACE_SIGNATURE  SIGNATURE_32 ('U', 'S', 'B', 'I')
  #define  USB_BUS_SIGNATURE        SIGNATURE_32 ('U', 'S', 'B', 'B')
 diff --git a/MdeModulePkg/Core/Dxe/Dispatcher/Dispatcher.c b/MdeModulePkg/Core/Dxe/Dispatcher/Dispatcher.c
-index d7c7147e..11e72604 100644
+index d7c7147e..fab16910 100644
 --- a/MdeModulePkg/Core/Dxe/Dispatcher/Dispatcher.c
 +++ b/MdeModulePkg/Core/Dxe/Dispatcher/Dispatcher.c
-@@ -60,6 +60,571 @@ EFI_LOCK  mDispatcherLock = EFI_INITIALIZE_LOCK_VARIABLE (TPL_HIGH_LEVEL);
+@@ -60,6 +60,589 @@ EFI_LOCK  mDispatcherLock = EFI_INITIALIZE_LOCK_VARIABLE (TPL_HIGH_LEVEL);
  //
  BOOLEAN  gDispatcherRunning = FALSE;
  
@@ -605,6 +605,16 @@ index d7c7147e..11e72604 100644
 +// photographed the wrong one. `hob_rc`/`hob_rd` check the 150 and 300 against the
 +// device's own HOB rather than against the DSC file they were derived from.
 +//
++// The two `P2 FW` lines above all of this are Mem/Page.c's, taken inside
++// FindFreePages at the moment an allocation became terminal, and they are the half
++// of the question P2 RETRY structurally cannot reach: every probe here runs after
++// the run, so it measures the heap the run left behind, while `P2 FWHY`'s `big=` is
++// the largest free run that existed when the first image-sized request was refused.
++// If P2 RETRY says Success and P2 FWHY says big=15, both lines are right and it is
++// the run's own state at that instant that has to be explained; if P2 FWHY says the
++// run was there (big >= np) then the census and CoreFindFreePagesI disagree and the
++// disagreement is the finding.
++//
 +STATIC BOOLEAN  mP2RetryDone = FALSE;
 +STATIC EFI_STATUS  mP2Rc16;
 +STATIC EFI_STATUS  mP2Rc48;
@@ -675,6 +685,14 @@ index d7c7147e..11e72604 100644
 +  VOID
 +  )
 +{
++  //
++  // P2BRINGUP: first, before any of the probes below has had a chance to fail an
++  // allocation of its own. The record is a snapshot of the run - Mem/Page.c takes it
++  // at the moment the allocator gives up - but the tally that comes with it is live,
++  // so P2Retry's six requests have to happen after the line that counts them.
++  //
++  P2FreeWhyReport ();
++
 +  P2Retry ();
 +
 +  DEBUG ((
@@ -904,7 +922,7 @@ index d7c7147e..11e72604 100644
  //
  // Module globals to manage the FwVol registration notification event
  //
-@@ -483,11 +1048,19 @@ CoreDispatcher (
+@@ -483,11 +1066,19 @@ CoreDispatcher (
              DriverEntry->Initialized = TRUE;
            }
  
@@ -924,7 +942,7 @@ index d7c7147e..11e72604 100644
            //
            // If it's an error don't try the StartImage
            //
-@@ -519,6 +1092,20 @@ CoreDispatcher (
+@@ -519,6 +1110,20 @@ CoreDispatcher (
  
          Status = CoreStartImage (DriverEntry->ImageHandle, NULL, NULL);
  
@@ -945,7 +963,7 @@ index d7c7147e..11e72604 100644
          REPORT_STATUS_CODE_WITH_EXTENDED_DATA (
            EFI_PROGRESS_CODE,
            (EFI_SOFTWARE_DXE_CORE | EFI_SW_PC_INIT_END),
-@@ -896,6 +1483,8 @@ CoreAddToDriverList (
+@@ -896,6 +1501,8 @@ CoreAddToDriverList (
  
    CoreReleaseDispatcherLock ();
  
@@ -954,7 +972,7 @@ index d7c7147e..11e72604 100644
    return EFI_SUCCESS;
  }
  
-@@ -1309,6 +1898,16 @@ CoreFwVolEventProtocolNotify (
+@@ -1309,6 +1916,16 @@ CoreFwVolEventProtocolNotify (
                                    &Attributes,
                                    &Size
                                    );
@@ -971,7 +989,7 @@ index d7c7147e..11e72604 100644
          if (!EFI_ERROR (GetNextFileStatus)) {
            if (Type == EFI_FV_FILETYPE_DXE_CORE) {
              //
-@@ -1412,6 +2011,26 @@ CoreFwVolEventProtocolNotify (
+@@ -1412,6 +2029,26 @@ CoreFwVolEventProtocolNotify (
                          );
      if (!EFI_ERROR (Status)) {
        AprioriEntryCount = SizeOfBuffer / sizeof (EFI_GUID);
@@ -998,7 +1016,7 @@ index d7c7147e..11e72604 100644
      } else {
        AprioriEntryCount = 0;
      }
-@@ -1433,11 +2052,69 @@ CoreFwVolEventProtocolNotify (
+@@ -1433,11 +2070,69 @@ CoreFwVolEventProtocolNotify (
            DriverEntry->Scheduled = TRUE;
            InsertTailList (&mScheduledQueue, &DriverEntry->ScheduledLink);
            CoreReleaseDispatcherLock ();
@@ -1068,7 +1086,7 @@ index d7c7147e..11e72604 100644
      }
  
      //
-@@ -1470,6 +2147,241 @@ CoreInitializeDispatcher (
+@@ -1470,6 +2165,241 @@ CoreInitializeDispatcher (
    PERF_FUNCTION_END ();
  }
  
@@ -1310,7 +1328,7 @@ index d7c7147e..11e72604 100644
  //
  // Function only used in debug builds
  //
-@@ -1486,11 +2398,73 @@ CoreDisplayDiscoveredNotDispatched (
+@@ -1486,11 +2416,73 @@ CoreDisplayDiscoveredNotDispatched (
  {
    LIST_ENTRY             *Link;
    EFI_CORE_DRIVER_ENTRY  *DriverEntry;
@@ -1386,6 +1404,28 @@ index d7c7147e..11e72604 100644
 +    P2Digest ();
 +  }
  }
+diff --git a/MdeModulePkg/Core/Dxe/DxeMain.h b/MdeModulePkg/Core/Dxe/DxeMain.h
+index 5a8e3804..45d02ecb 100644
+--- a/MdeModulePkg/Core/Dxe/DxeMain.h
++++ b/MdeModulePkg/Core/Dxe/DxeMain.h
+@@ -523,6 +523,17 @@ CoreTerminateMemoryMap (
+   IN UINTN  MapKey
+   );
+ 
++//
++// P2BRINGUP: the free map at the moment a page allocation became terminal, which
++// Mem/Page.c records inside FindFreePages. Declared here rather than in a local
++// header because the digest that prints it is Dispatcher.c's P2Bins, and the
++// record itself has to stay private to the file that owns gMemoryMap.
++//
++VOID
++P2FreeWhyReport (
++  VOID
++  );
++
+ /**
+   Signals all events in the EventGroup.
+ 
 diff --git a/MdeModulePkg/Core/Dxe/Image/Image.c b/MdeModulePkg/Core/Dxe/Image/Image.c
 index 84b1ee80..474fbd60 100644
 --- a/MdeModulePkg/Core/Dxe/Image/Image.c
@@ -1449,6 +1489,234 @@ index 84b1ee80..474fbd60 100644
 +  // P2BRINGUP: silenced - was DEBUG ((DEBUG_INFO | DEBUG_LOAD, "\n"));
  
    return EFI_SUCCESS;
+ 
+diff --git a/MdeModulePkg/Core/Dxe/Mem/Page.c b/MdeModulePkg/Core/Dxe/Mem/Page.c
+index 928fecb2..cb025f61 100644
+--- a/MdeModulePkg/Core/Dxe/Mem/Page.c
++++ b/MdeModulePkg/Core/Dxe/Mem/Page.c
+@@ -1042,6 +1042,208 @@ CoreFindFreePagesI (
+   return Target;
+ }
+ 
++//
++// P2BRINGUP: why a page allocation failed, described by the free map itself.
++//
++// FindFreePages has four rungs and the third is the whole map. CoreLoadPeImage's
++// only allocation is CoreAllocatePages (AllocateAnyPages, ...) -- every one of the
++// 46 promoted modules has PcdLoadModuleAtFixAddressEnable 0 and RelocationsStripped
++// clear, so Image.c:700-741 leaves that one call and its status is what :741
++// returns. CoreInternalAllocatePages turns AllocateAnyPages into MaxAddress =
++// MAX_ALLOC_ADDRESS (:1305), and that rung is CoreFindFreePagesI (MaxAddress, 0, ...)
++// over every descriptor in gMemoryMap. So a terminal failure is not a statement
++// about a bin or a window: it says this map holds no EfiConventionalMemory
++// descriptor of NumberOfPages at or below MAX_ALLOC_ADDRESS.
++//
++// The `Target & EFI_PAGE_MASK` test at :1033 does not weaken that. Target is
++// DescEnd - (NumberOfBytes - 1) with DescEnd + 1 a multiple of the alignment, hence
++// of EFI_PAGE_SIZE, so for a 4-KiB or 64-KiB alignment Target is always a multiple
++// of 4096; the test can only fire in the one case where no descriptor matched, and
++// then only because Target wraps to -NumberOfBytes + 1. It is the "found nothing"
++// test, not a second filter.
++//
++// That makes the failure readable, but only against numbers no other line reports,
++// and only at the instant it happened. P2 RETRY re-asks the same requests from the
++// digest, after the run: it measures the heap the run left behind. This records the
++// heap the run failed in, which is the state no later probe can reconstruct.
++//
++// Two comparisons decide the question:
++//
++//   big against np  -- whether a run of the requested size existed. `big` is the
++//                      largest run the same search would have accepted, computed
++//                      with the same MaxAddress, MinAddress and alignment, so
++//                      big < np is a statement about the map and big >= np is a
++//                      statement about this census.
++//   raw against big -- if none was big enough, whether the alignment clip ate one.
++//                      `raw` is the largest descriptor before the clip. For
++//                      EfiBootServicesCode the clip is one page and the two are
++//                      equal, which is itself the evidence that alignment is not
++//                      the factor for the 27; for the runtime types it is 16 pages
++//                      and the difference is the loss.
++//
++// `free` is every conventional page in the map, and it is the number that separates
++// a heap that is full from a heap that is a sieve: the same `free` beside a small
++// `big` is fragmentation, which no promotion fixes, while a `free` near zero is the
++// bin question P2 BIN was built for. `c`, the descriptor count, is what makes
++// "fragmentation" a measurement rather than an adjective.
++//
++// The tally by type exists to falsify one assumption cheaply. Every one of the 27 is
++// believed to be an EfiBootServicesCode request, on the grounds that the memory type
++// comes from the PE subsystem and not from the relocation fallback (Image.c:629-646)
++// and only 10 of the 46 promoted images are subsystem-12. `bc` against `bd` and `rt`
++// prints that belief as a count instead of leaving it to a reading of the source.
++//
++// Only the first image-sized failure is described. A pool chunk below four pages
++// failing is a different event and the wrong one to describe, and after the first
++// page-sized failure the map is already being read under a handicap - the run that
++// produced the first one is the run to explain.
++//
++STATIC BOOLEAN  mP2FwSeen  = FALSE;
++STATIC UINTN    mP2FwCount = 0;
++STATIC UINTN    mP2FwTy[4] = { 0, 0, 0, 0 };
++STATIC UINTN    mP2FwType  = 0;
++STATIC UINT64   mP2FwPages = 0;
++STATIC UINTN    mP2FwAlign = 0;
++STATIC UINT64   mP2FwBig   = 0;
++STATIC UINT64   mP2FwRaw   = 0;
++STATIC UINT64   mP2FwFree  = 0;
++STATIC UINTN    mP2FwDesc  = 0;
++
++STATIC
++VOID
++P2FreeWhy (
++  IN UINT64           MaxAddress,
++  IN UINT64           NumberOfPages,
++  IN EFI_MEMORY_TYPE  NewType,
++  IN UINTN            Alignment
++  )
++{
++  LIST_ENTRY  *Link;
++  MEMORY_MAP  *Entry;
++  UINT64      RunBytes;
++  UINT64      DescStart;
++  UINT64      DescEnd;
++  UINT64      DescBytes;
++  UINTN       Slot;
++
++  if (NewType == EfiBootServicesCode) {
++    Slot = 0;
++  } else if (NewType == EfiBootServicesData) {
++    Slot = 1;
++  } else if ((NewType == EfiRuntimeServicesCode) || (NewType == EfiRuntimeServicesData)) {
++    Slot = 2;
++  } else {
++    Slot = 3;
++  }
++
++  mP2FwCount++;
++  mP2FwTy[Slot]++;
++
++  if (mP2FwSeen || (NumberOfPages < 4)) {
++    return;
++  }
++
++  mP2FwSeen  = TRUE;
++  mP2FwType  = (UINTN)NewType;
++  mP2FwPages = NumberOfPages;
++  mP2FwAlign = Alignment;
++
++  //
++  // The canonicalisation CoreFindFreePagesI does before its loop, so that `big` is
++  // measured against the same ceiling the search used.
++  //
++  if ((MaxAddress & EFI_PAGE_MASK) != EFI_PAGE_MASK) {
++    MaxAddress -= (EFI_PAGE_MASK + 1);
++    MaxAddress &= ~(UINT64)EFI_PAGE_MASK;
++    MaxAddress |= EFI_PAGE_MASK;
++  }
++
++  for (Link = gMemoryMap.ForwardLink; Link != &gMemoryMap; Link = Link->ForwardLink) {
++    Entry = CR (Link, MEMORY_MAP, Link, MEMORY_MAP_SIGNATURE);
++
++    if (Entry->Type != EfiConventionalMemory) {
++      continue;
++    }
++
++    if ((Entry->Attribute & EFI_MEMORY_SP) != 0) {
++      continue;
++    }
++
++    mP2FwDesc++;
++
++    RunBytes = Entry->End - Entry->Start + 1;
++    mP2FwFree += RShiftU64 (RunBytes, EFI_PAGE_SHIFT);
++    if (RunBytes > mP2FwRaw) {
++      mP2FwRaw = RunBytes;
++    }
++
++    DescStart = Entry->Start;
++    DescEnd   = Entry->End;
++    if (DescEnd >= MaxAddress) {
++      DescEnd = MaxAddress;
++    }
++
++    DescEnd = ((DescEnd + 1) & (~((UINT64)Alignment - 1))) - 1;
++    if (DescEnd < DescStart) {
++      continue;
++    }
++
++    DescBytes = DescEnd - DescStart + 1;
++    if (DescBytes > mP2FwBig) {
++      mP2FwBig = DescBytes;
++    }
++  }
++}
++
++//
++// P2BRINGUP: the record above, printed with the digest. Non-static because the
++// digest is Dispatcher.c's (P2Bins) and this file owns the memory map; the
++// declaration is in DxeMain.h beside the other cross-file prototypes.
++//
++// Two lines and never more, because rows are the scarce thing: the panel holds 99 and
++// a copy of the digest costs 49 (tools/console-budget.py), so a third row here would
++// drop it from two copies on the panel to one. The second line is therefore omitted
++// rather than spelled when there is no image-sized failure to describe, and `n` is
++// left to carry the rest: `n=0` is no terminal FindFreePages failure in the whole run,
++// which is the one answer that puts the fault outside this file - CoreLoadPeImage's
++// other EFI_OUT_OF_RESOURCES is a 200-byte AllocateRuntimePool, and a pool request
++// that size cannot reach FindFreePages unless the pool heads are empty, so `n=0`
++// beside 27 recorded `L`s names the pool. `n` above zero with no second line is
++// terminal failures that were all smaller than four pages, which is a different
++// answer again. Both cost nothing to say.
++//
++VOID
++P2FreeWhyReport (
++  VOID
++  )
++{
++  DEBUG ((
++    DEBUG_ERROR,
++    "P2 FWTY bc=%d bd=%d rt=%d oth=%d n=%d\n",
++    mP2FwTy[0],
++    mP2FwTy[1],
++    mP2FwTy[2],
++    mP2FwTy[3],
++    mP2FwCount
++    ));
++
++  if (!mP2FwSeen) {
++    return;
++  }
++
++  DEBUG ((
++    DEBUG_ERROR,
++    "P2 FWHY t=%d np=%ld a=%d big=%ld raw=%ld free=%ld c=%d\n",
++    mP2FwType,
++    mP2FwPages,
++    mP2FwAlign >> EFI_PAGE_SHIFT,
++    RShiftU64 (mP2FwBig, EFI_PAGE_SHIFT),
++    RShiftU64 (mP2FwRaw, EFI_PAGE_SHIFT),
++    mP2FwFree,
++    mP2FwDesc
++    ));
++}
++
+ /**
+   Internal function.  Finds a consecutive free page range below
+   the requested address
+@@ -1127,6 +1329,14 @@ FindFreePages (
+   // If allocations from the preferred bins fail, then attempt to promote memory resources.
+   //
+   if (!PromoteMemoryResource ()) {
++    //
++    // P2BRINGUP: the one place a failure becomes terminal, and therefore the only
++    // place the free map is worth describing. On the recursive path this is the
++    // second refusal - promotion succeeded, the retry searched the enlarged map,
++    // and it is still too small - which is the same statement with the promoted
++    // regions already counted in.
++    //
++    P2FreeWhy (MaxAddress, NoPages, NewType, Alignment);
+     return 0;
+   }
  
 diff --git a/SecurityPkg/Library/AuthVariableLib/AuthService.c b/SecurityPkg/Library/AuthVariableLib/AuthService.c
 index 7f7c91e9..aa8632ad 100644

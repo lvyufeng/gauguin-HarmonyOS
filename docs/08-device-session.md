@@ -6446,3 +6446,170 @@ tools/panel-text.py --decode PHOTO.jpg   # boot it, photograph the bottom of the
     twenty-seven, and `KEY <errors>/<promoted> err=<name> at=<i> free=<pages>
     miss=<i>` is the bottom row on `p2-variants` in every state.
   * **Read the panel before flashing anything else.** The ring holds one boot.
+
+## Step 4.41 — Rung three is the whole map, so the probe goes inside `FindFreePages`
+
+Step 4.18 concluded that "the next step is then a probe inside `FindFreePages` itself,
+not another census" (line 3437). Five sessions went by without one, because each of
+them measured the failure from outside the allocator: the digest after the run,
+`P2 RETRY` re-asking the same requests from the assert, the bins, the HOB, the Apriori
+census. Every one of those describes the heap the run **left behind**. The question —
+why a request byte for byte identical to one that succeeded a few milliseconds later
+was refused — is about the heap **at the failure**, and there is exactly one line of
+code where that state exists. This step reads the code that decides failure, and the
+reading changes what the probe has to be.
+
+### The chain, each link read rather than recalled
+
+  * `CoreLoadPeImage` makes exactly one allocation whose status reaches the caller:
+    `CoreAllocatePages (AllocateAnyPages, ImageCodeMemoryType, NumberOfPages,
+    &ImageAddress)` at `Image.c:700-741`. `PcdLoadModuleAtFixAddressEnable` is 0 and
+    `RelocationsStripped` is clear on all 46, so neither the fixed-address branch nor
+    the relocation fallback runs, and the other `EFI_OUT_OF_RESOURCES` in
+    `CoreLoadImageCommon` is an `AllocateZeroPool` of about 200 bytes.
+  * `CoreInternalAllocatePages` sets `MaxAddress = MAX_ALLOC_ADDRESS` for
+    `AllocateAnyPages` (`Page.c:1305`) and rounds `NumberOfPages` up to the type's
+    granularity — 16 pages for the four runtime types, one page for everything else.
+  * `FindFreePages` has four rungs, and **the third is `CoreFindFreePagesI
+    (MaxAddress, 0, …)`: every descriptor in `gMemoryMap`, no floor, no window.** Rungs
+    one and two come first and are *preferences* — rung 1 searches the type's own bin
+    (`mMemoryTypeStatistics[NewType].MaximumAddress` down to its `BaseAddress`), rung 2
+    the default bin — and both are skipped entirely when `MaxAddress` is below their
+    ceilings.
+  * `CoreFindFreePagesI` returns 0 exactly when no `EfiConventionalMemory` descriptor
+    at or below `MaxAddress` is `NumberOfPages` long.
+
+**So a terminal failure is not a statement about a bin window.** The bins decide *where*
+an allocation lands; whether it succeeds is rung 3's business, and rung 3 is the whole
+map. Step 4.24's crux — "a bin boundary … test 1 of the ladder only fires while
+`MaxAddress >= MaximumAddress`" — is a correct statement about test 1 and cannot be the
+cause of the 27. That does not make the `P2 BIN` lines worthless; it makes them a
+reading about placement, which is what they always were.
+
+Two details of that function are worth writing down, because both were misread here on
+the way to this step:
+
+  * **The `Target & EFI_PAGE_MASK` test at `:1033` is not a second filter.** `Target` is
+    `DescEnd - (NumberOfBytes - 1)`, and `DescEnd + 1` is a multiple of the alignment
+    and therefore of `EFI_PAGE_SIZE`, so for a 4-KiB or a 64-KiB alignment `Target` is
+    always a multiple of 4096 and the test can only fire in the case where no
+    descriptor matched at all — where `Target` wraps to `-NumberOfBytes + 1`. It is the
+    "found nothing" test, and "found nothing" is what reaches `EFI_OUT_OF_RESOURCES`
+    at `:1313`.
+  * **`NeedGuard` is FALSE for every runtime request**, because
+    `if (Alignment != EFI_PAGE_SIZE) { NeedGuard = FALSE; }` (`Page.c:1210`). The guard
+    arithmetic inside the loop is dead on this platform, and so is the alignment
+    mismatch it exists to prevent.
+
+### The probe records at the one place failure becomes terminal
+
+`P2FreeWhy` is called from `FindFreePages` at `if (!PromoteMemoryResource ())` — not at
+the two earlier `return 0`s, and not on the recursive retry, because on the retry path
+promotion succeeded and the enlarged map was searched and was still too small. That is
+the same statement with the promoted regions already counted in, and it is the only
+state the retry's own rung 3 saw.
+
+The census walks `gMemoryMap` and mirrors `CoreFindFreePagesI` exactly — the same
+`EfiConventionalMemory` filter, the same `EFI_MEMORY_SP` skip, the same `MaxAddress`
+canonicalisation, the same alignment clip — and keeps four numbers:
+
+| field | what it is | what it decides |
+| --- | --- | --- |
+| `big` | the largest run the same search would have accepted, in pages | `big < np` is a statement about the map; `big >= np` is a statement about this census |
+| `raw` | the largest conventional descriptor before the clip | `raw > big` says the alignment clip was the cost, and by how much |
+| `free` | every conventional page in the map | `free` large beside a small `big` is fragmentation; `free` near zero is a full heap |
+| `c` | the descriptor count | makes "fragmented" a measurement rather than an adjective |
+
+Because rung 3 is the whole map, **`big < np` is a prediction the probe is guaranteed
+to confirm, and `big >= np` would falsify the census rather than the allocator.** That
+is deliberate: an instrument whose interesting outcome is a contradiction is worth more
+than one whose answer is already known, and the two possible worlds behind `big < np`
+have completely different fixes. `free` in the thousands beside `big` in the tens is
+fragmentation, which no promotion fixes and which no bin window causes — the answer
+would then be about the heap's size or the number of modules, not about the allocator's
+rules.
+
+The other line is the cheap falsification. `P2 FWTY bc= bd= rt= oth= n=` counts the
+terminal failures by memory type, so the belief that all 27 are
+`EfiBootServicesCode` — the type comes from the PE subsystem, not from the relocation
+fallback (`Image.c:629-646`), and only 10 of the 46 promoted images are subsystem-12 —
+prints as a count instead of resting on a reading of the source. `n` carries the rest
+without costing a row: **`n=0` is no terminal `FindFreePages` failure in the whole run**,
+which puts the fault in `CoreLoadPeImage`'s own `AllocateRuntimePool` and outside this
+file entirely; `n` above zero with no second line is terminal failures that were all
+smaller than four pages; and a 4-page floor is what keeps the first record from being
+some pool chunk rather than an image.
+
+### The row budget decided the shape of the lines, twice
+
+`tools/console-budget.py` is the arbiter, and it was extended this step to read
+`P2FreeWhyReport` out of `Mem/Page.c` alongside the four Dispatcher functions that emit
+the digest. The first draft was four lines — `none`, `FWTY`, `FWHY`, `FWMAP` — and took
+a copy of the digest from **47 rows to 51**, which against a 99-row panel is the
+difference between *two* copies fitting and *one*. The second draft merged the request
+and the census onto one line and folded "no failure at all" into `n=0`, which is **49
+rows** and two copies again. The final shape is two lines, 52 and 71 columns, both well
+inside the panel's 90:
+
+```
+P2 FWTY bc=%d bd=%d rt=%d oth=%d n=%d
+P2 FWHY t=%d np=%ld a=%d big=%ld raw=%ld free=%ld c=%d
+```
+
+The second is omitted rather than spelled when there is nothing to describe. A third
+line would have been affordable only at the cost of the second copy of the digest on
+the panel, which is the redundancy the wipe needs.
+
+### The new payload differs from the one on the phone in one file, by 282 bytes
+
+`work/out/p2-freewhy/Mu-gauguin-silicon-gzip.img`, sha256 `eb1601ab98fe97d2…`. Three
+independent checks, run because a firmware that is one file different from the control
+is the only kind of difference this phase can afford:
+
+  * **`tools/pe-facts.py` over both payloads differs in exactly one line**: the FFS
+    file `9E21FD93-9C72-4C15-8C4B-E77F1DB2D792` — DxeCore — grows from `0xf8a4b` to
+    `0xf8b65`. **282 bytes.** Every other GUID, offset and size in the volume is
+    identical.
+  * **The printable strings of the two decompressed FVMAINs differ by exactly the two
+    new format literals** (`P2 FWTY …` and `P2 FWHY …`), plus two 6-character artifacts
+    of the compression stream's tail. The decompressed sizes are equal to the byte:
+    7,352,320.
+  * **`tools/probe-fingerprint.py --expect P2FreeWhy` passes**, and the image carries
+    **10 of 10** instruments — the full ladder, with the tenth rung read out of
+    `Mem/Page.c` rather than out of the Dispatcher.
+
+The volume is very nearly full, and this is the first time that has been measured:
+GenFv's own map says `EFI_FV_TOTAL_SIZE = 0x703000` against `EFI_FV_TAKEN_SIZE =
+0x702d08`, so **760 bytes of free space** — 1,042 before this probe. That is the probe
+budget for the rest of P2, and it is why the plan to delete the whole `P2BRINGUP` block
+before BDS work is now also a space requirement and not only a tidiness one.
+
+The payload is the **fourth** built for this phase at exactly 1,142,784 bytes, which is
+by now the expected result and the reason `probe-fingerprint.py` exists at all.
+
+`tools/build-p2-payloads.sh` grew a `P2DIR` override for this. The rule it implements is
+the one `tools/restore-stock-boot.sh` pins a sha256 for and `identify-boot.py`
+reconciles archived readbacks against: **the payload on the phone is the control, and a
+build that overwrites it destroys the comparison it exists for.** `work/out/p2-variants`
+is byte for byte where it was — sha256 `7c8fdb5a1a272ab6…` — and the new probe sits
+beside it.
+
+### Nothing is flashed, and the reading is still owed
+
+The ordering rule from step 4.36 is unchanged and it is the reason this step stops here:
+**先读屏，再刷下一次**, because the print ring holds one boot's worth and the payload now
+on `boot` is the one whose screen is the only evidence of what its own run did. So:
+
+```
+tools/probe-fingerprint.py --read        # in TWRP: which payload is on `boot`
+tools/panel-text.py --decode PHOTO.jpg   # boot it, photograph the bottom of the panel
+python3 tools/probe-fingerprint.py --expect P2FreeWhy \
+    work/out/p2-freewhy/Mu-gauguin-silicon-gzip.img    # before that payload is flashed
+```
+
+and the new probe is worth a flash only after `p2-variants` has been read, because if
+the reading says `bs16=Success` the answer is already the per-request state this probe
+describes, and if it says `Out of Resources` the census is what turns that into either
+a full heap or a fragmented one. Either way the next measurement is the same one, which
+is why it is built and staged rather than built on demand.
+

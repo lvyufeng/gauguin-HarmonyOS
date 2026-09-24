@@ -30,10 +30,12 @@ Geometry, all from sources rather than from this docstring:
 from `Font.h`, and the 426 from the C source - the tool reads each rather than
 assuming it, so a panel change or a font change moves these numbers.
 
-Then it takes the DEBUG lines out of `P2Retry`, `P2Bins` and `P2Digest` - the three
-functions that emit the digest - renders each one at its widest, and reports the row
-count against the screen. That answers the question a reader actually has: which rows
-of the panel carry the digest, and is the bottom line the one worth reading.
+Then it takes the DEBUG lines out of `P2Retry`, `P2Bins`, `P2Digest` and `P2Key` - the
+four functions in the Dispatcher that emit the digest - together with
+`P2FreeWhyReport`, which is Mem/Page.c's and prints from the digest just the same,
+renders each one at its widest, and reports the row count against the screen. That
+answers the question a reader actually has: which rows of the panel carry the digest,
+and is the bottom line the one worth reading.
 
     tools/console-budget.py [--mu DIR] [--platform DSC] [--case observed|worst]
 
@@ -52,6 +54,19 @@ DEFAULT_MU = os.path.join(REPO, "work", "uefi", "Mu-Silicium")
 FB_C = "Silicon/Silicium/SiliciumPkg/Library/FrameBufferSerialPortLib/FrameBufferSerialPortLib.c"
 FONT_H = "Silicon/Silicium/SiliciumPkg/Library/FrameBufferSerialPortLib/Font.h"
 DISPATCHER_C = "Mu_Basecore/MdeModulePkg/Core/Dxe/Dispatcher/Dispatcher.c"
+PAGE_C = "Mu_Basecore/MdeModulePkg/Core/Dxe/Mem/Page.c"
+
+# The functions that emit the digest, and the file each lives in. `P2FreeWhyReport`
+# is Mem/Page.c's because the record it prints has to be taken inside FindFreePages,
+# where the free map is; it prints from the digest like the rest, so it costs rows
+# like the rest, and a table that left it out would under-count the panel by three.
+DIGEST_FUNCS = [
+    (DISPATCHER_C, "P2Retry"),
+    (DISPATCHER_C, "P2Bins"),
+    (DISPATCHER_C, "P2Digest"),
+    (DISPATCHER_C, "P2Key"),
+    (PAGE_C,       "P2FreeWhyReport"),
+]
 
 # The longest names EDK2's `%r` can print, and the two shortest. A rendered width
 # is only a bound if the replacement used is stated, so these are the numbers the
@@ -185,7 +200,7 @@ def main():
     dsc_text = read(dsc)
 
     print("console-budget: the panel the P2 digest is read off\n")
-    for rel in (os.path.relpath(dsc, mu), FB_C, FONT_H, DISPATCHER_C):
+    for rel in (os.path.relpath(dsc, mu), FB_C, FONT_H, DISPATCHER_C, PAGE_C):
         print(f"  reads: {rel}")
     print()
 
@@ -225,9 +240,10 @@ def main():
     print()
 
     body = read(os.path.join(mu, DISPATCHER_C))
+    page = read(os.path.join(mu, PAGE_C))
     lines = []
-    for name in ("P2Retry", "P2Bins", "P2Digest", "P2Key"):
-        for fmt in debug_literals(function_body(body, name)):
+    for src, name in DIGEST_FUNCS:
+        for fmt in debug_literals(function_body(page if src == PAGE_C else body, name)):
             lines.append((name, fmt))
 
     # The counters: DIAG is one line per load failure, ERR one per *distinct*
