@@ -7407,3 +7407,102 @@ count) is the first thing to read rather than the census.
 Nothing was flashed and nothing in the firmware changed. The change this step makes is to the *status*
 of the pending bin edit: it moves off the critical path and becomes conditional on a measurement, and
 the measurement is already in the payload that is waiting to be flashed.
+
+## Step 4.45 — The ACPI tables are already in the payload, and the docs said they were missing
+
+Host-side, and it started as a check on the flash budget rather than on ACPI. Step 4.44 ended by
+noting that a source edit invalidates the hash of a staged artifact, and that the volume has 760 bytes
+free — so the question "what exactly is in the payload that is waiting to be flashed" is worth being
+able to answer from the artifact rather than from the build tree. Answering it turned up something the
+documentation had wrong.
+
+### What the payload is, end to end
+
+The staged image is an Android boot image whose header is version 1 — so the kernel starts at
+`page_size` = 2048, not 4096, and reading `raw[4096:]` sees `7cf18e4c…` and looks like a corrupt gzip.
+The kernel is one gzip member; `gzip.decompress` rejects it because of the 87,594 bytes of padding
+after it, and `zlib.decompressobj(16 + MAX_WBITS)` takes it:
+
+```
+work/out/p2-freewhy-g/Mu-gauguin-silicon-gzip.img        1,142,784 bytes
+  header        ANDROID! v1, page_size 2048, kernel_size 1,137,214, kernel_addr 0x10008000
+  kernel        gzip -> 3,145,840 bytes   (= SILICIUM_UEFI.fd-bootshim, 3,145,840 on disk)
+    FVMAIN_COMPACT   one FV header, its _FVH at 0x98
+      GUID section  0x11088, size 0xf8b60, DataOffset 24, Attributes 0x1 (PROCESSING_REQUIRED)
+        GUID        EE4E5898-3914-4259-9D6E-DC7BD79403CF   = LzmaCustomDecompress
+        -> FVMAIN.Fv  7,352,320 bytes = 0x703000
+```
+
+`FVMAIN.Fv` is written to disk uncompressed beside the `.fd`, which is the shortcut that matters: the
+reversing above was only needed to establish that the artifact and the build tree agree, and they do.
+`Build/gauguinPkg/DEBUG_CLANGPDB/FV/FVMAIN_COMPACT.Fv`, `FVMAIN.Fv`, `SILICIUM_UEFI.fd` and
+`SILICIUM_UEFI.fd-bootshim` are all timestamped **2026-09-24 23:30**, the same minute as the staged
+`Mu-gauguin-silicon-gzip.img`. So reading the build tree is reading the payload.
+
+**The volume figure in step 4.42 is confirmed exactly, from the artifact rather than from a
+calculation.** `FVMAIN.Fv` is 7,352,320 bytes and its last non-`0xFF` byte is at `0x702d07`:
+`EFI_FV_TAKEN_SIZE = 0x702d08`, **760 bytes free**. The `FVMAIN.Fv.txt` map's last line is
+`0x006C5800`, 251,904 bytes short of the end — which is not free space, it is the last module, and
+taking it for free space is the easy way to misread this file.
+
+### The tables are there, and they were read back one by one
+
+Searching `FVMAIN.Fv` for the six signatures and taking each hit whose length field is sane gives all
+six between `0x54d484` and `0x54df8c`:
+
+| table | offset | length | header |
+|---|---|---|---|
+| `SSDT` | `0x54d484` | 61 | `MSFT`, checksum valid |
+| `DSDT` | `0x54d4c8` | 1,520 | `QCOMM `/`SM7225 `, OEM rev 3, creator `INTL`, **checksum valid** |
+| `APIC` | `0x54dabc` | 724 | `QCOM`/`QCOMEDK2`, rev 5 |
+| `FACP` | `0x54dd94` | 276 | `QCOM`/`QCOMEDK2`, rev 6 |
+| `FACS` | `0x54deac` | 64 | OEM fields all zero, which is what `FACS` has |
+| `GTDT` | `0x54def0` | 156 | `QCOM`/`QCOMEDK2`, rev 2 |
+
+The DSDT is gauguin's own, 1,520 bytes compiled by `iasl` from `tools/acpi/gauguin.asl` (21,615
+bytes), and it contains `ACPI0007` eight times, `QCOM24A5` once, and `UFS0` and `URS0` device nodes,
+with `_HID`, `_ADR`, `_CRS`, `_DSM`, `_STA` and `_UID` all present.
+
+### The APIC, which is the one that has to be right
+
+An ACPI mistake is not always a degraded boot. A wrong GICR base or a wrong PPI INTID is an interrupt
+controller the OS cannot bring up, and it fails on hardware that is not this one — so this was worth
+parsing rather than eyeballing. 44-byte MADT header, then eight `0x0B` subtables of `0x52` = 82 bytes,
+then one `0x0C` (GICD) of 24: 44 + 8×82 + 24 = **724**, the whole table, with nothing left over. The
+subtable length of 82 rather than the textbook 80 is the SPE overflow interrupt ACPI 6.4 appended at
+offset 78, and getting that wrong shifts every field after 76 — which is the field this table exists
+for.
+
+| field | offset | GICC #1 | GICC #8 | gauguin's device tree |
+|---|---|---|---|---|
+| Performance Interrupt GSIV | 20 | `0x15` = **21** | `0x15` = **21** | `pmu { interrupts = <1 5 8> }` → PPI 5 → 21 |
+| VGIC Maintenance Interrupt | 56 | `0x18` = **24** | `0x18` = **24** | GIC node `interrupts = <1 8 4>` → PPI 8 → 24 |
+| GICR Base Address | 60 | **`0x17A60000`** | **`0x17B40000`** | `reg = <… 0x17a60000 0x100000>` |
+
+Eight cores at stride `0x20000` run `0x17A60000` → `0x17B4FFFF`, inside the `0x100000` window. **All
+three values `docs/07` chose Moorea on are in the built table and are the right ones.**
+
+A false positive worth naming, because it cost a detour: `fv.find(b'DSDT')` returns an occurrence
+inside a debug string — `"… not found"`, whose last four characters are `ound`, and the six bytes
+before it are ` not f` — so the header read off the first hit is garbage (`len = 1650553888`, OEM ID
+` not f`). The tables have to be found by a hit whose length field is consistent with the volume, not
+by the first hit.
+
+### What this changes
+
+`docs/07`'s P3 groundwork section ended with a four-item "what is missing" list and the row
+`next step | gauguin/AcpiTables.inf + DSDT, then 1-4 above`. **Items 1, 2 and 3 were done the same day
+that list was written**, and the list has been misleading ever since: `AcpiTables.inf` exists at
+`Silicium-ACPI/Platforms/Xiaomi/gauguin/`, `gauguin.fdf:73` is a live `INF RuleOverride = ACPITABLE`
+line, and `gauguin.dsc:91` has a `[Components]` section whose only member is the table module. Item 4
+(`AcpiTableUpdateLib`) is still the deliberate no-op and should stay one now that the tables check
+out. All of that is annotated in place in `docs/07` rather than rewritten, and P3 in `docs/00-plan.md`
+now carries a status line.
+
+**So P3's ACPI half is done, and P3's driver half cannot start.** The payload has 760 bytes free and
+the P2BRINGUP instrumentation is what occupies the rest; DisplayDxe, UsbBusDxe and ButtonsDxe do not
+fit alongside it. Which puts the whole of P3 behind the same reading P2 has been behind since step
+4.30 — the panel, one photograph, `P2 ERR` first.
+
+Nothing was flashed and nothing in the firmware changed. This step read an artifact that was already
+built and corrected two documents that described it wrongly.

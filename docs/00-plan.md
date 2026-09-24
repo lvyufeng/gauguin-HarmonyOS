@@ -312,6 +312,23 @@ Work:
 
 **Gate:** a Windows 11 ARM64 installer boots off a USB stick and sees the internal UFS.
 
+**Status (2026-09-25): item 1 is done; 2–4 are not started, and none of them can be
+assessed until P2 hands off to BDS.** The tables exist, are wired into `gauguin.fdf`
+and `gauguin.dsc`, and are in the firmware volume of the build behind the staged P2
+payload — `DSDT` (1,520 bytes, gauguin's own, `SM7225`, eight `ACPI0007` CPU devices,
+the UFS and USB nodes), `APIC`, `FACP`, `FACS`, `GTDT`, plus the shared `SSDT`. All
+six were read back out of the built artifact and the `APIC` parsed subtable by
+subtable; its two INTIDs and its redistributor base match this board's device tree.
+`docs/07`'s P3 groundwork section carries the detail. Note that the DSDT here is
+smaller in scope than the list above — I2C, GPIO, buttons and thermal zones are not
+in it yet — so item 1 is done for UFS and USB and *not* done for the rest.
+
+Items 2–4 have a shared precondition that is worth stating plainly: **the payload has
+760 bytes of free volume**, and the P2 debugging instrumentation (`P2BRINGUP`) is what
+occupies the rest. Adding DisplayDxe, UsbBusDxe or ButtonsDxe to the volume before
+that instrumentation is deleted will not fit. So P3's driver work is gated on P2
+reaching BDS in practice, not only in principle.
+
 ---
 
 ## P4 — Windows deployment

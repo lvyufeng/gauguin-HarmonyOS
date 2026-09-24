@@ -2460,6 +2460,61 @@ for the CPU skeleton at `Silicon/Qualcomm/Moorea/DSDT_Minimal.asl`, and 20 platf
    is the deliberate no-op with the P3 TODO. Nothing needs correcting in the three
    borrowed tables as they stand, so this stays a no-op until something does.
 
+> **Superseded 2026-09-25. Items 1–3 were done the same day this list was written,
+> and the fourth is still open.** The list above is kept because it is what the
+> port's state was when the table choice was made, but nothing in it should be
+> acted on. What replaced it:
+>
+> - **1.** `Silicium-ACPI/Platforms/Xiaomi/gauguin/AcpiTables.inf` exists — six
+>   `ASL|` entries, exactly the set argued for above, plus `Common/SSDT.aml`. It
+>   resolves as `gauguin/AcpiTables.inf` because `Silicium-ACPI/Platforms/Xiaomi`
+>   is on `PackagesPath`, the way surya's does. The DSDT has no separate
+>   `gauguin.dsl`: `tools/acpi/gauguin.asl` (**21,615 bytes**) is the source and
+>   `tools/sync-uefi-platform.sh` compiles it to the 1,520-byte `DSDT.aml` beside
+>   the `.inf`.
+> - **2.** `gauguin.fdf:73` is **live**, not commented out.
+> - **3.** `gauguin.dsc` has a `[Components]` section (line 91) whose only member
+>   is `gauguin/AcpiTables.inf`.
+> - **4.** `AcpiTableUpdateLib` is unchanged, and with the tables verified correct
+>   on this board (below) it should stay a no-op.
+>
+> **And the tables are not merely declared — they are built into the payload, and
+> each one was read back out of it.** In the firmware volume of the build behind
+> the staged `p2-freewhy-g` image (`FVMAIN.Fv`, 7,352,320 bytes, `0x703000`,
+> built 2026-09-24 23:30), the six tables sit between `0x54d484` and `0x54df8c`:
+>
+> | table | offset | length | header |
+> |---|---|---|---|
+> | `SSDT` | `0x54d484` | 61 | `MSFT`, checksum valid |
+> | `DSDT` | `0x54d4c8` | **1,520** | `QCOMM `/`SM7225 `, OEM rev 3, creator `INTL` (iasl), **checksum valid** |
+> | `APIC` | `0x54dabc` | 724 | `QCOM`/`QCOMEDK2`, rev 5 |
+> | `FACP` | `0x54dd94` | 276 | `QCOM`/`QCOMEDK2`, rev 6 |
+> | `FACS` | `0x54deac` | 64 | (no OEM fields — all zero, as `FACS` has none) |
+> | `GTDT` | `0x54def0` | 156 | `QCOM`/`QCOMEDK2`, rev 2 |
+>
+> The DSDT is gauguin's own and contains what it was supposed to: `ACPI0007`
+> eight times (the eight CPU devices), `QCOM24A5` once (the UFS `_HID`), and
+> `UFS0` and `URS0` device nodes, with `_HID`/`_ADR`/`_CRS`/`_DSM`/`_STA`/`_UID`
+> all present.
+>
+> **The APIC is where a mistake would be fatal rather than cosmetic, so it was
+> parsed subtable by subtable.** 44-byte MADT header, then eight `0x0B` subtables
+> of `0x52` = 82 bytes each, then one `0x0C` (GICD) of 24 — 44 + 8×82 + 24 = 724,
+> which is the whole table. GICC #1 and #8, read at the offsets ACPI 6.4 gives
+> (SPE overflow interrupt at 78 is what makes the subtable 82 and not 80):
+>
+> | field | offset | GICC #1 (cpu 0) | GICC #8 (cpu 7) | gauguin's device tree |
+> |---|---|---|---|---|
+> | Performance Interrupt GSIV | 20 | `0x15` = **21** | `0x15` = **21** | `pmu interrupts = <1 5 8>` → PPI 5 → 21 ✔ |
+> | VGIC Maintenance Interrupt | 56 | `0x18` = **24** | `0x18` = **24** | GIC node `interrupts = <1 8 4>` → PPI 8 → 24 ✔ |
+> | GICR Base Address | 60 | **`0x17A60000`** | **`0x17B40000`** | `reg = <… 0x17a60000 0x100000>` ✔ |
+>
+> Eight cores at stride `0x20000` runs `0x17A60000`→`0x17B4FFFF`, inside the
+> `0x100000` window the device tree declares. **So all three values the choice of
+> Moorea rested on are in the built table, and they are the right ones** — which
+> is what `docs/08` step 4.44's ordering rule asks for anyway: the reading is of
+> the artifact, not of the source that was supposed to produce it.
+
 **A trap in reading these files, because it produced a confident wrong answer
 first.** The GICC subtable is labelled `Subtable Type : 0B [Generic Interrupt
 Controller]`; a parser that looks for "GIC CPU Interface" — the name the ACPI spec
@@ -2474,4 +2529,4 @@ table above is the corrected one.
 | set chosen | **Moorea**, and `APIC`/`FACP`/`GTDT` only — every value checked against gauguin's device tree |
 | set `Platforms/Realme/bitra` uses | Kona — matches nothing |
 | DSDT | authored for gauguin, but its UFS and USB values are verified equal to bitra's |
-| next step | `gauguin/AcpiTables.inf` + DSDT, then 1–4 above |
+| next step | **done as of 2026-09-25** — `gauguin/AcpiTables.inf` and the DSDT exist, are wired into `gauguin.fdf`/`gauguin.dsc`, and are in the built payload with every GICC field read back correct (see the superseded note above). What remains for P3 is USB host and input, not ACPI |
