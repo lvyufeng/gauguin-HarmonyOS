@@ -215,6 +215,208 @@ def read_win_text(path):
     return raw.decode("utf-8", errors="replace")
 
 
+def load_driver_set(directory):
+    """(id -> [inf paths], encoding tally, file count) for a Windows INF tree.
+
+    One reader, used by both `--drivers` and `--bind`, because the encoding
+    question above is exactly the kind that gets answered once and then
+    answered differently in the second copy.
+    """
+    inffiles = []
+    for root, _dirs, names in os.walk(directory):
+        inffiles += [os.path.join(root, n)
+                     for n in names if n.lower().endswith(".inf")]
+    hids, encodings = {}, {}
+    for inf in inffiles:
+        try:
+            raw = open(inf, "rb").read()
+        except OSError:
+            continue
+        if raw[:2] in (b"\xff\xfe", b"\xfe\xff"):
+            enc = "utf-16 (BOM)"
+        elif b"\x00" in raw[:4096]:
+            enc = "utf-16 (no BOM)"
+        else:
+            enc = "utf-8"
+        encodings[enc] = encodings.get(enc, 0) + 1
+        for m in INF_ACPI.finditer(read_win_text(inf)):
+            hids.setdefault(m.group(1).upper(), []).append(
+                os.path.relpath(inf, directory))
+    return hids, encodings, inffiles
+
+
+# An ASL `_HID` is a plain string in every table this repo has, but `EisaId (...)`
+# is the other spelling iasl accepts, so both are read here rather than only the
+# one this file happens to use. `_CID` is read too: a node is bound by either.
+ASL_HID = re.compile(r'Name \(_([HC]ID), (?:"(?:EisaId \(")?|EisaId \(")'
+                     r'([^"]+)"')
+ASL_DEVICE = re.compile(r"^\s*Device \(([A-Z0-9_]{4})\)")
+
+
+def short(path):
+    """A path relative to the repo when it is inside it, absolute when it is not.
+
+    `--drivers` and `--asl` both take paths outside the repo by design - the
+    driver set lives in ~/work - and `relpath` on those returns `../../../..`,
+    which reads as a mistake rather than as a location.
+    """
+    rel = os.path.relpath(path, REPO)
+    return path if rel.startswith("..") else rel
+
+
+def cmd_bind(args):
+    """Which driver claims a name - the check that the name is not a guess.
+
+    The census decomposes the id into a block index the corpus supplies and a
+    family byte a driver set supplies. This is the last step of that: it reads an
+    id back out of the ASL that is about to be built and asks the driver set
+    whether anything binds to it.
+
+    The failure it exists for is the quiet one. A node whose `_HID` no driver
+    claims does not error, warn or fall back at runtime - it is simply absent
+    from Device Manager, with the hardware behind it working and unused. So
+    "the name I chose" and "the name a driver claims" have to be made the same
+    act, or the mistake is only found on the far side of a Windows install.
+    """
+    hids, encodings, inffiles = load_driver_set(args.drivers)
+    print(f"{len(inffiles)} .inf files, {len(hids)} distinct ACPI hardware ids")
+    print(f"  encodings: {', '.join(f'{v} {k}' for k, v in sorted(encodings.items()))}\n")
+
+    if args.asl:
+        return bind_asl(args, hids)
+    return bind_lookup(args, hids)
+
+
+def bind_asl(args, hids):
+    """Every `_HID` in a file, against the set. Returns 1 if any QCOM one misses."""
+    try:
+        lines = open(args.asl, encoding="utf-8", errors="replace").read().splitlines()
+    except OSError as e:
+        print(f"cannot read {args.asl}: {e}")
+        return 1
+    device = "?"
+    found = []            # (line number, device, hid)
+    for n, line in enumerate(lines, 1):
+        m = ASL_DEVICE.match(line)
+        if m:
+            device = m.group(1)
+        for m in ASL_HID.finditer(line):
+            found.append((n, device, m.group(2).upper()))
+
+    used = sorted({h for _n, _d, h in found})
+    print(f"  {len(found)} _HID/_CID declarations in {short(args.asl)}, "
+          f"{len(used)} distinct\n")
+    unclaimed, standard = [], []
+    for hid in used:
+        where = sorted({f"{d} (line {n})" for n, d, h in found if h == hid})
+        who = hids.get(hid, [])
+        if not QCOM_ID.match(hid):
+            # ACPI0007 is a processor, ACPI0011 a generic button device: the OS
+            # ships the driver and no vendor .inf is involved. Not a gap.
+            standard.append(hid)
+            verdict = "standard id - the OS supplies the driver"
+        elif who:
+            verdict = f"claimed by {', '.join(who[:3])}" + \
+                      (f" +{len(who) - 3}" if len(who) > 3 else "")
+        else:
+            unclaimed.append(hid)
+            verdict = "NOT CLAIMED by any .inf in this set"
+        print(f"    {hid:<12} {len(where)}x  {verdict}")
+        print(f"                 {', '.join(sorted(where)[:4])}")
+    print()
+
+    if unclaimed:
+        print(f"  {len(unclaimed)} QCOM id(s) no driver in this set claims: "
+              f"{' '.join(unclaimed)}")
+        print("  Read that as a fact about *this* set rather than a verdict on the")
+        print("  name: a set is one board's driver package, so an id gauguin owns")
+        print("  and Kodiak does not - UFS and the UART are the two here - is")
+        print("  absent without being wrong. What it means is that no driver in")
+        print("  this set will bind, so on a Windows built from it those nodes are")
+        print("  absent from Device Manager. Fine while the block is not needed;")
+        print("  a silent failure the moment it is.")
+        return 1
+    print("  Every QCOM id in this file is claimed by a driver in this set.")
+    return 0
+
+
+def bind_lookup(args, hids):
+    """Either look up the ids named on the command line, or list what is spare.
+
+    The spare list is the useful half while the ASL is still being written: it
+    is the pool of names a real driver will answer to, so a new node is picked
+    from it rather than invented.
+    """
+    if args.bind:
+        rc = 0
+        for hid in (h.upper() for h in args.bind):
+            who = hids.get(hid, [])
+            if who:
+                print(f"  {hid:<12} claimed by {', '.join(sorted(who)[:4])}"
+                      f"{f' +{len(who) - 4}' if len(who) > 4 else ''}")
+            else:
+                print(f"  {hid:<12} NOT CLAIMED by any .inf in this set")
+                rc = 1
+        return rc
+
+    asl = os.path.join(REPO, "tools/acpi/gauguin.asl")
+    try:
+        text = open(asl, encoding="utf-8", errors="replace").read()
+    except OSError:
+        text = ""
+    have = {m.group(1).upper() for m in ASL_HID.finditer(text)}
+
+    kinds = {label: BLOCK_KIND.get(label) for label, *_ in BLOCKS}
+    modern = GENERATIONS[0][1]
+    print("  The pool: ids this set claims, by the block each one names.")
+    print("  `used` means gauguin.asl already carries it.\n")
+    for label, _base, _len, node, _why in BLOCKS:
+        kind = kinds.get(label)
+        idx = modern.get(kind) if kind else None
+        if not idx:
+            reason = ("no corpus index exists for this kind of block" if not kind
+                      else f"no `{kind}` index measured in the modern table")
+            print(f"    {label:<7} {reason}\n")
+            continue
+        # Drawn from the file the drivers came in rather than built from the
+        # tables above: the set is the oracle, so the suggestion is whatever it
+        # actually lists for this block's index.
+        pool = sorted(h for h in hids
+                      if QCOM_ID.match(h) and len(h) == 8 and h.endswith(idx))
+        if not pool:
+            print(f"    {label:<7} nothing in this set claims index `{idx}`\n")
+            continue
+        print(f"    {label:<7} {node}")
+        for h in pool:
+            mark = "used" if h in have else "    "
+            print(f"            {mark}  {h}  {', '.join(sorted(hids[h])[:2])}")
+        print()
+
+    # Everything else the set claims. Kept separate from the table above on
+    # purpose: those are blocks gauguin's device tree says exist, and this is
+    # the remainder, which is where a node this port *chooses* to add - the
+    # PMIC at \_SB.PM01, for one - has to be picked from. Folding it into the
+    # table would be reporting a choice as a measurement.
+    named = set()
+    for label, *_ in BLOCKS:
+        kind = BLOCK_KIND.get(label)
+        idx = modern.get(kind) if kind else None
+        if idx:
+            named |= {h for h in hids
+                      if QCOM_ID.match(h) and len(h) == 8 and h.endswith(idx)}
+    rest = sorted(h for h in hids if QCOM_ID.match(h) and h not in named)
+    if rest:
+        print("  The remainder: QCOM ids this set claims that no block above does.")
+        print("  A node this port adds by choice - `\\_SB.PM01`, the PMIC the")
+        print("  button node's GpioInt resources belong to - is named from here,\n"
+              "  not from the table, so that the choice stays visible as one.")
+        print()
+        for h in rest:
+            print(f"            {h}  {', '.join(sorted(hids[h])[:2])}")
+        print()
+    return 0
+
+
 def disassemble(aml, cache):
     """(dsl_path or None) - iasl -d, cached, because 36 trees take ~90 s."""
     rel = os.path.relpath(aml, DEFAULT_TREE)
@@ -649,29 +851,10 @@ def cmd_drivers(args):
     them the set answers to. A set that covers all of them names the family, and
     names every block in the same breath.
     """
-    inffiles = []
-    for root, _dirs, names in os.walk(args.drivers):
-        inffiles += [os.path.join(root, n) for n in names if n.lower().endswith(".inf")]
+    hids, encodings, inffiles = load_driver_set(args.drivers)
     if not inffiles:
         print(f"no .inf files under {args.drivers}")
         return 1
-    hids = {}      # ACPI id -> [inf paths]
-    encodings = {}  # what each .inf turned out to be, for the summary line
-    for inf in inffiles:
-        try:
-            raw = open(inf, "rb").read()
-        except OSError:
-            continue
-        if raw[:2] in (b"\xff\xfe", b"\xfe\xff"):
-            enc = "utf-16 (BOM)"
-        elif b"\x00" in raw[:4096]:
-            enc = "utf-16 (no BOM)"
-        else:
-            enc = "utf-8"
-        encodings[enc] = encodings.get(enc, 0) + 1
-        text = read_win_text(inf)
-        for m in INF_ACPI.finditer(text):
-            hids.setdefault(m.group(1).upper(), []).append(os.path.relpath(inf, args.drivers))
     print(f"{len(inffiles)} .inf files, {len(hids)} distinct ACPI hardware ids")
     print(f"  encodings: {', '.join(f'{v} {k}' for k, v in sorted(encodings.items()))}\n")
 
@@ -742,12 +925,22 @@ def main():
                     help="decompose the QCOM ids by device name (SoC vs block)")
     ap.add_argument("--drivers", metavar="DIR",
                     help="a Windows driver set to check coverage against")
+    ap.add_argument("--bind", nargs="*", metavar="HID",
+                    help="with --drivers: which driver claims these ids, or with "
+                         "none named, the pool of ids the set offers per block")
+    ap.add_argument("--asl", metavar="FILE",
+                    help="with --drivers --bind: every _HID/_CID in this ASL file "
+                         "against the set (default tools/acpi/gauguin.asl)")
     args = ap.parse_args()
     if args.blocks:
         cmd_blocks()
         return 0
     if args.functions:
         return cmd_functions(args)
+    if args.bind is not None or args.asl:
+        if not args.drivers:
+            ap.error("--bind and --asl need --drivers DIR")
+        return cmd_bind(args)
     if args.drivers:
         return cmd_drivers(args)
     return cmd_census(args)

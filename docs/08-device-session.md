@@ -9881,13 +9881,78 @@ in the same table generation. No SM7225 Windows driver set and no independent
 SM7225 reference DSDT exists, so the byte is measured for the *family*, not on the
 die. Two oracles, not a proof — recorded that way rather than as a fact.
 
-### TSENS is the one block this does not reach
+### `--bind`: the name and the driver made the same act
 
-The set's only `QCOM04xx` id is `QCOM0427`, and it belongs to `qcabd.inf`, not to a
-thermal sensor. Neither the set nor any of the 66 tables describes a thermal
-sensor device of any kind, so `TSENS0`/`TSENS1` remain unnameable by this route and
-by the corpus route Step 4.58 already recorded. The driver set closed the family
-byte and did not close thermal.
+A set that names the blocks is only half useful while the nodes are still being
+written — it says which ids exist, not whether the one on line 73 of the ASL is
+one of them. So `--drivers DIR --bind` was added, and it reads in three modes:
+
+- `--bind --asl FILE` sweeps every `_HID`/`_CID` in a file and reports, per id,
+  which `.inf` claims it. Exit 1 if any QCOM id is unclaimed, so it can gate a
+  commit.
+- `--bind QCOM0A2D ...` looks up ids directly.
+- `--bind` alone prints the pool: for each of gauguin's twelve blocks, the ids
+  this set actually lists at that block's index, marked `used` where the ASL
+  already carries it — plus a separate remainder of everything else the set
+  claims, which is where a node this port *adds* (`\_SB.PM01`, the PMIC the
+  button node's `GpioInt` resources belong to) has to be picked from. The
+  remainder is kept out of the block table deliberately: those blocks are what
+  the device tree says exists, and that node is a choice, so folding it in would
+  be reporting a choice as a measurement.
+
+Run against the ASL as it stands it returns 1 — 11 declarations, 4 distinct,
+of which `QCOM0497` (`URS0`, line 173) and `QCOM24A5` (`UFS0`, line 77) are
+unclaimed by this set. That is the honest result and not a defect in the names:
+a driver set is one board's package, and an id gauguin owns and Kodiak does not is
+absent without being wrong. What it does mean is that no driver *in this set* will
+bind those two nodes, so on a Windows built from it they are absent from Device
+Manager — fine while the block is not needed, a silent failure the moment it is.
+The output says exactly that rather than softening it into a pass.
+
+The motivation is the same as the encoding bug's, one level up. That bug was a
+reader reporting an empty set; this is a *writer* with no reader at all — with the
+names chosen by hand and the consequence only visible after a Windows install, on
+the far side of a device that takes a reboot and a photo to read. `--bind` moves
+that consequence back to the commit.
+
+One scope note: it reads `Name (_HID, ...)` / `Name (_CID, ...)`, which is every
+declaration in this file. What it cannot read is a *computed* id, and there is one
+next to `URS0` — `Method (URSI)` returns `QCOM0497` or `QCOM0498` depending on
+`QUFN`. It is unreferenced in this table, so nothing presents it today, but it is
+the shape to watch: a name that only exists at runtime is the one `--bind` cannot
+clear, and it is why the sweep reports what it counted rather than saying the file
+is clean.
+
+### TSENS is not reached, and the thermal zones are — separately
+
+The set's thermal content is `qcthermalmdm7280.inf`, and it does not touch the
+sensor block. It claims a **consecutive range**, `QCOM04B4` through `QCOM04CE` —
+27 ids, one driver — and that range contains `QCOM04C0` through `QCOM04C8`.
+
+Those nine are exactly what Step 4.58 found and could not explain: a consecutive
+block appearing in six corpus tables across four families, *fixed regardless of
+SoC*. Read one in `Platforms/Samsung/a52sxq` and it is a real zone:
+
+```
+        ThermalZone (TZ51)
+        {
+            Name (_HID, "QCOM04C0")  // _HID: Hardware ID
+            Name (_TZD, Package (0x01)  // _TZD: Thermal Zone Devices
+            {
+                \_SB.MPA
+            })
+```
+
+So the observation was right and now has a driver behind it: the thermal zones
+live in a **fixed `QCOM04xx` space, not the family-byte space** — which is why
+they looked portable across 09, 0A and 1A while every block id moved. That is the
+third thing this set settled, after the family byte and the encoding bug.
+
+Three honest limits. The driver attests the *range*, not `QCOM04C0`–`QCOM04C8`
+specifically; `qcSensors.inf` (`QCOM0667`) is the sensor framework, `qcadc7280.inf`
+(`QCOM0A11`) is the PMIC ADC, and neither is TSENS; and no id here says which of
+gauguin's 40 device-tree thermal zones takes which number. So TSENS as a **sensor
+device node** remains unnameable by both routes.
 
 ### What the driver set does *not* gate
 
@@ -9911,6 +9976,7 @@ accounting) and `P2WALK` (the allocation census), and neither needs a driver set
 | verified on | the real set (158 ids now, was 0); a synthetic ASCII `.inf` (still reads, reported `utf-8`); an empty directory (still "no `.inf` files", exit 1); `--functions` over 66 tables unchanged |
 | corroboration | `Platforms/Xiaomi/lisa` and `Platforms/Samsung/a52sxq`, the only two `SDM7280` tables and the only two carrying `QCOM0A0C`, `QCOM0A0B`, `QCOM0A10`, `QCOM0A16`; and `0x2D & 0x7F = 0x53` block-kind agreement across all eight ids |
 | the honest caveat | `0A` is measured on SM7325, not on SM7225. No SM7225 driver set and no SM7225 DSDT exists. Two oracles, not a proof |
-| not reached | `TSENS0`/`TSENS1`. The set's only `QCOM04xx` is `QCOM0427` (`qcabd.inf`); no driver set can name a block the corpus has never seen |
+| not reached | `TSENS0`/`TSENS1` as a sensor device node: the set's thermal driver claims the *zone* ids `QCOM04B4`–`QCOM04CE`, and step 4.58's portable `QCOM04C0`–`QCOM04C8` sit inside that range, so the zones are attested while the sensor block is not |
+| also settled | the thermal zones live in a fixed `QCOM04xx` space rather than the family-byte space, which is why `QCOM04C0`–`QCOM04C8` looked portable across 09, 0A and 1A while every block id moved |
 | not gated | the UEFI phase. `AcpiTableDxe` auto-computes `_CID`, and the build ships `QCOM`-prefixed ids with no driver set at all. The set protects P3/P5 authoring, not P2 |
 | unchanged | nothing on the device. The staged P2 payload, its hash and the restore net are as they were; no ASL was edited, since any edit to it invalidates the staged artifact |
