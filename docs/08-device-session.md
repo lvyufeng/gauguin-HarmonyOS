@@ -4420,6 +4420,133 @@ relaxation is still `boot` only.
 | next | read `P2 ERR` (first) and `P2 RETRY bs9=` (last line, after the four `P2 BIN`) off the panel |
 
 
+## Step 4.26 — The allocator's whole world is 9056 pages, so `Out of Resources` cannot mean "full"
+
+Step 4.24 read `FindFreePages` and concluded that a boot-service refusal has to mean
+that no run of 9 pages existed **anywhere**. That sentence is only as strong as its
+picture of what "anywhere" is, and every version of the picture so far had an unstated
+assumption in it: that the region the allocator searches is the whole DXE heap. This
+step walks the model from the descriptor table down to `CoreFindFreePagesI` and shows
+that it is — which converts "no run existed anywhere" from a possibility into a
+measurement, and makes `bs9` the one field that separates the two ways it can be true.
+
+### One `Conv` region, and it is the one named for it
+
+The generated table in `Platforms/Xiaomi/gauguinPkg/Library/MemoryMapLib/MemoryMapLib.c`
+holds fourteen `SYS_MEM` rows. All but one of them carry a fixed memory type:
+
+| region | range | memtype |
+|---|---|---|
+| LLCC0 | 0x09200000–0x09250000 | `BsData` |
+| **DXE Heap** | **0x9B800000–0x9DB60000** | **`Conv`** |
+| Sched Heap | 0x9DB60000–0x9DF60000 | `BsData` |
+| FV Region | 0x9F800000–0x9FA00000 | `BsData` |
+| ABOOT FV | 0x9FA00000–0x9FC00000 | `Reserv` |
+| UEFI FD | 0x9FC00000–0x9FF00000 | `BsData` |
+| SEC Heap | 0x9FF00000–0x9FF8C000 | `BsData` |
+| CPU Vectors | 0x9FF8C000–0x9FF8D000 | `BsData` |
+| MMU PageTables | 0x9FF8D000–0x9FF90000 | `BsData` |
+| UEFI Stack | 0x9FF90000–0x9FFD0000 | `BsData` |
+| Log Buffer | 0x9FFF7000–0x9FFFF000 | `RtData` |
+| Info Blk | 0x9FFFF000–0xA0000000 | `RtData` |
+| Kernel | 0xA2400000–0xAA400000 | `Reserv` |
+| DBI Dump | 0xAFAA0000–0xB0EA0000 | `RtData` |
+
+`DXE Heap` ends at **0x9DB60000**, not 0x9DB80000 — `Sched Heap` starts exactly there,
+which is the check. 0x02360000 bytes is 9056 pages, 35.4 MiB, and it is the only `Conv`
+row in the table.
+
+What makes the other thirteen unavailable is not their type label but an allocation:
+`AddHob` (`Silicium/SiliciumPkg/Library/MemoryInitPeiLib/MemoryInitPei.c:86-100`) builds
+a `BuildResourceDescriptorHob` only for `AddMem`/`AddDev`/`HobOnlyNoCacheSetting`, but
+builds a **`BuildMemoryAllocationHob` for every region whose `ResourceType` is
+`EFI_RESOURCE_SYSTEM_MEMORY`** — regardless of its `HobOption`, and including `DXE Heap`
+itself, whose `MemoryType` is `Conv`. A region with an allocation HOB is memory in use;
+`CoreInitializeGcdServices` does not hand it back as free. So the thirteen are typed
+allocations, and `DXE Heap` is a self-marked one that the DXE core claims through the
+PHIT range instead.
+
+### What that leaves, and the rung that cannot be gated
+
+`CoreFindFreePagesI` (`Mem/Page.c:950-958`) is the loop that actually picks addresses,
+and its first act is to skip every entry that is not `EfiConventionalMemory`:
+
+```c
+    //
+    // If it's not a free entry, don't bother with it
+    //
+    if (Entry->Type != EfiConventionalMemory) {
+      continue;
+    }
+```
+
+So the allocator's whole world is the Conventional entries, which is `DXE Heap` and
+nothing else: **9056 pages, and no allocation of any type can come from anywhere but
+there.**
+
+`CoreInternalAllocatePages` then sets `MaxAddress = MAX_ALLOC_ADDRESS` (`Page.c:1228`)
+— the only branch that narrows it is `AllocateAddress` (`:1240-1300`) — and the 46
+promoted images all take `AllocateAnyPages` because their `ImageBase` is 0 and their
+relocations are not stripped. So `FindFreePages (MAX_ALLOC_ADDRESS, …)`:
+
+| rung | source | gate |
+|---|---|---|
+| 1 | `Page.c:1073-1085`, the type's own bin window | the window, if the type has one |
+| 2 | `Page.c:1090-1106`, the default bin | `MaxAddress >= mDefaultMaximumAddress`, then clamps to it |
+| 3 | `Page.c:1114-1124`, `CoreFindFreePagesI (MaxAddress, 0, …)` | **none** — and `MaxAddress` here is still `MAX_ALLOC_ADDRESS` |
+
+Rung 2's clamp costs nothing: `mDefaultMaximumAddress` is the bin block's base minus one,
+and the bin block is allocated top-down, so the default window is nearly the whole heap.
+Rung 3 is ungated by any bin, any window and any type. **The only way all three return 0
+is that no run of `NumberOfPages` contiguous `EfiConventionalMemory` pages exists
+anywhere in the 9056.** That is the claim step 4.24 made, and this is the reading of the
+source that licenses it.
+
+### The bins do not consume a page — a model that was wrong until this step
+
+`BuildMemoryTypeInformationHob` (`PrePiHobLib/Hob.c:884-905`) is the only writer, and it
+emits five types, verbatim: `EfiACPIReclaimMemory`, `EfiACPIMemoryNVS`,
+`EfiReservedMemoryType`, `EfiRuntimeServicesData`, `EfiRuntimeServicesCode`, from the
+`PcdMemoryTypeEfi*` set. In `SiliciumPkg.dsc.inc:45-53` those are 0, 0, 0, 300 and 150,
+so `RequiredSize` is **450 pages, 1.84 MiB** — and `PcdMemoryTypeEfiBootServicesCode|1000`
+and `…BootServicesData|800` two lines below feed nothing, as step 4.23 said.
+
+`AllocateMemoryTypeInformationBins` (`Mem/MemoryBin.c:495-560`) then does something the
+earlier notes had backwards. It allocates `RequiredSize` with `AllocateAlignedPages`, sets
+`*DefaultMaximumAddress = BaseAddress - 1`, walks the five windows down from the top, and
+**frees the entire block again** with `FreeAlignedPages` before returning. The bins are
+address *windows* over pages that are free again by the time the next caller looks, not
+450 reserved pages. Nothing is consumed and nothing can be exhausted by that route.
+
+Two producers can set those windows and whichever runs first wins — both open with
+`if (*MemoryTypeInformationInitialized) return;`: `CoreSetMemoryTypeInformationRange`
+(`MemoryBin.c:337-423`) called from `CoreInitializeMemoryServices` (`Gcd.c:2526`) when a
+MemoryTypeInformation *resource* HOB exists, and `AllocateMemoryTypeInformationBins` called
+from the tail of `CoreAddMemoryDescriptor` (`Page.c:583-591`). So `P2 BIN init=1` says one
+of them ran; it does not say which, and it changes the page count in neither case.
+
+### The arithmetic, and this step's only prediction
+
+1562 pages of image demand (step 4.24) against 9056 pages of heap, with the bins costing
+nothing. A 9-page request — and `PdcDxe`'s is 9 pages and `ShmBridgeDxe`'s is 9 pages — cannot
+be refused for want of room. So the reading to expect is `bs9=Success`, and the field is
+worth reading precisely because of what each alternative would mean:
+
+| if the panel shows | then |
+|---|---|
+| `P2 RETRY bs9=Success` | the ladder was never out of room, and `Out of Resources` on the 27 is not the allocator running dry. The only heap-side explanations left are rungs 1 and 2, and both would have to be a window narrower than the heap; `P2 BIN rc=.. used=../..` are the next fields, not `P2 FREE` |
+| `bs9=` a named error | the heap was smaller than 9056 pages at that instant. That is not a statement about demand — it is a statement about which region `CoreInitializeMemoryServices` (`Gcd.c:2384-2475`) took as the first Conventional range. `MINIMUM_INITIAL_MEMORY_SIZE` is only `0x10000` (`Gcd.c:17`), so `Length` need only beat `16 + 450 = 466` pages for that call to succeed, and `FindLargestFreeRegion` may hand back a sub-range. `P2 FREE largest=` then sizes it, and the repair is a host-side build change (the open item from 4.14), not a device write |
+| `P2 FREE largest=` large **while** `bs9` fails | the run exists but not where the request looked — impossible with rung 3 ungated. This pair would mean the failure is not in `FindFreePages` at all, and the next instrument belongs on the pool side of `CoreLoadImage` |
+
+| | |
+|---|---|
+| reads | `MemoryMapLib.c` (the 14 rows), `MemoryInitPei.c:86-100` (`AddHob`), `Page.c:546-592`, `:902-958`, `:1060-1137`, `:1228`, `MemoryBin.c:337-423`, `:440-575`, `Gcd.c:17`, `:2241-2550`, `Hob.c:884-905`, `SiliciumPkg.dsc.inc:45-53` |
+| establishes | the allocator's world is exactly `DXE Heap`, 0x9B800000–0x9DB60000, 9056 pages / 35.4 MiB; rung 3 is ungated |
+| corrects | the bin model: 450 pages of `RequiredSize` are allocated, then freed, and survive only as address windows — no bin consumes a page |
+| predicts | `bs9=Success`, because 1562 pages of demand cannot exhaust 9056 |
+| cannot answer | whether the core actually held all 9056 of them at the moment `PdcDxe` ran — that is `P2 FREE largest=` and `bs9=` on the panel, and nothing on the host |
+
+
 ## Step 5 — Leave it bootable
 
 Whatever the outcome, end the session with the stock image back on `boot`:
