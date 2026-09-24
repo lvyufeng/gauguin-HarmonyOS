@@ -7617,6 +7617,14 @@ the P2BRINGUP instrumentation is what occupies the rest; DisplayDxe, UsbBusDxe a
 fit alongside it. Which puts the whole of P3 behind the same reading P2 has been behind since step
 4.30 — the panel, one photograph, `P2 ERR` first.
 
+> **Corrected by Step 4.57.** "P3's ACPI half is done" was true of the tables in the payload, and is
+> not true of P3 item 1, which asks for I2C, SPI, GPIO, buttons and thermal as well. Those nodes
+> cannot be written from the reference corpus — `_HID` is a declared string and no two SoCs declare
+> the same one — so item 1's remainder is behind the Windows driver set, not behind the 760 bytes.
+> The 760-byte figure itself is right: it is `0x703000` − `0x702d08`, the build's own
+> `EFI_FV_TAKEN_SIZE`, and not the 1,265-byte sum of file headers and data that a naive walk of the
+> volume gives.
+
 Nothing was flashed and nothing in the firmware changed. This step read an artifact that was already
 built and corrected two documents that described it wrongly.
 
