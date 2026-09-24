@@ -2792,10 +2792,18 @@ reproducible from their commits (`515dc71` for the first, `09e0e0e` for the
 last), and **none of them is archived**: `work/out/p2-4.15/` was created for the
 last one and was then reused by step 4.16's build, which is the mistake this
 paragraph exists to record. It is recoverable - a checkout of `09e0e0e` plus
-`tools/build-p2-payloads.sh` reproduces `5be70ecc…` byte for byte - and it costs
+`tools/build-p2-payloads.sh` rebuilds the same volume, and the inner `FVMAIN.Fv`
+of the result can be checked against the hash this step records - and it costs
 nothing, because a build no device has carried is a build nothing has to be
 compared against. Step 4.16 archives under its own directory and does not reuse
 one.
+
+> **"reproduces `5be70ecc…` byte for byte" was wrong when it was written and is
+> corrected here (2026-09-25).** It was not measured, and it cannot be: `Sec.efi`
+> carries a `__TIME__`/`__DATE__` stamp, so a rebuild from any commit produces a
+> different payload hash every time. What a commit does pin is the *volume* — see
+> Step 4.63's "the payload hash is a fingerprint of a build, not of the source",
+> and use `tools/fv-inventory.py <img> --dump-fvmain` to get at it.
 
 The payload was checked against the build it claims to be, byte for byte rather
 than structurally: the gzip kernel is a 112-byte `BootShim.bin` followed by
@@ -6656,6 +6664,17 @@ GenFv's own map says `EFI_FV_TOTAL_SIZE = 0x703000` against `EFI_FV_TAKEN_SIZE =
 budget for the rest of P2, and it is why the plan to delete the whole `P2BRINGUP` block
 before BDS work is now also a space requirement and not only a tidiness one.
 
+> **Superseded later the same day: there is no probe budget, and this reading is not
+> one.** `FVMAIN` declares `NumBlocks = 0`, so GenFv grows the volume to fit its
+> contents, and `EFI_FV_TOTAL_SIZE` is a *measurement of what was packed* rather than a
+> limit on what can be. A valid 11,536,368-byte `DSDT` builds in this tree at
+> `FVMAIN [99%Full] 18886656 (0x1203000) total … 248 free`; the only volume with a hard
+> cap is the outer `FVMAIN_COMPACT` (`0x300000`), and its free space *after
+> compression* is the budget. Step 4.63 has the measurements. **Deleting `P2BRINGUP`
+> when BDS is reached is tidiness again, not space** — and the last figure above,
+> `760 free`, is smaller than the `256 free` the current tree reports, because the
+> volume that number describes got *bigger* while the free bytes went down.
+
 The payload is the **fourth** built for this phase at exactly 1,142,784 bytes, which is
 by now the expected result and the reason `probe-fingerprint.py` exists at all.
 
@@ -7636,6 +7655,12 @@ fit alongside it. Which puts the whole of P3 behind the same reading P2 has been
 > section in `docs/07` for the measured version; `docs/00-plan.md`'s P3 entry is
 > corrected too. `P2BRINGUP` still has to come out before the payload is a shipping
 > one, but that is a cleanliness step, not a size gate.
+>
+> **And Step 4.63 supplied the number that replaces it.** The volume with a hard limit is
+> `FVMAIN_COMPACT` (`0x300000`), whose free space after compression is **2,053,056
+> bytes**; `FVMAIN` itself grows to fit (`NumBlocks = 0`) and was measured building an
+> 11,536,368-byte table. So this paragraph's `760` and the `304` above are both slack in
+> the last block, and neither is a gate.
 
 Nothing was flashed and nothing in the firmware changed. This step read an artifact that was already
 built and corrected two documents that described it wrongly.
@@ -10334,13 +10359,18 @@ whole chain was re-run and then read back rather than assumed:
 
 | | control `p2-phywake` | new `p2-pmic` |
 |---|---|---|
-| `Mu-gauguin-silicon-gzip.img` sha256 | `09f4f1f6…a2df7` | `bb9c7185…43c50` |
+| `Mu-gauguin-silicon-gzip.img` sha256 | `09f4f1f6…a2df7` | `bb9c7185…43c50` † |
 | `AcpiTables` FFS file | 2,906 B | 3,378 B (**+472**) |
 | `DSDT` in the payload | `0x54d4c8`, **1,547** B | `0x54d4c8`, **2,017** B |
 | `APIC` / `FACP` / `FACS` / `GTDT` | `0x54dad8` / `0x54ddb0` / `0x54dec8` / `0x54df0c` | `0x54dcb0` / `0x54df88` / `0x54e0a0` / `0x54e0e4` |
 | `--expect P2FreeWhy` | rc=0 | rc=0 |
 | ABL's own offline checks | pass | pass |
 | volume vs GenFv's map | 123 offsets/GUIDs, 0 mismatches | 123 offsets/GUIDs, 0 mismatches |
+
+† A build-specific hash, and the row that started the investigation below: a second build
+of the same source gives `0f009f53…cc1e29`. Only the payload differs — the volume inside
+both is the same, which is the point of *"the payload hash is a fingerprint of a build,
+not of the source"*.
 
 The `DSDT` stays at the same offset because the `AcpiTables` FFS file is padded and the
 `SSDT` precedes it; only the tables *after* the `DSDT` shift. The FFS file grows by 472
@@ -10358,14 +10388,155 @@ with the `0x0C400000 + 0x02800000` window and the 26-byte `CONF`; `QCOM0A2B`/`PN
 with `_DEP` on the arbiter and `PMCF`'s eleven-element package; `QCOM0A2D` with
 `0x00000201` and the `_DSM` pair.
 
-**`FVMAIN` is now 99% full: `7352064 used, 256 (0x100) free`.** Step 4.62 left 728
-bytes; the three nodes and their comments took 472 of them. This is the first time the
-volume has been within 256 bytes of failing, and it is worth stating plainly because
-the next node will not fit: `PEP0` alone is 13,000 lines in lisa. Two things free room
-— the `P2BRINGUP` block's removal once DXE reaches BDS, and the fact that
-`FVMAIN_COMPACT` is only 34% full, which is a different volume and not spare room for
-this one. **The capacity, not the knowledge, is now the binding constraint on the next
-ACPI node.**
+**The `FVMAIN` line in that readback reads as a volume about to overflow, and it is
+not one.** `7352064 used, 256 (0x100) free` is what GenFv printed, and the first draft
+of this section carried it forward as a budget for the next node — "the next node will
+not fit", "the capacity is now the binding constraint". Three measurements say
+otherwise.
+
+*`FVMAIN` sizes itself.* `[FV.FvMain]` in `gauguin.fdf` declares **`NumBlocks = 0`**
+with `BlockSize = 0x1000`, and GenFv reads that as *size me* rather than *this much and
+no more*: `GenFvInternalLib.c` (~line 3216) computes `NumBlocks = ((CurrentOffset +
+VtfPadSize)/Length) + (remainder?1:0); Size = NumBlocks*Length;` when the declared size
+is zero, and errors only when a declared size is smaller than what was built. So
+7,352,320 is 7,348,672 rounded up to a 4 KiB block — arithmetic *on* the content, not a
+limit on it.
+
+*A valid 11.5 MB table builds.* Taking the real 2,017-byte `DSDT` and appending one
+`Name` object holding a zero-filled `Buffer`, with the header length and the checksum
+fixed, gives an 11,536,368-byte table that is a legal AML table rather than a blob
+(`tools/acpi-pad.py`, which reproduces the 11,536,368 bytes and checksum `0xef` of the
+table this was first measured with; the build packs the file and never parses it, so a
+blob would have been a weaker test than it looks). The build reports:
+
+```
+INFO - FVMAIN [99%Full] 18886656 (0x1203000) total, 18886408 (0x1202f08) used, 248 (0xf8) free
+INFO - FVMAIN_COMPACT [34%Full] 3145728 (0x300000) total, 1095656 (0x10b7e8) used, 2050072 (0x1f4818) free
+PROGRESS - Success
+```
+
+`FVMAIN` auto-sizes to **2.57×** the figure the readback showed, and it is still
+reported as "99% full" — the percentage is a property of the rounding, not of the room
+left. It is not a number to plan against.
+
+*What is bounded is the volume `FVMAIN` sits inside.* Replacing the `DSDT` with 2 MiB of
+`/dev/urandom`, which the outer volume cannot compress away, fails the build:
+
+```
+INFO -   the required fv image size 0x311bf0 exceeds the set fv image size 0x300000
+INFO - ----------- Return Code: 0x00000001 ------------
+ERROR - Error
+```
+
+`0x300000` is **`FVMAIN_COMPACT`** — the outer volume, and the only hard cap this build
+has. So the number that matters for the next node is its free space, **2,053,056 bytes**
+(`0x300000` − `0x10ac40`, the current tree's `EFI_FV_TAKEN_SIZE` from
+`FVMAIN_COMPACT.Fv.txt`; the experiment's own log line above says `0x10b7e8` and
+2,050,072 free, 2,984 bytes more because that build's tables are larger), and it is a
+*compressed* budget: the inner volume arrived
+inside it as `0xf8c3f` (1,018,943) bytes of LZMA for a 7,352,320-byte volume, because
+most of what is in there compresses. 11.5 MB of one repeated byte costs almost nothing;
+2 MB of noise does not fit at all. ACPI tables are neither, and none of the nodes added
+so far is large *and* high-entropy.
+
+`DSDT.aml` was verified back to
+`8b918a16f0ffac2819a29952e53f6eac18b13b12e5ad1cf3faa2f21e08080183` after each
+experiment, and the tree rebuilt to `FVMAIN` `7352064 used, 256 free` and `FVMAIN.Fv`
+sha256 `85f6f9fc…542b30` — the same measurement the readback above started from. So the
+capacity claim is retired and the constraint on the next ACPI node is what constrained
+this one: the driver set's own id claims and gauguin's own device tree. `PEP0`'s 13,000
+lines in lisa do have to fit in the outer volume's 2,053,056 bytes *after compression*,
+which is a measurement to make when the node is written (`--acpi` and the GenFv line
+above are the two commands), not a reason to defer it.
+
+### And the payload hash is a fingerprint of a build, not of the source
+
+The readback table above records `bb9c7185…43c50` for `Mu-gauguin-silicon-gzip.img`.
+Three builds of this one source tree produced three different hashes for that file —
+`bb9c7185…43c50`, then `0f009f53…cc1e29`, then `86356ae4…2696b68`. None of them is
+wrong. `Silicon/Silicium/SiliciumPkg/Sec/Sec.c:48` compiles a build stamp into the
+image:
+
+```c
+DEBUG ((EFI_D_WARN, "Firmware Version %s Build at %a on %a\n",
+        PcdGetPtr (PcdFirmwareVersionString), __TIME__, __DATE__));
+```
+
+Two consecutive `-c` clean builds of the same tree, compared file by file:
+
+| | build 1 | build 2 |
+|---|---|---|
+| `SILICIUM_UEFI.fd` | `be1855612e633d5025951866da176c1801e08ee213dfc6096aa159046450eb37` | `cc70fd888fcc8d2eb3e0d324204a0f529b0dcdaa27d0af389638546b8de95636` |
+| `Sec.efi` | `5fde2086a9c145d64f3295adbce07d5d90a058b00caa7eee8a5c1a23e2fff47a` | `b0d74cf4a46278901f218affc247c56a8e57b93dc8c184ad3da93262c9d3800b` |
+| **`FVMAIN.Fv`** | **`85f6f9fca9b89b98be59dfc501228bb5fcf010881881cf8e72be2bd8db542b30`** | **`85f6f9fca9b89b98be59dfc501228bb5fcf010881881cf8e72be2bd8db542b30`** |
+
+The two FDs differ in **13 runs across the whole 3 MiB, every one of them inside
+`Sec.efi`.** That file is the first file in `FVMAIN_COMPACT` (`FVMAIN_COMPACT.Fv.txt`:
+`0x00000048 9AFFB503-…`, `0x10fb8` bytes) and it is *not* part of `FVMAIN`, which is the
+second file at `0x00011000`. Six of the runs are 8 bytes of `.text` and debug metadata;
+the other seven are a single 93-byte window, `0xbb60`–`0xbbbd`, of the string pool, in
+which the two literals swapped places. The build that finished at 06:05 local carried
+`22:05:07` beside `Sep 24 2026`, because `__TIME__`/`__DATE__` here are **UTC** —
+22:05:07 UTC is 06:05:07 +0800, which is why a build made on the 25th says the 24th in
+the banner.
+
+**So the build is not bit-reproducible and the payload hash is not a source
+fingerprint; `FVMAIN.Fv` is, and that is the artifact to record.** It was
+`85f6f9fc…542b30` in five measurements of this tree — the two builds above, two further
+rebuilds after the capacity experiments, and the volume extracted from the payload of
+record — which is exactly the reason it can be: `Sec.efi` is the one file that is not
+inside it. Extracting it is one command, and `tools/fv-inventory.py` grew the option
+because listing the volume is not the same as being able to hash it:
+
+```
+$ python3 tools/fv-inventory.py work/out/p2-pmic/Mu-gauguin-silicon-gzip.img \
+      --dump-fvmain /tmp/FVMAIN-pmic.Fv
+/tmp/FVMAIN-pmic.Fv: 7,352,320 bytes, sha256 85f6f9fca9b89b98be59dfc501228bb5fcf010881881cf8e72be2bd8db542b30
+```
+
+**The stamp stays.** It is how a build identifies itself on a device with no UART —
+a banner photographed off the panel is attributable to a build only because of it, and
+so is every `P2` row that has to be tied to the firmware that produced it. Removing it
+to make hashes line up would trade a reading for a tidiness. What is dropped is the
+practice of treating a payload hash as a fingerprint of the source: the payload hash
+says *which build*, `FVMAIN.Fv`'s says *what it contains*.
+
+| | |
+|---|---|
+| payload of record | `work/out/p2-pmic/Mu-gauguin-silicon-gzip.img`, `0f009f53…cc1e29` — a rebuild of the source at this commit, and the file now on disk |
+| the hash this record first carried | `bb9c7185…43c50`, the same source built an hour earlier; a different build of the same volume |
+| what both carry | inner `FVMAIN.Fv` sha256 `85f6f9fc…542b30`, 7,352,320 bytes, 123 files |
+| why the readback table above applies to both | the two payloads' inner volumes are bit-identical, so every offset, length and checksum in that table is the same in both |
+
+**And it is a fingerprint of the source, which is the other half of the claim and the
+half a stable hash alone cannot show.** The two control payloads on disk were built from
+different source states (their `DSDT` sections are 1,547 and 1,520 bytes against this
+one's 2,017) and their volumes separate cleanly, while their payload names — and their
+place in this narrative — are identical:
+
+| payload | `DSDT` in `AcpiTables` | inner `FVMAIN.Fv` |
+|---|---|---|
+| `p2-pmic` (of record) | 2,017 | `85f6f9fc…542b30` |
+| `p2-phywake` (control) | 1,547 | `b1f27741…ee0a2a0` |
+| `p2-freewhy` (control) | 1,520 | `9ac6f354…98b4c1d` |
+
+All three are 7,352,320 bytes with `EFI_FV_TOTAL_SIZE 0x703000`, and their compressed
+sizes inside `FVMAIN_COMPACT` are `0xf8c3f`, `0xf8b8f` and `0xf8b65` — ordered the same
+way as the tables they carry. So the hash changes when the source changes and does not
+change when only the clock changes, which is the property that makes it worth recording
+in place of the payload hash. `python3 tools/fv-inventory.py <payload> --dump-fvmain`
+prints it for any of them.
+
+The readback itself is now one command per half — `tools/fv-inventory.py <payload>
+--acpi` prints the six tables with their offsets, lengths and checksums, and re-running
+it against both `p2-pmic` and the `p2-phywake` control reproduces the table above
+exactly (`DSDT` `0x54d4c8` at 2,017 against 1,547; `APIC` `0x54dcb0` against `0x54dad8`;
+`FACP` `0x54df88` against `0x54ddb0`; `FACS` `0x54e0a0` against `0x54dec8`; `GTDT`
+`0x54e0e4` against `0x54df0c`). The `DSDT` pulled out of the payload is byte-identical
+to the table the build compiled — sha256
+`8b918a16f0ffac2819a29952e53f6eac18b13b12e5ad1cf3faa2f21e08080183` on both sides — and
+the `iasl -d` / `iasl -p` round trip on it is byte-identical at 2,017 bytes, which is a
+third way of saying the same thing.
 
 ### The honest limits
 
@@ -10387,7 +10558,33 @@ ACPI node.**
   the 7280 set.** The family byte is right for them; the driver is not in this set, so
   the touchscreen and the IR blaster are not reachable through `inf-7280` whatever this
   file declares.
+- **Both capacity measurements are build-time results, and neither volume has been
+  decompressed by a running `DXE`.** That `FVMAIN` auto-sizes to 18,886,656 bytes is
+  GenFv's arithmetic; that the firmware then finds, decompresses and dispatches a volume
+  that size is a runtime question nothing here has asked, and it is asked on the device,
+  not on this host. The claim being retired was *"the next node will not fit"*, and the
+  replacement is *"the build has room; a boot at that size has not been tried"* — the two
+  are not the same statement, and only the first one was ever the blocker.
 - **The device was not touched.** Nothing was written to `boot`, nothing was flashed,
   and the restore net is unchanged. `p2-variants` is still the payload of record on the
   phone, `p2-phywake` has never been read, and the gate before either `p2-phywake` or
   `p2-pmic` goes on is the same one as before: **read the panel first, then flash.**
+
+### What this correction was, and what it was not
+
+It was four corrections to documents and one extension to a tool, and no change to the
+firmware. In this file: step 4.42's closing paragraph (which first proposed the volume as
+a gate), the correction blockquote at step 4.53's readback (which had the figure right
+and the consequence wrong), step 4.15's claim that a build "reproduces `5be70ecc…` byte
+for byte" (never measured, and not measurable), and this step's own first draft. In
+`docs/07`: the fourth-build blockquote and the `where ACPI got to` summary row. In
+`docs/00-plan.md`: the P3 volume gate. `tools/fv-inventory.py` gained `--dump-fvmain`
+and `--acpi`; `tools/acpi-pad.py` is new and exists so the 11,536,368-byte measurement
+can be repeated rather than believed.
+
+No firmware source was edited. `DSDT.aml` was overwritten by each capacity experiment and
+verified back to `8b918a16f0ffac2819a29952e53f6eac18b13b12e5ad1cf3faa2f21e08080183` after
+every one of them, and the tree after the last restore rebuilds to the `FVMAIN`
+`7352064 used, 256 free` and `FVMAIN.Fv` `85f6f9fc…542b30` that the readback table above
+was taken from — which is the only reason those measurements are of *this* build rather
+than of a build that used to exist.

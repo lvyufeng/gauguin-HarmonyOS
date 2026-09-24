@@ -2727,11 +2727,28 @@ for the CPU skeleton at `Silicon/Qualcomm/Moorea/DSDT_Minimal.asl`, and 20 platf
 > standard for an ASL change in this port: a length check says a table is there, a
 > round trip says it is the right table.
 >
-> **`FVMAIN` after this step is `7352064 used, 256 (0x100) free` of 7,352,320 — 99%
-> full.** Step 4.62 had left 728 bytes and the three nodes took 472 of them. The
-> `FVMAIN_COMPACT` figure (34% full) is a different volume and is not spare room for
-> this one. So the binding constraint on the next ACPI node is capacity, not knowledge:
-> deleting the `P2BRINGUP` block once DXE reaches BDS is what frees the space back.
+> **`FVMAIN` after this step is `7352064 used, 256 (0x100) free` of 7,352,320 — and
+> that is a rounding artefact, not a full volume.** It reads as 99% full and was
+> briefly recorded as the next node's budget; `[FV.FvMain]` declares `NumBlocks = 0`,
+> so GenFv sizes the volume from its content, and a valid **11,536,368-byte `DSDT`**
+> (`tools/acpi-pad.py`, which regenerates that exact table) builds with
+> `FVMAIN [99%Full] 18886656 (0x1203000) total, 18886408 used, 248 free`
+> and `PROGRESS - Success`. The volume that has a hard limit is the outer
+> `FVMAIN_COMPACT` (`0x300000`), and it is the one that fails on 2 MiB of noise —
+> `the required fv image size 0x311bf0 exceeds the set fv image size 0x300000` — while
+> staying at 34% on the 11.5 MB table, because what is inside it compresses. The budget
+> for the next ACPI node is therefore `FVMAIN_COMPACT`'s free **2,053,056 bytes**, after
+> compression. `docs/08-device-session.md`, Step 4.63, has the measurements; the
+> constraint on the node itself is still the driver set's id claims and this board's
+> device tree.
+>
+> **And a payload hash from here on is a fingerprint of a build, not of the source.**
+> `Silicon/Silicium/SiliciumPkg/Sec/Sec.c:48` compiles `__TIME__` and `__DATE__` into
+> `Sec.efi`, which lives in the outer volume and not in `FVMAIN`; two consecutive `-c`
+> clean builds of this tree give two `SILICIUM_UEFI.fd` hashes, two `Sec.efi` hashes,
+> and **one** `FVMAIN.Fv` hash — `85f6f9fc…542b30`. So the reproducible fingerprint of
+> what a build contains is `FVMAIN.Fv`, extractable from any payload with
+> `tools/fv-inventory.py <img> --dump-fvmain PATH`.
 >
 > `FACP` and `FACS` do not checksum in *any* of these builds, and that is the
 > un-patched state rather than a fault: `AcpiTableDxe` installs them at runtime and
@@ -2777,4 +2794,4 @@ table above is the corrected one.
 | set `Platforms/Realme/bitra` uses | Kona — matches nothing |
 | DSDT | authored for gauguin, but its UFS and USB values are verified equal to bitra's |
 | next step | **done as of 2026-09-25** — `gauguin/AcpiTables.inf` and the DSDT exist, are wired into `gauguin.fdf`/`gauguin.dsc`, and are in the built payload with every GICC field read back correct (see the superseded note above). What remains for P3 is USB host and input, not ACPI |
-| where ACPI got to | the DSDT now carries UFS, USB (with the PHY wake lines), the eight CPUs **and the PMIC family** — `SPMI`, `PMIC` and `PM01`, Step 4.63 — and the AML is **2,017 bytes** in the `work/out/p2-pmic/` payload. `FVMAIN` is 99% full at 256 bytes free, so the next node needs room freed first |
+| where ACPI got to | the DSDT now carries UFS, USB (with the PHY wake lines), the eight CPUs **and the PMIC family** — `SPMI`, `PMIC` and `PM01`, Step 4.63 — and the AML is **2,017 bytes** in the `work/out/p2-pmic/` payload. The `FVMAIN` "99% full" reading is a rounding artefact (`NumBlocks = 0`); the volume with a limit is the outer `FVMAIN_COMPACT`, `2,053,056` bytes free after compression. Payload hashes are per-build (`__TIME__` in `Sec.efi`); the reproducible fingerprint is `FVMAIN.Fv` `85f6f9fc…542b30` |

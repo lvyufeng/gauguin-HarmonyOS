@@ -15,6 +15,7 @@ looks exactly like a firmware that shipped empty, and is not.
     python3 tools/fv-inventory.py Mu-gauguin.img --usb      # just the USB stack
     python3 tools/fv-inventory.py --verify uefi/Binaries/gauguin ...
     python3 tools/fv-inventory.py Mu-gauguin.img --against Build/.../FVMAIN.Fv.txt
+    python3 tools/fv-inventory.py Mu-gauguin.img --dump-fvmain /tmp/FVMAIN.Fv
 
 `--verify DIR` compares the driver .inf FILE_GUIDs under DIR against the ones
 really present, which is the check that answers "is the driver I packaged
@@ -30,6 +31,7 @@ map from a different platform is the test that it can fail at all.
 """
 import argparse
 import glob
+import hashlib
 import os
 import re
 import struct
@@ -48,6 +50,7 @@ FX_FILE_DATA_VALID = 0xF8          # 0x07 in a volume with erase polarity set
 SECTION_USER_INTERFACE = 0x15
 SECTION_GUID_DEFINED   = 0x02
 SECTION_FV_IMAGE       = 0x17
+SECTION_RAW            = 0x19
 
 FILE_FIRMWARE_VOLUME_IMAGE = 0x0B    # 0x07 is EFI_FV_FILETYPE_DRIVER
 FILE_SECURITY_CORE         = 0x03
@@ -146,6 +149,44 @@ def sections(blob):
             break
         out.append((st, blob[off + 4:off + sz]))
         off = (off + sz + 3) & ~3
+    return out
+
+
+def acpi_sections(files, offsets, inner):
+    """[(offset, sig, body)] for every ACPI table in the volume.
+
+    A table reaches the volume as a RAW section (`0x19`) of the `AcpiTables` FFS
+    file, one section per `ASL|` entry in `AcpiTables.inf`, and `AcpiTableDxe`
+    finds them by scanning for sections whose first four bytes are a table
+    signature. So this walks every file's sections and keeps the raw ones that
+    start with four printable ASCII characters, which is what the firmware does
+    - keying on the `AcpiTables` FILE_GUID would work today and would quietly
+    stop working the day a table ships from somewhere else.
+
+    The offset reported is the table's own first byte, in FVMAIN coordinates,
+    which is the offset a readback quotes ("the `DSDT` sits at `0x54d4c8`").
+    """
+    out = []
+    for (g, t, s, nm, st), off in zip(files, offsets):
+        body = inner[off + 24:off + s]
+        pos, n = 0, len(body)
+        while pos + 4 <= n:
+            sz = body[pos] | (body[pos + 1] << 8) | (body[pos + 2] << 16)
+            st2 = body[pos + 3]
+            if sz < 4 or pos + sz > n:
+                break
+            sbody = body[pos + 4:pos + sz]
+            if st2 == SECTION_RAW and len(sbody) >= 36:
+                sig = sbody[:4]
+                # An ACPI table's length field covers exactly the table, and the
+                # table is the whole section body. Requiring that is what keeps a
+                # .bmp logo out of this list: its first four bytes are printable
+                # too, and without the length check it reports as a 1-byte table.
+                length, = struct.unpack_from("<I", sbody, 4)
+                if length == len(sbody) and all(
+                        0x41 <= c <= 0x5A or 0x30 <= c <= 0x39 or c == 0x20 for c in sig):
+                    out.append((off + 24 + pos + 4, sig.decode("ascii"), sbody))
+            pos = (pos + sz + 3) & ~3
     return out
 
 
@@ -373,12 +414,24 @@ def main():
                     help="a Binaries/<device> tree whose driver .inf FILE_GUIDs "
                          "to check against the image")
     ap.add_argument("--usb", action="store_true", help="only USB-related files")
+    ap.add_argument("--dump-fvmain", metavar="PATH",
+                    help="write the decompressed inner FVMAIN to PATH and print its "
+                         "sha256. This is the one artifact of a build that is "
+                         "bit-identical across rebuilds: `Sec.efi` carries "
+                         "`__TIME__`/`__DATE__` and lives in the *outer* "
+                         "`FVMAIN_COMPACT`, not here, so the FD and every payload "
+                         "built from it differ from build to build while this does "
+                         "not")
     ap.add_argument("--against", metavar="FVMAIN.Fv.txt",
                     help="compare this image's FVMAIN against GenFv's own map "
                          "of the volume it built")
     ap.add_argument("--roster", action="store_true",
                     help="every FFS file as GUID, type, size, name - the table a "
                          "`K` row's %%g is read against")
+    ap.add_argument("--acpi", action="store_true",
+                    help="every ACPI table in the volume as offset, signature, "
+                         "length and checksum - the readback a change to "
+                         "tools/acpi/gauguin.asl has to pass")
     ap.add_argument("--name", metavar="GUID",
                     help="resolve a transcribed GUID (case- and hyphen-tolerant, "
                          "and ranked rather than matched)")
@@ -387,6 +440,13 @@ def main():
         sys.exit(__doc__)
 
     files, fv_len, offsets, inner = unpack(args.image)
+
+    if args.dump_fvmain:
+        with open(args.dump_fvmain, "wb") as fh:
+            fh.write(inner)
+        print(f"{args.dump_fvmain}: {len(inner):,} bytes, sha256 "
+              f"{hashlib.sha256(inner).hexdigest()}")
+        return
 
     if args.roster or args.name:
         rows = roster(files, offsets, inner)
@@ -412,6 +472,28 @@ def main():
             print(f"  {g}  type {t:#04x} size {s:>8,}  {nm or '(no UI name)'}")
         print(f"\n{len(rows) - unnamed} named, {unnamed} with no UI section - a"
               f" GUID that appears here with no name is still in the volume")
+        return
+
+    if args.acpi:
+        tabs = acpi_sections(files, offsets, inner)
+        if not tabs:
+            print("\nno ACPI tables in this volume")
+            sys.exit(1)
+        print(f"\nACPI tables: {len(tabs)}")
+        bad = []
+        for off, sig, body in tabs:
+            length, = struct.unpack_from("<I", body, 4)
+            ok = (sum(body) & 0xFF) == 0
+            if not ok:
+                bad.append(sig)
+            print(f"  {off:#010x}  {sig}  {length:>7,} bytes  "
+                  f"checksum {'valid' if ok else 'NOT valid'}")
+        if bad:
+            print(f"  {len(bad)} of {len(tabs)} do not checksum: {', '.join(bad)}."
+                  " Before AcpiTableDxe runs that is expected of FACP and FACS and"
+                  " only those two - AcpiTableDxe writes the DSDT and FACS addresses"
+                  " into FACP and recomputes it, and FACS has no checksum field at"
+                  " all. Anything else in that list is a real fault.")
         return
 
     print(f"\nFVMAIN: {len(files)} FFS files, "
