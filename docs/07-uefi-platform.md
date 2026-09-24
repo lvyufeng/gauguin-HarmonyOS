@@ -2873,6 +2873,38 @@ for the CPU skeleton at `Silicon/Qualcomm/Moorea/DSDT_Minimal.asl`, and 20 platf
 > is what `docs/08` step 4.44's ordering rule asks for anyway: the reading is of
 > the artifact, not of the source that was supposed to produce it.
 
+> **A seventh build, also 2026-09-25, adds the Type-C controller `UCS0` — and this one
+> costs the page the sixth said a node costs, to no consequence.** Step 4.66 puts `UCS0`
+> in at `QCOM0AA4`, with a `_CRS` of one `GpioIo` on `GIO0` pin 35 and five one-line
+> accessors into the `\_SB`-scope state names (`MUXC`, `CCST`, `DPPN`, `HPDS`, `HIRQ`) that
+> were already in the table. The DSDT goes **2,228 → 2,369 bytes** and the `AcpiTables`
+> FFS file 3,586 → 3,730, so `FVMAIN`'s content goes `0x702fd0` → `0x703060` and its total
+> `0x703000` → `0x704000`: exactly the one 4 KiB page the fifth build predicted, and the
+> reason the sixth's "48 bytes free" was never a budget. `FVMAIN_COMPACT` moved the other
+> way by 32 bytes (1,092,712 → 1,092,680 of `0x300000`, so `2,053,048` free) — it is
+> compressed, and a slightly different LZMA stream is not a larger one. The tables after
+> `DSDT` move **up** by 0x90 this time — the sixth shrank the file and moved them down, this
+> one grows it by exactly the DSDT's padded delta — so `APIC 0x54de10`, `FACP 0x54e0e8`,
+> `FACS 0x54e200`, `GTDT 0x54e244`, with `DSDT` unchanged at **`0x54d4c8`, 2,369 bytes,
+> checksum valid**, and `SSDT` at `0x54d484`. Read back out of
+> `work/out/p2-4.66/Mu-gauguin-silicon-gzip.img`
+> with `--acpi`, and the `DSDT` sliced out of the volume is byte-identical to the
+> `Silicium-ACPI/Platforms/Xiaomi/gauguin/DSDT.aml` `iasl` produced
+> (`c4e46e438eef1062fd410923ab0d8caf84aea9c21a7087985ecb65154ba2f0d2`), which is the check
+> that the table in the payload is the table in the source.
+>
+> **The fingerprint is `FVMAIN.Fv` `04e1cabd…31f94727`**, against the sixth's
+> `4b71843d…0f544802` — both the sha256 of the decompressed inner volume, as this page has
+> quoted it since the fourth build. `tools/probe-fingerprint.py` reports the same
+> ten-instrument ladder
+> in this payload as in the sixth (`P2FreeWhy`, `P2Digest`, `P2Apri`, `P2Seq`, `P2Why`,
+> `P2ErrRow`, `P2Bins`, `P2Retry`, `P2Key`, `P2Tick`), and `build-p2-payloads.sh` matched
+> all three variants against GenFv's map at **123 offsets and GUIDs** with zero mismatches,
+> so the node cost space in the table and nothing in the batch: `tools/apriori-order.py`
+> reads the same 70-GUID Apriori file in the same order out of a 123-file volume, and
+> `uefi/Platforms/Xiaomi/gauguinPkg` is unmodified in git after a full regenerate, which is
+> the staleness guard agreeing.
+
 **A trap in reading these files, because it produced a confident wrong answer
 first.** The GICC subtable is labelled `Subtable Type : 0B [Generic Interrupt
 Controller]`; a parser that looks for "GIC CPU Interface" — the name the ACPI spec
@@ -2887,5 +2919,5 @@ table above is the corrected one.
 | set chosen | **Moorea**, and `APIC`/`FACP`/`GTDT` only — every value checked against gauguin's device tree |
 | set `Platforms/Realme/bitra` uses | Kona — matches nothing |
 | DSDT | authored for gauguin, but its UFS and USB values are verified equal to bitra's |
-| next step | **done as of 2026-09-25** — `gauguin/AcpiTables.inf` and the DSDT exist, are wired into `gauguin.fdf`/`gauguin.dsc`, and are in the built payload with every GICC field read back correct (see the superseded note above). What remains for P3 is USB host and input, not ACPI |
-| where ACPI got to | the DSDT now carries UFS, USB (with the PHY wake lines), the eight CPUs, **the PMIC family** — `SPMI`, `PMIC` and `PM01`, Step 4.63 — **the TLMM pin controller `GIO0` at `QCOM0A0C`**, Step 4.64 — and, Step 4.65, **`GIO0.OFNI` (156 gpios) and the corrected `URS0` id `QCOM0A8B`** — and the AML is **2,228 bytes** in the `work/out/p2-4.65/` payload, whose 48 bytes of `FVMAIN` headroom is what the two removed dead methods bought back. `GIO0` declares its own nine level-`0xF0`–`0xF8` interrupts and *not* the corpus's per-pin catalogue, which is board data gauguin's device tree does not carry. The volume with a limit is the outer `FVMAIN_COMPACT`, `2,053,016` bytes free after compression; `FVMAIN` itself is at 99% with 48 free because its total is `align_up(content, 0x1000)`. Payload hashes are per-build (`__TIME__` in `Sec.efi`); the reproducible fingerprint is `FVMAIN.Fv` `4b71843d…0f544802` |
+| next step | **done as of 2026-09-25** — `gauguin/AcpiTables.inf` and the DSDT exist, are wired into `gauguin.fdf`/`gauguin.dsc`, and are in the built payload with every GICC field read back correct (see the superseded note above). "Next step" here meant *the table set*, and that part is finished; what the DSDT still owes is a different list — `PEP0`, I2C, buttons and the 29 thermal zones — and outside ACPI, P3's items 3 and 4 (USB host, input) have not been started. Either way the next step on the glass is the same one: P2 handing off to BDS |
+| where ACPI got to | the DSDT now carries UFS, USB (with the PHY wake lines), the eight CPUs, **the PMIC family** — `SPMI`, `PMIC` and `PM01`, Step 4.63 — **the TLMM pin controller `GIO0` at `QCOM0A0C`**, Step 4.64 — Step 4.65's **`GIO0.OFNI` (156 gpios) and the corrected `URS0` id `QCOM0A8B`** — and, Step 4.66, **the Type-C controller `UCS0` at `QCOM0AA4`**, which is the first node here added on the strength of a driver `.inf` naming the id rather than on a sibling table's, and the first to place a `GpioIo` on `GIO0` — pin 35, which is why `OFNI` stays 156 — and the best-attested node in the table besides: its 1,272 bytes are byte-identical in lisa, in a52sxq and in the SC7280 CRD's DSDT, the third of which is `MSFT`-compiled and was read out of a shipped Qualcomm UFS firmware capsule rather than out of `Silicium-ACPI`. and the AML is **2,369 bytes** in the `work/out/p2-4.66/` payload. `GIO0` declares its own nine level-`0xF0`–`0xF8` interrupts and *not* the corpus's per-pin catalogue, which is board data gauguin's device tree does not carry. `FVMAIN` is at 99% with 4,000 free because its total is `align_up(content, 0x1000)` and `NumBlocks = 0` lets it grow: these 141 bytes of AML moved it `0x703000` → `0x704000`, and the three USB host drivers took it to `0x72d000` earlier with nothing to say about it. **The volume with a real limit is the outer `FVMAIN_COMPACT`** — `2,053,048` bytes free after compression of a `0x300000` cap, and it did not shrink when this grew. Payload hashes are per-build (`__TIME__` in `Sec.efi`); the reproducible fingerprint is `FVMAIN.Fv` `04e1cabd…31f94727`, against Step 4.65's `4b71843d…0f544802` |

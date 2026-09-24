@@ -11089,6 +11089,16 @@ separate node with its own driver and its own device id, and a `_DEP` naming a n
 does not exist is worse than an absent node. This is the next substantial piece of P3 item 1
 and it is the reason the `CCVL` placement is still wrong.
 
+**Step 4.66 corrects the middle sentence of that paragraph and leaves the rest of it
+standing.** The claim that `UCS0` "cannot simply be added first" because of its `_DEP` is
+wrong — it mistook a dependency *declaration* for a dependency. `_DEP` is advisory start
+ordering, a `_DEP` naming a namespace node that does not exist resolves to nothing, and so
+omitting it costs an ordering that has nothing to order against while including it puts a
+dangling name in the table. `UCS0` is in the table now, without the `_DEP`, and the line to
+add when `PEP0` lands is written into its comment. What still stands from the paragraph is
+the *last* clause: `UCS0`'s arrival did not move `CCVL`, so the placement is still wrong and
+`CCVL` is now in three scopes instead of two.
+
 One open question found on the way: **nothing in the 112-cab driver set creates the `URS\`
 children the two filters bind to.** The role-switch driver that would enumerate them is not
 in these cabs. Either it ships outside this component set, or the filters are for a
@@ -11153,3 +11163,289 @@ comment cannot reach `iasl`'s output, so the build in hand is still the artifact
 in hand and the `4b71843d…0f544802` fingerprint above did not move. That is worth one sentence
 of record because the alternative is a step that says "comments only" and quietly ships a
 payload nobody re-derived.
+
+## Step 4.66 — the node that could be written before its dependency, and the driver that names it
+
+Step 4.65 ended on a gap and a sentence about it. The gap was that `UCS0` — the Type-C
+controller, the node `qcusbcucsi7280.sys` binds to — was missing from the table, which is
+why `CCVL` and `PHYC` sit on `USB0` and `UFN0` in this table where the family-`0A` shape
+puts them on `UCS0`. The sentence was the reason it had been left out: *"`UCS0` cannot be
+written before `PEP0` (`QCOM0A17`), which this table also lacks and which `UCS0._DEP`
+names."* That sentence is wrong, and it is wrong in a specific and reusable way — it
+mistook a dependency declaration for a dependency — so the step that added `UCS0` is also
+the step that corrects it.
+
+### The id, and the test that changed
+
+The id is `QCOM0AA4` and it is settled three ways.
+
+The family byte is 0A, by the same argument that settled `PM01`'s `QCOM0A2D` and `GIO0`'s
+`QCOM0A0C`: a Qualcomm scoped id is `QCOM<family byte><block>`, and the byte SM7225
+carries was measured rather than chosen — the 7280 driver set claims 8 of gauguin's 10
+blocks under it and 0 of 10 under every other byte. The block half is `A4` for this block
+and the two family-0A tables in the corpus both say so: lisa's `UCS0` and a52sxq's carry
+`Name (_HID, "QCOM0AA4")` on nodes that are otherwise identical to each other, down to the
+single `GpioIo` and the five accessors.
+
+But the block half is not universal and the census is worth stating because this is the
+first node where it is not. `A4` is the id under families 09 and 0A (`renoir` and
+`Cedros_IDP` on SDM7350 read `QCOM09A4`), while the Atoll and SM7325 tables spell the same
+block `A9` — `a52q` and `miatoll` read `QCOM08A9`, `surya` reads `QCOM14A9`. So `A4` versus
+`A9` is a generation split *within the block*, exactly the way `URS0` is 97 under families
+04/08/14 and 8B under 09/0A/0C/1A/25, and gauguin has neither an SDM7350 nor an Atoll in
+the corpus to be tempted by.
+
+And the third angle is the one that makes this step different in kind from every node
+before it. `qcusbcucsi7280/qcusbcucsi7280.inf` binds
+
+```
+%UCSI.DeviceDesc% = UCSI_Device, ACPI\QCOM0AA4
+```
+
+to `%13%\qcusbcucsi7280.sys`, with `Class = USBDevice`, `LoadOrderGroup = Extended Base`,
+and a `HKR,Resources,"BinaryPath",%REG_SZ%, %13%\UCS0.bin` line that hands the driver its
+own firmware blob out of the package. There is no inference from a sibling table and no
+argument from an id pattern: a driver that ships with this platform names the id. That is
+the test the ASL header has been asking for since Step 4.63 —
+`tools/acpi-hid-census.py --drivers DIR --bind ID` — and it returns
+`claimed by qcusbcucsi7280/qcusbcucsi7280.inf` for `QCOM0AA4`.
+
+### `_DEP`, and the sentence this step corrects
+
+lisa's node is these members and nothing else: the `_HID`, a `_DEP`, a `_CRS`, and five
+one-line methods. It is 1,272 bytes. The `_DEP` is
+
+```
+Name (_DEP, Package (One) { \_SB.PEP0 })
+```
+
+and `PEP0` is not a node this table has. The earlier reading — that this blocks `UCS0` —
+turns on what `_DEP` is. It is an *advisory* declaration: the OS uses it to order when a
+device is started relative to others, and a bus driver that cannot resolve a name in it
+loses the ordering, not the device. A name that resolves to nothing is worth exactly what
+no declaration is worth — and it is worth less than that to the next reader, who meets it
+as a dangling reference and has to establish whether it is a typo or a known-absent node.
+Adding a dependency on a node that does not exist makes the table's own dependency graph
+say something false.
+
+So `UCS0` goes in **without** `_DEP`, and the line to add is written into the ASL comment
+next to it, together with the fact that lisa's `URS0` depends on both `PEP0` and `UCS0`
+and that this table's `URS0` carries no `_DEP` either. When `PEP0` lands, both nodes get
+theirs in the same step; until then the ordering has nothing to order against.
+
+`PEP0` is not small and that is the honest reason it is not in this step. In lisa it is
+96,100 bytes and 2,501 lines, and a52sxq's is the same size to the byte with exactly two
+lines differing — both in `_SUB`:
+
+```
+lisa:    ElseIf ((\_SB.PSUB == "CRD07280"))   -> Return ("CRD07280")
+a52sxq:  ElseIf ((\_SB.PSUB == "QRD07280"))   -> Return ("QRD07280")
+```
+
+That is the whole difference between the two tables' power engines, and it is a
+reference-platform string rather than board data, which is a *stronger* reading of the same
+signal the earlier version of this paragraph got from "byte-identical": PEP0 is generator
+output. It is also the first thing a port has to change. Both branches test `\_SB.PSUB`, this
+table's is `"MTP07225"`, and lisa's `_SUB` copied verbatim would therefore fall off the end
+of the method and answer zero. Its own id is `QCOM0A17`, and that id is worth the same
+three-angle check even though the node is not being written: the suffix moves with the
+generator exactly as `URS0`'s does, `17` under families 09/0A/1A/25 and `19` under 05/08/14
+and `37` under 02, and `qcpep.wd7280/qcpep.wd7280.inf` binds `ACPI\QCOM0A17` on a PEP device
+while also claiming a wide `TSENS`/`ADC`/`BCL`/`PMIC`/`SRM` family behind the same service.
+
+### The first `GpioIo` on `GIO0`, and why `OFNI` does not move
+
+`UCS0._CRS` is one resource:
+
+```
+GpioIo (Exclusive, PullDown, 0x0000, 0x0000, IoRestrictionNone,
+    "\\_SB.GIO0", 0x00, ResourceConsumer, ,)
+    { 0x0023 }
+```
+
+Pin `0x23` is 35. This is the first `GpioIo` this table has placed on `GIO0` — every
+resource on that node until now was an `Interrupt` — which is exactly the condition
+`OFNI`'s header names when it says 156 is inert *while nothing addresses a pin above 155*.
+The condition is now exercised rather than hypothetical, and 35 is inside 156 by a wide
+margin, so `OFNI` stays `0x009C`. The check is not that 35 is small; it is that the class
+extension validates a `GpioIo` pin against `OFNI`, and pin 35 is inside both readings that
+number could take — `0x9C` as written, and the `0x9D` the OFNI header names as the value to
+switch to if the UFS reset pad is ever addressed through ACPI. Nothing in this node forces
+that decision either way.
+
+The five methods are `MUXV`, `CCVL`, `DPVL`, `HPDM` and `HPDI`, and every one returns a
+name that was already in this scope: `\_SB.MUXC`, `\_SB.CCST`, `\_SB.DPPN`, `\_SB.HPDS`,
+`\_SB.HIRQ`. Those eight flat `Name` objects — with `HPDB`, `PORT` and the rest — have been
+in the table since before this step, transcribed from whichever sibling carried them, and
+`DPP0`, `DPP1`, `MPP0` and `MPP1` sit beside them, as does `PINA` and `HSFL`. That is the
+part of this step worth being explicit about: `PINA` and `HSFL` appear in **none** of lisa,
+a52sxq and the CRD07280 reference table, and they are still definition-only here. They
+were not touched, and they are now the only entries in this block with no sibling to
+compare against. That the CRD07280 claim holds was re-measured rather than inherited, and
+measuring it turned up something better than the claim: **the three tables' `UCS0` nodes are
+byte-identical** — 1,272 bytes, 46 lines each, `lisa` == `a52sxq` == `CRD07280`, zero
+differing lines in either comparison. Two of them were compiled by `iasl` for EDK2 and the
+third by **Microsoft's** ASL compiler, and it is not from `Silicium-ACPI` at all: it is a
+DSDT embedded in a shipped Qualcomm UFS firmware capsule,
+`qcfirmware7280_UFS/qcfirmware7280v_UFS03600000.cap`, at offset `0xb683a5` — header
+`QCOMM `/`SDM7280 `, revision 3, creator `MSFT`, 85,861 bytes, sha256
+`0f334a5bfca9f7c1f413b4a7d40639a07f1078514734513161225d1b287ecc80`. That table carries
+`UCS0` and `PEP0` and no `URS0`, and no `PINA` and no `HSFL`. A 1,272-byte node identical
+across two toolchains and two provenances is the strongest form of the argument this node
+has ever had: it is not a family idiom that resembles gauguin's, it is the same text.
+
+### The thermal census, which was the plan's other wrong sentence
+
+The `UCS0` comment has to explain why `_DEP` is absent, and explaining that honestly
+required reading `PEP0`, and reading `PEP0` meant reading the 29 thermal zones it depends
+on. That turned up a second wrong sentence, this one in `docs/00-plan.md`: *"Both TSENS
+blocks are described by none of the 66: the corpus has no thermal-sensor device of any
+kind."* The corpus has no TSENS *controller*, but it has 29 thermal zones with ids, and
+every one of the 29 is claimed by a driver in the set.
+
+The zones are flat devices under `\_SB` — `\_SB.TZ0` through `\_SB.TZ99`, no `\_TZ` scope
+and no enclosing device, which is worth recording because the first pass over `docs/08`
+looked for `Scope (\_TZ)` and found nothing, and the shape is different from the
+assumption rather than absent. They run 16 to 134 lines and 39,960 bytes together. All 29
+carry `_HID`, `_UID` and `_DEP`; then `_TSP` on 24, `_TZD` on 21, `_TC1` and `_TC2` on 18,
+`_PSV` on 16, `_TZP` on 13 and `_CRT` on 10, each as a `Name` or `Method` over literals. Only
+three — `TZ15`, `TZ16` and `TZ18`, the `PMIC` zones — carry `_CRS`, `_DSM` and `_STA`, and
+that is what makes them three to eight times the size of the rest. **None of the 29 carries
+a `_TMP`**, so the ACPI side of a zone is its trip points and its sampling period; the
+readings come from the `TSENS` side under the PEP.
+
+The ids split cleanly into two groups, and the split is not by function:
+
+| lisa's zones | `_HID` | `qcpep.wd7280.inf` calls it |
+|---|---|---|
+| `TZ0`–`TZ5` | `QCOM0A58`, `0A59`, `0AD4`, two zones each | `TSENS` |
+| `TZ6`, `TZ7`, `TZ9`–`TZ13`, `TZ99` | `0A91`, `0A51`, `0A4C`, `0A92`, `0ABF`, `0A4B`, `0A57`, `0A5A` | `TSENS`, except `0A57`, which is `BCL` |
+| `TZ15`, `TZ16`, `TZ18` | `0AC8`, `0AC9`, `0ACB` | `PMIC` |
+| `TZ31`–`TZ33` | `0A5F`, `0A61`, `0A63` | `ADC` |
+| `TZ51`–`TZ59` | **`QCOM04C0`–`QCOM04C8`** | **not this driver at all** |
+
+The numbering is not dense — there is no `TZ8`, `TZ14` or `TZ17` — and the 29 zones carry 26
+distinct ids, because `0A58`, `0A59` and `0AD4` are each shared by a pair of zones.
+
+And the last row is the finding. Nine of the 29 zones are on **family 04** — a different
+family byte, on a family-0A board — and they are not claimed by `qcpep` at all:
+`qcthermalmdm7280/qcthermalmdm7280.inf` claims `QCOM04C0`–`QCOM04C8`, one id each. So the
+family byte in a Qualcomm id is not always "which SoC this is"; here it is "which driver's
+id space this block was defined in", and a single table can carry two of them. The rule
+that has been paying for itself since Step 4.63 needed this qualification, and it was found
+by running the census over a group of nodes rather than over one node at a time.
+
+What this changes is only the plan's reason. The thermal item is not blocked on an
+unknown input: every id is determined and claimed. It is blocked on work and on board
+data — the zones name devices in `_TZD` that this table does not have (`\SB.MPA`,
+`\SB.SYSM.CLUS.CPU0`–`CPU7`, `\SB.WLTM`, `\SB.CSW0`, `\SB.GPU0`, `\SB.MJCT`), and their
+trip points are a board's own numbers.
+
+### Read back out of the payload, not out of the source
+
+`tools/make_uefi_platform.py` regenerated the platform, `tools/sync-uefi-platform.sh`
+installed it and compiled the table, and the build is `work/out/p2-4.66/`. Read back out of
+`work/out/p2-4.66/Mu-gauguin-silicon-gzip.img` with `--acpi`:
+
+```
+0x0054d484  SSDT       61 bytes  checksum valid
+0x0054d4c8  DSDT    2,369 bytes  checksum valid
+0x0054de10  APIC      724 bytes  checksum valid
+0x0054e0e8  FACP      276 bytes  checksum NOT valid
+0x0054e200  FACS       64 bytes  checksum NOT valid
+0x0054e244  GTDT      156 bytes  checksum valid
+```
+
+`FACP` and `FACS` are the expected pair — `AcpiTableDxe` recomputes `FACP` at runtime and
+`FACS` has no checksum field. The `DSDT` grew 2,228 → 2,369 bytes, the `AcpiTables` FFS
+file 3,586 → 3,730 — the DSDT's 141 bytes rounded up to the FFS file's 8-byte alignment —
+and the tables that follow `DSDT` inside that file moved **up** by 0x90, from `APIC
+0x54dd80`, `FACP 0x54e058`, `FACS 0x54e170`, `GTDT 0x54e1b4`. Step 4.65 moved them the other
+way, down by 0x30, because that step shrank the file; the sign is the file's delta and not a
+rule.
+
+The `DSDT` sliced out of the volume is byte-identical to the `DSDT.aml` `iasl` produced
+from the installed source,
+`c4e46e438eef1062fd410923ab0d8caf84aea9c21a7087985ecb65154ba2f0d2`, so the table in the
+payload is the table in the source and not a stale package left behind by the generator.
+
+`FVMAIN` went `0x703000` → `0x704000` — exactly the one 4 KiB page Step 4.64 predicted a
+node costs, and for the same reason: `NumBlocks = 0` lets the volume size itself to
+`align_up(content, 0x1000)`, so its free count reads 4,000 here and read 48 at Step 4.65
+without either number being a budget. The volume with a cap is `FVMAIN_COMPACT`, and it
+went the *other* way: 1,092,712 → 1,092,680 of `0x300000`, leaving `2,053,048` free. It is
+compressed, and a slightly different LZMA stream is not a larger one.
+
+`tools/build-p2-payloads.sh` built all three variants and matched each against GenFv's map
+at **123 offsets and GUIDs with zero mismatches**, which is the same count as Step 4.65 —
+`UCS0` cost space inside the volume and did not add a file to it. `tools/probe-fingerprint.py`
+reports the same ten-instrument ladder as Step 4.65 (`P2FreeWhy`, `P2Digest`, `P2Apri`,
+`P2Seq`, `P2Why`, `P2ErrRow`, `P2Bins`, `P2Retry`, `P2Key`, `P2Tick`), and `tools/apriori-order.py`
+reads the same Apriori file out of the volume — 70 GUIDs, identical order, in a volume of 123
+FFS files, which is Step 4.65's 70 and 123. `git status` after a full regenerate shows
+`uefi/Platforms/Xiaomi/gauguinPkg` unmodified, which is the staleness guard agreeing: the
+generated `APRIORI.inc` still carries its 72 `INF` lines and `DXE.inc` its 77. The
+reproducible fingerprint is `FVMAIN.Fv` `04e1cabd…31f94727`, against Step 4.65's
+`4b71843d…0f544802`. Both are the sha256 of the decompressed inner volume, which is the
+quantity this page has quoted since the fourth build — the outer `FD` and every payload
+built from it differ from build to build because `Sec.efi` carries `__TIME__`, so the hash
+that means anything has to come from inside.
+
+### The honest limits
+
+- **The device was not touched.** Nothing was flashed, nothing was written to `boot`, and
+  the restore net is unchanged. `p2-variants` is still the payload of record on the phone
+  and its panel reading is still owed — **read the panel first, then flash.**
+- **`_CRS` is copied from lisa, pin number included.** Pin 35, the `Exclusive`/`PullDown`
+  flags and the `ResourceSourceIndex` of `0x00` are lisa's, and lisa is family 0A like
+  gauguin, but nothing here establishes that gauguin's Type-C CC line is on TLMM pad 35.
+  gauguin's device tree has the Type-C hardware (`&pm7250b_typec` with a `usb-c-connector`,
+  `&pm7250b_vbus`) and it does not say which pad the driver's `GpioIo` means. This is the
+  same class of unverified copy as `URS0`'s `_CRS` window.
+- **The five accessors read names nothing in this table writes.** `MUXV`/`CCVL`/`DPVL`/
+  `HPDM`/`HPDI` return `\_SB.MUXC` and its siblings, which are `Name` objects with literal
+  initials. Whoever is supposed to keep them current is the PEP and the thermal/Type-C
+  firmware behind it, and `PEP0` is not in this table. So the driver will load, get its
+  `_CRS` and get five constants back. That is the correct shape as ACPI defines it and it
+  is not a working Type-C stack, and it will not be until `PEP0` lands.
+- **`QCOM0AA4` is claimed, and claimed is not the same as tested.** The inf binding is a
+  statement about what the driver asks for. Whether `qcusbcucsi7280.sys` runs, finds its
+  `UCS0.bin` and drives the PM7250B Type-C block on this phone is not established here.
+  Mainline disables PD on this board for want of a charger driver, so the reference point
+  on the Linux side is thin too.
+- **The `_DEP` decision is a judgement, and it is reversible in one line.** Omitting it
+  costs an ordering that does not exist yet and cannot be missed; including it would cost
+  a dangling name. If a future reading shows Windows' ACPI layer wants the declaration
+  present even when unresolvable, the line is written into the comment.
+- **The thermal census measured ids, not behaviour.** That all 29 zone ids are claimed says
+  the ids are the right ones for this generation of driver. It does not say gauguin's
+  trip points are lisa's, and `_TZD`'s device list is not portable at all.
+- **`CCVL` now exists in the table three times.** `UCS0` carries `MUXV`/`CCVL`/`DPVL`/
+  `HPDM`/`HPDI`; `USB0` and `UFN0` still carry their own `CCVL` and `PHYC`, copied from
+  bitra, and the family's shape puts `CCVL` only on `UCS0`. Adding the node without removing
+  the copies was deliberate — the removal is a separate change with its own risk, and a
+  duplicate name in a different scope is not an error in AML — but a table that carries the
+  same method in two places is a table where the next reader has to work out which one the
+  driver resolves. The comment inside `USB0` that used to say the removal *was* the node and
+  that the node "cannot be written correctly before the node it depends on exists" has been
+  corrected in place; the removal it describes is still owed.
+- **The ASL comments changed and the AML did not.** Correcting the stale `_DEP` reasoning
+  meant editing two comment blocks in `tools/acpi/gauguin.asl`, which moves the source's md5
+  and leaves `DSDT.aml` byte-identical at 2,369 bytes and `c4e46e43…` — `iasl` does not carry
+  comments into AML. The quoted fingerprint is therefore still this build's, and the check
+  that the payload's table is the source's table still passes unchanged.
+
+### What this step was, and what it was not
+
+It was one node added to `tools/acpi/gauguin.asl` — one `_HID`, one `GpioIo`, five
+one-line methods, and no change to any member that was already there — plus the census
+work that the node's own comment needed in order to be honest about what it leaves out,
+plus two corrections: the sentence that said `UCS0` could not be written before `PEP0`,
+and the sentence that said the corpus has no thermal devices. **No firmware source and no
+driver changed**, no `.c` or `.inf` was touched, and no device storage was written. The
+build is `work/out/p2-4.66/` and the DSDT is 2,369 bytes against Step 4.65's 2,228.
+
+What it was not is a step toward `UCS0` working. The node is in the table because a
+shipped driver names its id and the shape is the family's; it will attach and return five
+constants until the PEP exists, and the PEP is 2,500 lines dominated by the thermal
+subsystem this step measured but did not port.

@@ -71,10 +71,18 @@
  * parameters have not been derived, and an unverified _LPI is worse than none.
  *
  * P3 also asks for I2C, SPI, buttons and thermal zones, and none of them is
- * here. What is here, as of Step 4.64, is the PMIC family - SPMI, PMIC and
- * PM01, Step 4.63 - and the TLMM pin controller, GIO0, because unlike the
- * others their names turned out not to be a guess. The note above those nodes
- * is how each value was settled.
+ * here. What is here, as of Step 4.66, is the PMIC family - SPMI, PMIC and
+ * PM01, Step 4.63 - the TLMM pin controller, GIO0, and its pin count, Step
+ * 4.64 and 4.65 - and the Type-C controller UCS0, because unlike the others
+ * their names turned out not to be a guess. The note above those nodes is how
+ * each value was settled.
+ *
+ * UCS0 is the first node added here on the strength of the driver set's own
+ * claim rather than of a sibling table: qcusbcucsi7280.inf binds
+ * `ACPI\QCOM0AA4` by name, so the id is confirmed twice over - once by the
+ * pinned set and once by lisa and a52sxq. PEP0, which UCS0 and URS0 both
+ * depend on in lisa's table, is deliberately not ported with it; that node's
+ * comment carries the measurement and the reason.
  *
  * The rest stays out for a measured reason. Every one of those nodes needs a
  * `_HID` (and for the I2C blocks a `_DSM` whose contract is documented nowhere
@@ -210,6 +218,119 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
         {
              0x00                                             // .
         })
+
+        /*
+         * The Type-C controller. Of the nodes this table still owes P3 it is
+         * the shortest to justify, and the best-attested: the node is 1,272
+         * bytes and 46 lines in lisa, in a52sxq and in the SC7280 CRD's DSDT,
+         * and the three are byte-identical to each other - zero differing
+         * lines in either comparison. Two of them are iasl output for EDK2;
+         * the third is creator `MSFT`, taken from a shipped Qualcomm UFS
+         * firmware capsule (qcfirmware7280_UFS/qcfirmware7280v_UFS03600000.cap,
+         * offset 0xb683a5, header `QCOMM `/`SDM7280 `, 85,861 bytes). The two
+         * EDK2 tables are family 0A, the family that gave this file GIO0's
+         * QCOM0A0C and URS0's QCOM0A8B, and the node is one id, one resource
+         * and five accessors.
+         *
+         * `_HID` is "QCOM0AA4" and the family byte is what settles it, the
+         * same way it settled the PMIC-GPIO node above. The suffix is not
+         * fixed across blocks and generations - it is 17 for the PEP, 0C for
+         * the TLMM, 8B for the URS controller and A4 for this one, and A4 is
+         * not even constant for this block: the Atoll and SM7325 tables spell
+         * it A9 (a52q's and miatoll's QCOM08A9, surya's QCOM14A9) while
+         * SDM7350 uses A4 (renoir's and Cedros_IDP's QCOM09A4). gauguin has
+         * no SDM7350 to follow and no Atoll to follow; it has lisa and
+         * a52sxq. And the id is claimed, which is the check the header above
+         * asks for: `tools/acpi-hid-census.py --drivers DIR --bind QCOM0AA4`
+         * reports qcusbcucsi7280/qcusbcucsi7280.inf, whose INF binds
+         * `ACPI\QCOM0AA4` to `qcusbcucsi7280.sys` and carries the
+         * `HKR,Resources,"BinaryPath",%REG_SZ%, %13%\UCS0.bin` line that
+         * hands the driver its own firmware blob.
+         *
+         * `_DEP` is deliberately absent, and it is the one place this node
+         * does not copy lisa. lisa's reads `Package (One) { \_SB.PEP0 }`, and
+         * PEP0 is the power engine: 2,501 lines and 96,100 bytes in lisa, and
+         * the same size in a52sxq's with exactly two lines differing - both in
+         * `_SUB`, which returns `"CRD07280"` on lisa and `"QRD07280"` on
+         * a52sxq from a branch keyed on `\_SB.PSUB`. That is generator output
+         * with a reference-platform string in it and not board data, and it is
+         * the sort of thing a port has to notice: this table's own PSUB is
+         * `"MTP07225"`, so lisa's `_SUB` verbatim would fall off the end of
+         * both branches and answer zero. PEP0 is dominated by the 29 thermal
+         * zones it reads (`\_SB.TZ0` ... `\_SB.TZ99`, flat devices under this
+         * same scope); its own `_DEP` names `\_SB.IPCC`, which is a different
+         * node again. No part of it is in this table. Naming it anyway would put
+         * a reference into the namespace that cannot resolve, and an `_DEP`
+         * that evaluates to AE_NOT_FOUND is worth exactly what no `_DEP` is
+         * worth while costing more to read: a later step would meet it as a
+         * dangling name rather than as a node known to be missing. `_DEP` is
+         * advisory start ordering and there is nothing here to order against.
+         * The line to add when PEP0 lands is
+         * `Name (_DEP, Package (One) { \_SB.PEP0 })`, and it belongs
+         * alongside the matching one on URS0 - lisa's URS0 depends on both
+         * PEP0 and UCS0, and this file's URS0 carries no `_DEP` either.
+         *
+         * `_CRS` is one `GpioIo` on GIO0 pin 0x23. That makes it the first
+         * GpioIo this table has placed on GIO0 - everything on that node so
+         * far is Interrupt-only - which is precisely the condition OFNI's
+         * header names when it says 156 is inert only while nothing above 155
+         * is addressed. 0x23 is 35, so the value does not move, and the
+         * reason is not that 35 is small: the class extension validates a
+         * GpioIo pin against OFNI, and 35 is inside 156 on any reading of
+         * that value. The condition is now exercised rather than hypothetical.
+         *
+         * The five methods are one line each and all five return Names that
+         * already sit in this scope above - MUXC, CCST, DPPN, HPDS and HIRQ.
+         * They are how qcusbcucsi7280.sys reads the mux state, the CC state,
+         * the DP pin assignment and the hotplug lines: for those the driver
+         * does not touch a register, it calls into the namespace, and the
+         * namespace is AML that something on the board side is expected to
+         * keep current. lisa's node has no `_STA` and neither does this one,
+         * so the node is present whenever the table is.
+         */
+        Device (UCS0)
+        {
+            Name (_HID, "QCOM0AA4")  // _HID: Hardware ID
+            Method (_CRS, 0, NotSerialized)  // _CRS: Current Resource Settings
+            {
+                Name (RBUF, ResourceTemplate ()
+                {
+                    GpioIo (Exclusive, PullDown, 0x0000, 0x0000, IoRestrictionNone,
+                        "\\_SB.GIO0", 0x00, ResourceConsumer, ,
+                        )
+                        {   // Pin list
+                            0x0023
+                        }
+                })
+                Return (RBUF) /* \_SB_.UCS0._CRS.RBUF */
+            }
+
+            Method (MUXV, 0, NotSerialized)
+            {
+                Return (\_SB.MUXC)
+            }
+
+            Method (CCVL, 0, NotSerialized)
+            {
+                Return (\_SB.CCST)
+            }
+
+            Method (DPVL, 0, NotSerialized)
+            {
+                Return (\_SB.DPPN)
+            }
+
+            Method (HPDM, 0, NotSerialized)
+            {
+                Return (\_SB.HPDS)
+            }
+
+            Method (HPDI, 0, NotSerialized)
+            {
+                Return (\_SB.HIRQ)
+            }
+        }
+
         Device (URS0)
         {
             /*
@@ -340,13 +461,25 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
                 // CCVL's home is not here, though, and that is the next thing
                 // this table owes. In the family-0A shape - lisa, a52sxq and the
                 // CRD agree on all five - MUXV, CCVL, DPVL, HPDM and HPDI all
-                // hang off UCS0, a `QCOM0AA4` device that this table has no node
-                // for, and UFN0 has no CCVL at all. UFN0 carries one here (and
-                // this USB0 carries another), because both were copied from
-                // bitra. Writing UCS0 means moving these methods to it, and UCS0
-                // declares `_DEP` on PEP0, which this table also lacks. That is
-                // why the correction is not in this step: the node cannot be
-                // written correctly before the node it depends on exists.
+                // hang off UCS0, and UFN0 has no CCVL at all. UFN0 carries one
+                // here (and this USB0 carries another), because both were copied
+                // from bitra. Step 4.66 added UCS0 with all five on it, so the
+                // outstanding half of the correction is now the removal: this
+                // CCVL and MUXV/CCVL/DPVL/HPDM/HPDI on UCS0 are the same five
+                // names in two places, and only the UCS0 set is where the family
+                // puts them.
+                //
+                // Two sentences stood here until Step 4.66 and both were wrong.
+                // One said UCS0 "declares `_DEP` on PEP0, which this table also
+                // lacks", and the other drew the conclusion - "the node cannot be
+                // written correctly before the node it depends on exists". lisa's
+                // UCS0 does carry the `_DEP`, and this table's UCS0 deliberately
+                // does not, because a `_DEP` naming a node that is not in the
+                // namespace resolves to nothing: the declaration is advisory
+                // start ordering, and omitting it costs an ordering that has
+                // nothing to order against while including it costs a dangling
+                // name. See UCS0's own comment for the line to add when PEP0
+                // lands.
                 //
                 // `HSFL`, which HSEN used to read, is now read by nothing. It
                 // stays, with `PINA`, rather than being removed alongside the
