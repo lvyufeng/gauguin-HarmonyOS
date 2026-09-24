@@ -10335,7 +10335,7 @@ constant, and none was inherited because a sibling table had it:
 | `PMBM` | **does not claim** `QCOM0A2A` | in the corpus, but nothing binds it: two more devices in Device Manager and no driver |
 | `PMGK` | **does not claim** `QCOM0A8E` | same |
 | `PML0` | claims `QCOM0AD3` | an I2C-attached PMIC — lisa's `_CRS` gives it four I2C addresses on `\_SB.I2C2` — and this file has no I2C controller |
-| `PEP0` | claims `QCOM0A17` | 13,000 lines in lisa; the power engine, and its own step |
+| `PEP0` | claims `QCOM0A17` | 2,501 lines in lisa, but 1,826 of them are one method's per-zone cases and the shipped zero-zone form is 629; the power engine, and its own step |
 
 The two "does not claim" rows are the ones the census tool earns its keep on. The
 obvious move — the corpus has the node, so add the node — would have produced two
@@ -10444,10 +10444,11 @@ so far is large *and* high-entropy.
 experiment, and the tree rebuilt to `FVMAIN` `7352064 used, 256 free` and `FVMAIN.Fv`
 sha256 `85f6f9fc…542b30` — the same measurement the readback above started from. So the
 capacity claim is retired and the constraint on the next ACPI node is what constrained
-this one: the driver set's own id claims and gauguin's own device tree. `PEP0`'s 13,000
+this one: the driver set's own id claims and gauguin's own device tree. `PEP0`'s 2,501
 lines in lisa do have to fit in the outer volume's 2,053,056 bytes *after compression*,
 which is a measurement to make when the node is written (`--acpi` and the GenFv line
-above are the two commands), not a reason to defer it.
+above are the two commands), not a reason to defer it — and most of those 2,501 lines
+are not the node, as the census further down measures.
 
 ### And the payload hash is a fingerprint of a build, not of the source
 
@@ -11449,3 +11450,254 @@ What it was not is a step toward `UCS0` working. The node is in the table becaus
 shipped driver names its id and the shape is the family's; it will attach and return five
 constants until the PEP exists, and the PEP is 2,500 lines dominated by the thermal
 subsystem this step measured but did not port.
+
+## Step 4.67 — PEP0 is a skeleton plus one case per zone, and the corpus ships the zero-zone form
+
+Step 4.66's comment ended by deferring the next node with a number in it: "the PEP is
+2,500 lines dominated by the thermal subsystem this step measured but did not port." The
+number was right and the sentence around it was wrong, and so was every other statement
+this tree made about `PEP0`'s size — one of them by a factor of five. This step is the
+measurement that replaces them, and it changes what the node is: not the largest remaining
+item to be ported in one move, but a fixed skeleton of a few hundred lines plus one
+generated case per thermal zone, with the zone count as the only variable.
+
+Nothing in the firmware changed. The two comment blocks this step rewrote in
+`tools/acpi/gauguin.asl` are comments, and `iasl` does not carry comments into AML, so the
+table is byte-identical to Step 4.66's and the reproducible fingerprint is unchanged — see
+*Read back out of the payload* below for the check rather than the assertion.
+
+### The number that was wrong by five
+
+Two places in this tree said `PEP0` is **13,000 lines** in lisa, one in the ASL and one in
+the table of nodes researched and deliberately left out. It is 2,501 lines and 96,109
+bytes. The figure was never sourced and nothing depended on it, but it is the sort of
+error that decides a plan: 13,000 lines is a project to be scheduled, 2,501 lines with a
+629-line shipped reduction is a step. Both occurrences are corrected.
+
+The real measurement, over every table in the corpus that declares a `PEP0`:
+
+| table | `PEP0` lines | bytes | cases in `THTZ` | `ThermalZone` devices declared |
+|---|---|---|---|---|
+| `Silicon-Qualcomm-Kailua-DSDT_MTP` | **629** | 19,090 | **0** | 1 |
+| `Silicon-Qualcomm-Kailua-DSDT_QRD` | 629 | 19,090 | 0 | 1 |
+| `Platforms-OnePlus-lemonade` | 1,881 | 70,275 | 24 | 32 |
+| `Platforms-Xiaomi-vili` | 2,085 | 77,542 | 24 | 32 |
+| `Platforms-Xiaomi-venus` | 2,103 | 76,835 | 24 | 32 |
+| `Silicon-Qualcomm-Cedros-DSDT_IDP` | 2,418 | 94,094 | 32 | 29 |
+| `Platforms-Xiaomi-renoir` | 2,418 | 94,094 | 32 | 29 |
+| `Platforms-Xiaomi-alioth` | 2,431 | 94,305 | 32 | 19 |
+| `Platforms-Samsung-a52sxq` | 2,501 | 96,109 | 32 | 29 |
+| `Platforms-Xiaomi-lisa` | 2,501 | 96,109 | 32 | 29 |
+
+The line count is a function of the third column and almost nothing else: ≈ 58 lines per
+case on top of a ≈ 629-line floor. The fourth column is the one to notice, because it is
+*not* the zone count of the platform. lisa's `THTZ` has 32 cases and lisa declares 29
+zones; `alioth` has 32 cases and declares 19. And whether the declared zones are the ones
+the cases name is a separate question again — see below.
+
+### The zero-zone form is shipped, and its `THTZ` is five lines
+
+`Silicon-Qualcomm-Kailua-DSDT_MTP` — an SC7180-era reference table, shipped, not a stub —
+carries the whole of the thermal interface as:
+
+```asl
+Method (THTZ, 4, NotSerialized)
+{
+    Return (0xFFFF)
+}
+```
+
+`0xFFFF` is the same sentinel lisa's 1,826-line `THTZ` returns from its `Else` branch when
+the (zone, trip-point) pair matches no case. So the shipped reduction is not a different
+node with different semantics; it is the same node with the dispatch table emptied, and a
+platform with no zones wired to PEP is expected to return "no such trip point" for every
+query. That is the shape to start from here, and it is the reference corpus's own shape
+rather than a design decision made in this tree.
+
+Two other things fell out of Kailua's copy. Its `_HID` is `QCOM0C17` — the same block
+index `17`, a different family byte, `0C` rather than `0A` — which is a second worked
+example of the family byte being the id space a block was defined in rather than the SoC.
+And it has no `_CID` at all, where lisa, a52sxq and the CRD all carry
+`Name (_CID, "PNP0D80")`. `PNP0D80` appears nowhere in `qcpep.wd7280.inf`, so the `_CID`
+is not what binds the driver; the `_HID` is. It is decoration that the family-0A tables
+happen to carry.
+
+### `THTZ` is an interface, and no table calls it
+
+`THTZ` is declared in the 20 tables that carry a `PEP0` and **called from none of them** —
+`grep -c` over the whole 66-table corpus finds the name only on its own declaration line
+in each. It is not internal logic, it is an entry point for whatever knows its name: the
+Windows PEP driver, or a firmware agent, calling `\_SB.PEP0.THTZ (zone, value, write,
+trip)` to read or set a trip point. That is why it is safe to ship it returning `0xFFFF`
+for everything, and also why it is the one part of `PEP0` whose removal is not obviously
+free — a driver that expects a real answer will get the sentinel instead of an error.
+
+### `THTZ` names zones its own table does not declare
+
+The 32 cases in lisa's `THTZ` are an `If` on `Arg0 == 1` and 31 `ElseIf`s, keyed on zone
+numbers that are written in hex and are not dense. Comparing them against the 29
+`ThermalZone` devices lisa declares:
+
+- **referenced by `THTZ`, not declared:** `TZ17`, `TZ34`–`TZ38`, `TZ60`–`TZ62` — nine zones
+- **declared, never referenced:** `TZ0`, `TZ2`, `TZ4`, `TZ7`, `TZ9`, `TZ12` — six zones
+
+The bodies are unconditional: the first thing a case does is `\_SB.TZ34._PSV` or `Notify
+(\_SB.TZ34, 0x81)`, with no `CondRefOf` guard. So in lisa's shipped table, nine of the
+dispatch arms name devices that do not exist, and six existing zones cannot be reached
+through the interface at all. It compiles because ASL permits forward references; it would
+return `AE_NOT_FOUND` if the OS ever asked for `TZ34`. The case order is a further tell —
+the sequence is ascending in zone number except that `0x63` (99) is emitted between `0x26`
+(38) and `0x33` (51) — and both facts together say what the node is: one case emitted per
+entry of a platform sensor list, trimmed for the *zone devices* and not for the *dispatch*.
+
+For this port that is a licence and a warning. A licence, because a `THTZ` covering only
+the zones this table actually declares is not a reduced node, it is the corrected form of
+one the vendor ships imperfectly. A warning, because "lisa declares 29 zones" is therefore
+not a number to copy: the zone set has to come from gauguin's own board data.
+
+### The `_Minimal` tables carry no board content at all
+
+Eighteen of the 66 corpus tables are `*_DSDT_Minimal.dsl`, and all eighteen are the same
+**106-line** stub — the same length, no `PEP0`, no `PSUB`, no `IPCC`, no `AGR0`, no
+thermal zone. They are placeholders for a platform whose ACPI has not been generated yet,
+not reduced descriptions of a platform. Any census that counts them as evidence about a
+SoC is counting one table eighteen times, which is worth writing down because the naming
+invites exactly that mistake.
+
+### What `PEP0` reaches, which is the real reason it cannot be ported as a unit
+
+Everything `PEP0` references outside itself, in the family-0A shape, counted once each:
+
+| reference | where | in this table? |
+|---|---|---|
+| `\_SB.PSUB` | `_SUB`, twice | **yes** — `"MTP07225"`, added before Step 4.66 |
+| `\_SB.IPCC` | `_DEP` | no |
+| `\_SB.ABD.ROP1` | a `Field` on an `I2cSerialBusV2` | no |
+| `\_SB.AGR0._PUR` | `NPUR` | no |
+| `\_SB.{ADSP,AMSS,SCSS,SPSS,WPSS,NSP0}._STA` | subsystem presence tests | no |
+| `\_SB.{DPP0,DPP1,MPP0,MPP1}` | subsystem nodes | no |
+| `\_SB.TZ*` | `THTZ`, 32 cases | no |
+
+`PEP0` is the opposite kind of node from `UCS0`. `UCS0` had no dependencies and could be
+written before the node it names; `PEP0` has seven classes of them and one of the seven is
+present. That is why the sibling-shaped move — port the node now, fix the references
+later — is not available, and why this step stops at the measurement.
+
+### The board data the plan said was missing is in the device tree
+
+The plan's P3 status said the thermal zones need "the work and the board data". The work
+is real. The board data is not missing: `work/out/gauguin.dts` carries **40 thermal
+zones**, each with a sensor phandle and index and a full trip list. Twenty-seven of them
+are the SoC zones, and they are the same 27, in the same order, as
+`work/refdts/sm6350.dtsi`'s `thermal-zones` block — which is where the ACPI generator's
+zone list would come from in the first place. The other thirteen are board-level.
+
+The 27 SoC zones, with the sensor index each one reads:
+
+| zone | sensor | zone | sensor | zone | sensor |
+|---|---|---|---|---|---|
+| `aoss0` | `0xac 0x00` | `cpu6-left` | `0xac 0x09` | `modem-core0` | `0xad 0x06` |
+| `aoss1` | `0xad 0x00` | `cpu6-right` | `0xac 0x0a` | `modem-core1` | `0xad 0x07` |
+| `audio` | `0xad 0x02` | `cpu7-left` | `0xac 0x0b` | `modem-vec` | `0xad 0x08` |
+| `camera` | `0xad 0x05` | `cpu7-right` | `0xac 0x0c` | `modem-scl` | `0xad 0x09` |
+| `cpu0`–`cpu5` | `0xac 0x01`–`0x06` | `cpuss0` | `0xac 0x07` | `npu` | `0xad 0x0a` |
+| `cwlan` | `0xad 0x01` | `cpuss1` | `0xac 0x08` | `q6-hvx` | `0xad 0x04` |
+| `ddr` | `0xad 0x03` | `gpuss0` | `0xac 0x0d` | `video` | `0xad 0x0b` |
+| `gpuss1` | `0xac 0x0e` | | | | |
+
+and the thirteen board zones:
+
+| zone | sensor | trips |
+|---|---|---|
+| `pm6150l-thermal` | `0xbb` | 95 passive, 115 hot, 125 critical |
+| `pm6350-thermal` | `0xbc` | 95 passive, 115 hot, 125 critical |
+| `pm7250b-thermal` | `0xbd` | 95 passive, 115 hot, **145** critical |
+| `pm8008-thermal` | `0x55` | 95 passive, 115 critical |
+| `sdm-skin-thermal` | `0xc1` | 45 passive, 55 critical |
+| `chg-skin-thermal` | `0xbe 0x00` | 125 passive |
+| `conn-thermal` | `0xbe 0x01` | 125 passive |
+| `pa0-thermal` | `0xbf 0x01` | 125 passive |
+| `pa1-thermal` | `0xbf 0x00` | 125 passive |
+| `rfc-flash-thermal` | `0xbf 0x02` | 125 passive |
+| `quiet-thermal` | `0xbf 0x03` | 125 passive |
+| `rear-cam-thermal` | `0xc0` | 125 passive |
+| `xo-thermal` | `0xc2 0x00` | 125 passive |
+
+The phandles resolve to the nodes the ACPI ids are named after, which is the part that
+matters: `0xac` and `0xad` are the two **TSENS controllers** (`thermal-sensor@c263000`
+and `thermal-sensor@c265000`), `0xbb`/`0xbc`/`0xbd` are the three **PMIC temp alarms** in
+PM6150L, PM6350 and PM7250B (`temp-alarm@2400` in each), `0xbe` and `0xbf` are PMIC
+**ADC thermal monitors** (`adc-tm@3500`), `0xc2` is the third (`adc-tm@3400`), `0x55` is
+`pmic@8`'s own sensor, and `0xc0`/`0xc1` are bare board sensors. That is the same
+three-way split the corpus's zone ids fall into — TSENS, PMIC, ADC — arrived at from this
+board's own data instead of from a sibling's.
+
+### The ACPI zone set is coarser than the device tree's, and `_UID` is how
+
+lisa declares 29 zones with **26 distinct ids**: `QCOM0A58`, `0A59` and `0AD4` are each
+used *twice*, by a pair of zones whose `_UID` is `Zero` and `One` respectively. Every
+other zone is `_UID` Zero. Of the 26 ids, 17 are family `0A` and 9 are the family-`04`
+run `QCOM04C0`–`QCOM04C8` that `qcthermalmdm7280.inf` claims and `qcpep` does not.
+
+So the corpus's zone model is: one `_HID` per sensor *block*, plus a `_UID` when a block
+carries two zones. That is a different granularity from the device tree's 40 independently
+named zones, and reconciling the two is the work this step deliberately did not do — it is
+the mapping, not the data, that is still open. What is settled is that gauguin's 40 zones
+have names, sensors, indices and trips, and that lisa's 29 have ids, `_UID`s, `_DEP`s and
+trip-point parameters; a later step joins them and can be checked against both ends.
+
+### Read back out of the payload, not out of the source
+
+The two ASL comment blocks changed, which moves `tools/acpi/gauguin.asl`'s md5 from
+`5b359cf7a2be3d5c503e71c97a7606d0` to `afc4dfa31dcc995c0639ae89374e3dd4` mid-step and `94d92126e8217c30f439eae714281907` at the
+end, and the tracked copy with it. The firmware did not:
+
+| | |
+|---|---|
+| `DSDT.aml` | **2,369 bytes**, sha256 `c4e46e43…ba2f0d2` — unchanged |
+| `FVMAIN.Fv` inner volume | sha256 **`04e1cabd…31f94727`** — Step 4.66's, reproduced |
+| `FVMAIN_COMPACT` | `1,092,680 (0x10ac48) used, 2,053,048 (0x1f53b8) free` — Step 4.66's figures exactly |
+| build | `work/out/p2-4.67/`, 123 files, `matches FVMAIN.Fv.txt: 123 offsets and GUIDs, zero mismatches` |
+| `probe-fingerprint.py --expect P2FreeWhy` | rc=0, all ten instruments present |
+
+A comment-only edit that reproduces the previous build's volume fingerprint is the check
+that the edit was comment-only. The same build also re-proved the FV path's reproducibility
+independently of the step: the rebuild regenerated `Resources/DTBs/gauguin.dtb` and the
+volume hash did not move, so the DTB in this payload is the one already in Step 4.66's.
+
+### The honest limits
+
+- **This step added nothing to the table.** No node, no member, no value. The DSDT is the
+  one Step 4.66 shipped. What changed is what this tree knows about the next one.
+- **`PEP0` is not next in the sense the backlog meant.** It cannot be written whole: it
+  reaches `IPCC`, `ABD`, `AGR0`, six subsystem `_STA` tests and the zones, and only `PSUB`
+  is present. The next node that can be written whole is a smaller question this step did
+  not answer.
+- **The zone→id mapping is not derived.** The 40 device-tree zones and the 26 corpus ids
+  are both now measured, and no step has yet shown which device-tree zone is which id.
+  Anything written before that is assigned is an invention, not a port.
+- **`THTZ`'s caller is still unknown.** That no table calls it means it is called from
+  outside ACPI; whether `qcpep.wd7280.sys` is that caller was not established here, and it
+  decides whether a `0xFFFF`-returning `THTZ` is sufficient or a silent mis-report.
+- **`Silicon-Qualcomm-Kailua` is SC7180.** It is the only shipped zero-zone `PEP0` in the
+  corpus, so its `629`-line total is a measurement of *a* family-`0C` node, not of the
+  family-`0A` one this table would carry. The floor is corroborated in the right direction
+  by lisa's own split — dropping `THTZ` and its 1,826 lines leaves 669 lines for lisa
+  against Kailua's 620 — but those are two different nodes from two different generations,
+  the corpus contains no zero-zone family-`0A` table to settle it, and the 49-line
+  difference is not attributable this step: the two differ in `_SUB` branch count, `_CID`,
+  a `SUBI` package two entries longer, and four trailing methods, all at once.
+
+### What this step was, and what it was not
+
+It was a census of the reference corpus and of gauguin's own device tree: `PEP0`'s size
+decomposed into a skeleton and one case per thermal zone with the zero-zone form shipped
+and unnamed; `THTZ` shown to be uncalled and to name zones its own table lacks; the
+`_Minimal` tables shown to be one stub eighteen times; the board's 40 thermal zones
+enumerated with sensors, indices and trips; and two wrong numbers retired, one of them by
+a factor of five. **No node was added, no `.c` or `.inf` was touched, no firmware source
+changed, and no device storage was written.**
+
+What it was not is progress on the device. `p2-variants` is still the payload in `boot`,
+its panel reading is still owed, and the rule for the next session is unchanged: **先读屏，
+再刷下一次**.

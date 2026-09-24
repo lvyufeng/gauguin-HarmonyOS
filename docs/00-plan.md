@@ -18,7 +18,7 @@ the sections under it are the plan.
 | **P0** survey + backup | partitions dumped and verified; no existing port | **done** — 74 partitions carved and signature-checked, `boot`/`abl`/`recovery` hashes match the device, 86 XBL drivers recovered, and `git ls-files Silicon/Qualcomm` confirms no SM7225 package upstream |
 | **P1** mainline kernel | device boots mainline and prints something | **not done** — `work/out/boot-pstore.img` is built, reproducible (`make_boot_image.py --kernel`), and carries both channels a device with no UART needs: the panel itself (`simple-framebuffer` + `simpledrm` + fbcon, so the boot log is photographed off the screen) and pstore (`console-ramoops-0`, readable from Android after a warm reboot). The earlier `fastboot boot` was refused with `Failed to load/authenticate boot image` on the RAM path, and the partition path has never been tried |
 | **P2** UEFI skeleton | the boot manager draws on the phone's screen and UFS appears as a block device | **half met, and it is the half that decides viability** — **our firmware executes on this phone**. The image carrying the current device tree was written to `boot`, and on the reboot the panel filled with our own output, ending in `ASSERT [DxeCore] DxeMain.c(593)`. That text can only come from us: `DxeMain.c:593` is our line, and in a DEBUG build `SerialPortLib` is bound to `FrameBufferSerialPortLib`, so every `DEBUG ()` string is drawn into the framebuffer — which is why the firmware can talk while there is no shell, no boot-manager menu and no UART. (It also means text on the panel is not evidence that BDS ran.) What remains is the second half: DXE stops because at least one *architectural protocol* was never installed, and the name of the first missing one is printed two lines above the assert, on a screen that is legible by design (`GetFontScale ()` gives 10×24 glyphs, ~90×100 of them) and is wiped only when it scrolls. `docs/08` step 4.8 has the reading, and the dep chain that narrows it. The three earlier attempts stopped before any of our code for a reason now fixed: the tree in the image had no `/__symbols__`, so ABL refused the vendor overlay (`docs/07`). The gate said "reaches a shell" until the volume was inventoried and the shell turned out to be absent from *every* platform in the tree, `suryaPkg` included, so it would not have distinguished our firmware from a working one |
-| **P3** ACPI | Windows installer boots and sees UFS | **item 1 well along, 2–4 not started** — the DSDT, `APIC`, `FACP`, `FACS`, `GTDT` and the shared `SSDT` are in the build and were read back out of the artifact; UFS, USB, the PMIC family, the GPIO controller and the Type-C controller are described, and I2C, buttons and thermal zones are not. Those need `_HID`s a device tree does not carry, and the reference corpus shows the id is `QCOM<family byte><block index>`. Both inputs are now known: the index is measured off the 66-table corpus, and the byte is `0A`, measured against the SC7280/Kodiak Windows driver set (8 of gauguin's 10 blocks named, 0 of 10 under every other byte) and corroborated by the only two corpus tables carrying those ids, `Xiaomi/lisa` and `Samsung/a52sxq`. Every node added since Step 4.63 answers a shipped `.inf` that names its id outright. The one block no driver names is the TSENS *controller*; the 29 thermal *zones* are a different matter and Step 4.66's census found all of their ids determined and claimed, nine of them (`QCOM04C0`–`QCOM04C8`) on family `04` under `qcthermalmdm7280.inf` rather than family `0A` under `qcpep`, which is why the family byte is the id space a block was defined in and not always the SoC. No `.inf` gates the UEFI phase. `AcpiTableUpdate` is a no-op in ours alone: all 13 sibling packages implement it, 1,188–11,685 bytes, and every one patches the DSDT and reinstalls it. The two nearest SoCs, Kodiak (SM7325) and Rennell (SM7125), write 32 named fields; even the smallest sibling writes two. So the machinery exists and what is missing is the SMEM-derived values our DSDT does not declare. 2–4 are **not** volume-gated: see the space note below |
+| **P3** ACPI | Windows installer boots and sees UFS | **item 1 well along, 2–4 not started** — the DSDT, `APIC`, `FACP`, `FACS`, `GTDT` and the shared `SSDT` are in the build and were read back out of the artifact; UFS, USB, the PMIC family, the GPIO controller and the Type-C controller are described, and I2C, buttons and thermal zones are not. Those need `_HID`s a device tree does not carry, and the reference corpus shows the id is `QCOM<family byte><block index>`. Both inputs are now known: the index is measured off the 66-table corpus, and the byte is `0A`, measured against the SC7280/Kodiak Windows driver set (8 of gauguin's 10 blocks named, 0 of 10 under every other byte) and corroborated by the only two corpus tables carrying those ids, `Xiaomi/lisa` and `Samsung/a52sxq`. Every node added since Step 4.63 answers a shipped `.inf` that names its id outright. The one block no driver names is the TSENS *controller*; the 29 thermal *zones* are a different matter and Step 4.66's census found all of their ids determined and claimed, nine of them (`QCOM04C0`–`QCOM04C8`) on family `04` under `qcthermalmdm7280.inf` rather than family `0A` under `qcpep`, which is why the family byte is the id space a block was defined in and not always the SoC. Step 4.67 then measured the other half and found the zone *data* is not missing either — `work/out/gauguin.dts` carries 40 zones with sensor indices and trips, 27 of them the SoC zones from `sm6350.dtsi` — so what the zones still need is the mapping from the device tree's 40 to the corpus's per-`_HID`-plus-`_UID` grouping, which is a join and not a search. The same step took `PEP0` apart: it is a ~630-line skeleton plus one ~58-line case per thermal zone inside `THTZ`, the zero-zone form is shipped as a five-line `Return (0xFFFF)`, `THTZ` is called by nothing in any table that declares it, and `PEP0` reaches `IPCC`, `ABD`, `AGR0`, six subsystem `_STA` tests and the zones — so it cannot be ported whole — and not the 13,000-line node this tree described it as in two other places until Step 4.67 corrected both, a factor of five. No `.inf` gates the UEFI phase. `AcpiTableUpdate` is a no-op in ours alone: all 13 sibling packages implement it, 1,188–11,685 bytes, and every one patches the DSDT and reinstalls it. The two nearest SoCs, Kodiak (SM7325) and Rennell (SM7125), write 32 named fields; even the smallest sibling writes two. So the machinery exists and what is missing is the SMEM-derived values our DSDT does not declare. 2–4 are **not** volume-gated: see the space note below |
 | **P4** Windows | desktop appears | not started — destroys `userdata` |
 | **P5** peripherals | touch, Wi-Fi, GPU, audio | not started |
 
@@ -353,15 +353,23 @@ before `PEP0` is the `_DEP` — lisa's `UCS0` carries
 does not exist resolves to nothing, so it buys nothing while costing a later reader a
 dangling name to chase; `_DEP` is advisory start ordering and there is nothing here to
 order against. `UCS0` itself is one id, one resource and five accessors, and it is in the
-table now. `PEP0` (`QCOM0A17`, which `qcpep.wd7280.inf` binds) is still absent and still
-large: 2,501 lines and 96,100 bytes in lisa, and the same size again in a52sxq's with
-exactly two lines differing — both in `_SUB`, which returns `"CRD07280"` on lisa and
-`"QRD07280"` on a52sxq from a branch keyed on `\_SB.PSUB`, so it is generator output
-carrying a reference-platform string and not board data, and it is the first thing a port
-has to change, since this table's `PSUB` is `"MTP07225"` and lisa's `_SUB` would fall off
-the end of both branches and answer zero. It is dominated by
-the 29 thermal zones it reads, which are flat `\_SB.TZ<n>` devices and not nested under
-any `\_TZ` scope, while its own `_DEP` names `\_SB.IPCC` — a different node again.
+table now. `PEP0` (`QCOM0A17`, which `qcpep.wd7280.inf` binds) is still absent, and Step
+4.67 measured what "large" means there: 2,501 lines and 96,109 bytes in lisa, and the same
+size again in a52sxq's with exactly two lines differing — both in `_SUB`, which returns
+`"CRD07280"` on lisa and `"QRD07280"` on a52sxq from a branch keyed on `\_SB.PSUB`, so it
+is generator output carrying a reference-platform string and not board data, and it is the
+first thing a port has to change, since this table's `PSUB` is `"MTP07225"` and lisa's
+`_SUB` would fall off the end of both branches and answer zero. But 1,826 of those 2,501
+lines are one method — `THTZ`, a dispatch on (zone, trip point) that is called by nothing
+in any of the 20 tables that declares it — and the node's size is that dispatch's case
+count on top of a skeleton of a few hundred lines, because the same node in a platform
+with no zones wired to PEP is shipped as 629 lines whose whole `THTZ` is
+`Return (0xFFFF)`. So the work is the skeleton plus one case per zone, and the reason it
+is still absent is the other thing this step found: `PEP0` reaches `\_SB.IPCC`,
+`\_SB.ABD.ROP1`, `\_SB.AGR0`, the `_STA` of six subsystems (`ADSP`, `AMSS`, `SCSS`,
+`SPSS`, `WPSS`, `NSP0`) and the zones themselves, of which this table has `PSUB` and
+nothing else. It is the opposite kind of node from `UCS0`: `UCS0` could be written before
+its dependency, `PEP0` cannot be written before any of its six.
 
 **And the rest is blocked on an input, not on effort.** Every one of those nodes
 needs an ACPI `_HID`, and a device tree does not carry ACPI names: it has registers
@@ -383,11 +391,17 @@ kind". The corpus has no TSENS *controller*, which is true — but lisa and a52s
 `QCOM0A5D`–`QCOM0A64` its `ADC`, `QCOM0A57` its `BCL`, `QCOM0AC8`–`QCOM0ACB` its `PMIC`,
 `QCOM0AD8`–`QCOM0AE0` its `SRM` — and the nine zones on lisa that are *not* in the 0A
 family at all, `QCOM04C0`–`QCOM04C8`, are the ids `qcthermalmdm7280.inf` binds. So every
-id is determined and claimed; what is missing is the work and the board data — the zones
-are 17 to 59 lines each and name devices in `_TZD` (`\SB.MPA`, `\SB.SYSM.CLUS.CPU0-7`,
-`\SB.WLTM`, `\SB.CSW0`, `\SB.GPU0`, `\SB.MJCT`) that this table does not have, and their
-trip points (`_PSV`, `_CRT`) are a board's own numbers. None of the 29 carries a `_TMP`,
-so the ACPI side of a zone is its trip points and its sampling period, not its readings.
+id is determined and claimed; what is missing is the work and the join — Step 4.67 found
+the board data is not missing after all: gauguin's own device tree carries 40 zones with a
+sensor index and a trip list each, 27 of them the SoC zones `sm6350.dtsi` declares, so the
+trip points (`_PSV`, `_CRT`) are this board's own numbers and readable. The zones are 16 to
+134 lines each and name cooling devices in `_TZD` (`\SB.MPA`, `\SB.SYSM.CLUS.CPU0-7`,
+`\SB.WLTM`, `\SB.CSW0`, `\SB.GPU0`, `\SB.MJCT`) that this table does not have, and those
+remain the gap. What is also still open is the *mapping*: lisa's 29 devices are 26 ids
+because three ids carry a pair of zones distinguished by `_UID` `Zero` and `One`, and
+nothing in this tree yet says which of the board's 40 zones is which id. None of the 29
+carries a `_TMP`, so the ACPI side of a zone is its trip points and its sampling period,
+not its readings.
 
 The count is not the point; the decomposition is. A Qualcomm scoped `_HID` is
 `QCOM<family byte><block index>`, and the *index* is fixed per generation of the

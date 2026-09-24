@@ -256,10 +256,18 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
          * with a reference-platform string in it and not board data, and it is
          * the sort of thing a port has to notice: this table's own PSUB is
          * `"MTP07225"`, so lisa's `_SUB` verbatim would fall off the end of
-         * both branches and answer zero. PEP0 is dominated by the 29 thermal
-         * zones it reads (`\_SB.TZ0` ... `\_SB.TZ99`, flat devices under this
-         * same scope); its own `_DEP` names `\_SB.IPCC`, which is a different
-         * node again. No part of it is in this table. Naming it anyway would put
+         * both branches and answer zero. PEP0 is dominated by one method of
+         * its own, and the domination is measurable rather than rhetorical:
+         * `THTZ` is a dispatch on (zone, trip point) and is 1,826 of lisa's
+         * 2,501 lines, and the node's total is a linear function of the number
+         * of zones that dispatch covers - 32 cases in lisa, 24 in venus and
+         * vili, and a shipped zero-zone PEP0 of 629 lines in
+         * Silicon-Qualcomm-Kailua-DSDT_MTP whose whole `THTZ` is
+         * `Return (0xFFFF)`. Nothing in any of the 20 tables that declare
+         * `THTZ` calls it, so it is an interface for the OS side and not
+         * internal logic. Its `_DEP` names `\_SB.IPCC`, and its skeleton also
+         * reaches `\_SB.ABD.ROP1` and `\_SB.AGR0`; none of the three is in this
+         * table. No part of it is in this table. Naming it anyway would put
          * a reference into the namespace that cannot resolve, and an `_DEP`
          * that evaluates to AE_NOT_FOUND is worth exactly what no `_DEP` is
          * worth while costing more to read: a later step would meet it as a
@@ -840,8 +848,10 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
          * gives it four I2C addresses on \_SB.I2C2 - and this file has no I2C
          * controller and gauguin's pm8008 is at a different address. PEP0
          * (QCOM0A17, qcpep.wd7280.inf) is claimed and is the largest remaining
-         * single node in the reference, 13,000 lines in lisa, and it is the
-         * power engine - its own step.
+         * single node in the reference, 2,501 lines in lisa - but only 629 of
+         * those are skeleton, the rest is one case per thermal zone, and it is
+         * the power engine besides: its own step, and its own comment above
+         * carries the measurement.
          */
         Device (SPMI)
         {
