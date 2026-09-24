@@ -18,11 +18,28 @@ answers, and it answers it the same way for a payload and for a readback of
 
 The three images are a ladder, and the ladder is the point:
 
-    P2 FREE (digest)   P2 APRI   P2 BIN   P2 RETRY   P2 KEY   P2 TICK   <- instrument
-    -----------------  -------   ------   --------   ------   -------   ----------
-    boot-now-0923        yes       no       no        no       no        no
-    p2-4.20              yes      yes      yes       yes       no        no
-    p2-variants          yes      yes      yes       yes      yes       yes
+    P2 FREE (digest)   P2 SEQ   P2 WHY   P2 ERR   P2 APRI   P2 BIN   P2 RETRY   P2 KEY   P2 TICK
+    -----------------  ------   ------   ------   -------   ------   --------   ------   -------
+    boot-now-0923        yes      yes      no       no        no       no         no       no
+    p2-4.20              yes      yes     yes      yes       yes      yes        yes       no
+    p2-variants          yes      yes     yes      yes       yes      yes        yes      yes
+
+**`P2 WHY` and `P2 ERR` are why this ladder has nine rungs and not six, and they are
+the two rows that decide whether a reading is even possible.** `boot-now-0923`
+prints a `P2 SEQ` line and *nothing else in that block*: no `WHY` beside it and no
+`ERR` below it, because `P2WhyLetter`/`P2MarkSeq` and the grouped `P2 ERR %r x%d`
+were added together, after that payload was built. `P2 SEQ` has been read off this
+panel three times and `P2 WHY` has been read zero times, which is exactly what a
+ladder whose oldest rung prints SEQ alone predicts. What that costs is the whole
+reading: `SEQ` is a string of `s` and `L`, and `L` means only *the load failed* - it
+names no status. `WHY` is the same positions with the status class in each one, and
+`P2 ERR` is those statuses again **grouped and counted**, which makes one short line
+- `P2 ERR Out of Resources x27`, or three lines if the causes differ - the complete
+answer to "did the batch fail for one reason or twenty-seven". So:
+
+    **A panel showing `P2 SEQ` with no `P2 ERR` anywhere on it is running
+    `boot-now-0923`, and no amount of reading that screen can produce the status.**
+    `--expect P2ErrRow` is the gate that makes the next flash worth making.
 
 **`P2 KEY` is what makes the bottom row of the panel readable, and it is in exactly
 one of the three.** `P2Digest` calls `P2Bins()` and then `P2Key()` last
@@ -53,7 +70,7 @@ Usage:
     tools/probe-fingerprint.py IMG...                    # the ladder, per image
     tools/probe-fingerprint.py --expect P2Key IMG        # pre-flight gate, exit 1
     tools/probe-fingerprint.py --read                    # dd `boot` first (TWRP)
-    tools/probe-fingerprint.py --list                    # what the names mean
+    tools/probe-fingerprint.py --markers                 # what the names mean
 
 `--expect` is the use this is for before a flash: it is the check that the payload
 being written is one whose screen the reader can actually decode. It costs nothing
@@ -103,6 +120,12 @@ INSTRUMENTS = [
      "the per-record census: P2 DIAG, P2 ERR, P2 WALK, and the largest allocation"),
     ("P2Apri",   "P2Digest", "P2 APRI",
      "what the Apriori file read as, and which entries matched nothing"),
+    ("P2Seq",    "P2Digest", "P2 SEQ [",
+     "the batch as one character per entry, in dispatch order"),
+    ("P2Why",    "P2Digest", "P2 WHY [",
+     "the same positions as status classes - the row that has never been read"),
+    ("P2ErrRow", "P2Digest", "P2 ERR ",
+     "the failures grouped by status and counted, in words - the readable spelling"),
     ("P2Bins",   "P2Bins",   "P2 BIN init=",
      "the runtime bins' windows and the memory type information HOB"),
     ("P2Retry",  "P2Bins",   "P2 RETRY",

@@ -6173,3 +6173,136 @@ relocation guards. `EFI_DEVICE_ERROR` is produced nowhere in this path, and
 remaining live candidate is `EFI_OUT_OF_RESOURCES`, and **the panel is what
 distinguishes it from the rest**: `'R'` in `P2 WHY` is that status and nothing else,
 and it is one character wide.
+
+## Step 4.39 — The three `P2 SEQ` readings came from a build that cannot print a status, and that is a fact about the payload
+
+Step 4.29's ladder has six rungs and it is missing two, and the two it is missing
+are the two that decide whether a panel reading can answer anything at all. Both
+were found the same way: by inflating each payload's `FVMAIN` (through
+`tools/fv-inventory.py`'s walk, because the strings live inside the LZMA GUIDed
+section) and searching for literals that `tools/probe-fingerprint.py` resolves out
+of `Dispatcher.c`.
+
+```
+                      P2Digest  P2 SEQ  P2 WHY  P2 ERR  P2 APRI  P2 BIN  P2 RETRY  P2 KEY  P2 TICK
+boot-now-0923            yes      yes     no      no       no       no      no        no      no
+p2-4.20                  yes      yes    yes     yes      yes      yes     yes        no      no
+p2-variants              yes      yes    yes     yes      yes      yes     yes       yes     yes
+```
+
+**`boot-now-0923` prints `P2 SEQ` and nothing else in that block.** No `WHY` beside
+it, no `ERR` below it. That is because `P2WhyLetter`/`P2MarkSeq` and the grouped
+`P2 ERR %r x%d` were added together, in a later build than the payload named
+`boot-now-0923`. Reading the literal set straight off the three images:
+
+| literal | boot-now-0923 | p2-4.20 | p2-variants |
+| --- | --- | --- | --- |
+| `P2 SEQ [%a]` | present | present | present |
+| `P2 WHY [%a]` | **absent** | present | present |
+| `P2 ERR %r x%d` / `P2 ERR none` | **absent** | present | present |
+| `P2 APRI bytes=%d entries=%d sum=%x` | absent | present | present |
+| `KEY 0/%d err=none free=%d miss=%d` | absent | absent | present |
+| `K %d %c%c %d/%d free=%d %g` | absent | absent | present |
+
+**And `P2 SEQ` has been read off this panel three times while `P2 WHY` has been read
+zero times.** The source comment at the `P2 ERR` block already records that
+asymmetry — it says, in the line written when that block was added, "SEQ has been
+read off this panel three times and WHY has never been read once". What is new here
+is that the asymmetry has a *build* explanation and not only a reader explanation,
+and the two are distinguishable from one photograph:
+
+> **A panel showing `P2 SEQ` with no `P2 ERR` anywhere on it is running
+> `boot-now-0923`, and nothing on that screen can name a status.** `SEQ` is a string
+> of `s` and `L`; `L` means the load failed and says nothing about why. The
+> readable spelling of the same datum is `P2 ERR`, which exists only in the two
+> later builds.
+
+That turns a guess into a gate. `tools/probe-fingerprint.py --expect P2ErrRow IMG`
+exits 1 on `boot-now-0923` and 0 on `p2-variants`, and it is the precondition for
+the next flash: a payload whose screen cannot print the reason is not worth
+flashing, however new it is.
+
+### `P2 ERR` is the row to photograph, and it is short
+
+The block was written for exactly this. For each distinct failing status it prints
+one line **once, at its first occurrence**, with a count taken over the whole
+batch (`Dispatcher.c`, the `Prior`/`Same` pair inside `P2Digest`):
+
+```
+P2 ERR %r x%d
+```
+
+So the answer to "did the batch fail for one reason or twenty-seven" is one line or
+a few. `P2 ERR Out of Resources x27` means one global cause; three `P2 ERR` lines
+mean three, and the split between them is the finding, because a status that is
+`OUT_OF_RESOURCES` at one index and `NOT_FOUND` at another has no single cause. It
+is the same reading as `P2 WHY`, in words, grouped, and it does not require the
+reader to keep 46 unbroken characters straight. `P2 DIAG %c %g %r` below it names
+all 27 individually — driver, phase, status — for the question `P2 ERR` deliberately
+collapses.
+
+### Nothing about the *room* changed: the bins are a preference, and the numbers say so
+
+Step 4.37 concluded the 27 are not a large-request problem. Two more candidates on
+the allocator side were open and both are now closed, one of them by arithmetic
+over the same volume.
+
+**The memory-type bins have PCD-limited sizes and the loads walk past them.** The
+platform builds the HOB and sets them
+(`Silicon/Silicium/SiliciumPkg/SiliciumPkg.dsc.inc:44-53`, with
+`PcdPrePiProduceMemoryTypeInformationHob|TRUE` at `:121`):
+
+| bin | pages | the run's cumulative demand, in promotion order |
+| --- | --- | --- |
+| `EfiBootServicesCode` | 1000 | peaks at **689** pages, at the last entry |
+| `EfiRuntimeServicesCode` | 150 | crosses 150 **between positions 2 and 3**, peaks at 873 |
+| `EfiRuntimeServicesData` | 300 | 160 pages of runtime data pools |
+| `EfiLoaderCode` / `EfiLoaderData` | 10 / 0 | unused: no promoted image is subsystem 10 |
+
+`EfiRuntimeServicesCode` is over its bin from position 3 onward — the cumulative
+runtime-code demand passes 150 pages there and reaches 873 by the end, and
+**sixteen further loads succeed after that point**, the last of them at position
+21, every one of them with the preferred bin already full. So a bin being exceeded
+does not stop a load, which is what
+`FindFreePages` says it should be: the preferred bin is tried
+(`Mem/Page.c:1073`), then the default bin (`:1090`), then anywhere inside
+`MaxAddress` (`:1119`), and only then `PromoteMemoryResource` and a retry — and
+`AllocateAnyPages` passes `MAX_ALLOC_ADDRESS`, so the third attempt sees the whole
+map. A bin is a *preference and a promotion source*, never a limit. The one thing
+this leaves open is that `PromoteMemoryResource` is unreachable on this board, so
+the third attempt is the last one; but the third attempt is not type-limited, and
+`P2LargestAlloc` measures it.
+
+**And the heap is barely touched when the failures begin.** Cumulative demand over
+the entries that actually loaded — positions 0 through 17, then 21, since
+positions 18 to 20 are `L` and consumed nothing — is **575 pages**. The DXE heap is
+9056 pages declared and about 7261 after PrePi takes the FVMAIN off the top. So the
+run has consumed **8% of the heap** when a 9-page allocation stops working. That is
+not a fragmentation story either — there is nothing to fragment.
+
+### And every byte-level guard the loader has is clean, over all 46
+
+`PeCoffLoaderGetImageInfo` and `PeCoffLoaderRelocateImage` have guards that are
+properties of the image's bytes rather than of memory, so they are checkable on the
+host, and they were checked: for each of the 46 promoted entries, is any section's
+`VirtualAddress` or `VirtualAddress + VirtualSize - 1` at or beyond `SizeOfImage`; is
+any section's raw range past the end of the FFS file's PE32 section; is the
+relocation directory itself inside `SizeOfImage`; is any relocation *target* at or
+beyond `SizeOfImage`; is `AddressOfEntryPoint` at or beyond it.
+
+**All clean, on all 46, on both sides of the `s`/`L` split.** The walk checks the
+target of every non-`ABSOLUTE` relocation entry, which is the one that
+`PeCoffLoaderImageAddress` would return NULL for and turn into
+`IMAGE_ERROR_FAILED_RELOCATION` / `RETURN_LOAD_ERROR` — letter `E`. It fires for
+none of them.
+
+So the failure surface of `CoreLoadImage` is now enumerated and each entry is
+either measured away or measured to be reachable-but-unproven: `EFI_INVALID_PARAMETER`
+(a NULL or too-short file path), `EFI_UNSUPPORTED` (machine type, subsystem — both
+accepted; an unhandled relocation — none in the volume), `EFI_NOT_FOUND`
+(`GetFileBufferByFilePath`), the security protocols (not installed: `SecurityStubDxe`
+is one of the 27), `EFI_OUT_OF_RESOURCES` (three allocation sites, all of them
+pool-or-page), and `RETURN_LOAD_ERROR` from the loader's own guards (all clean).
+`EFI_DEVICE_ERROR` is produced nowhere in the path. **The live candidates are
+`EFI_OUT_OF_RESOURCES` and `EFI_NOT_FOUND`, and `P2 ERR` distinguishes them in one
+line.**
