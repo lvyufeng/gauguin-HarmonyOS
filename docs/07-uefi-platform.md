@@ -407,10 +407,60 @@ not as a repair to make now. Nothing in the P2 gate depends on it.
 - The ACPI tables are absent by choice. The surya DSDT describes a different
   board, and shipping it would tell any OS that boots here a set of confident
   lies about where the interrupt controllers and UART are. `AcpiTableUpdate`
-  is a deliberate no-op with a P3 TODO. The P2 gate is the boot manager drawing
+  is a deliberate no-op with a P3 TODO — see the section below for what the sibling
+  packages do instead. The P2 gate is the boot manager drawing
   on the panel and UFS enumerating, which does not need ACPI; Windows does, which
   is why that is P3.
 - The MDP SIDs, as noted above.
+
+### The volume is not short of room, and `AcpiTableUpdate` is a no-op in ours alone
+
+Both of these were on the "what is missing" list as constraints and neither is one.
+
+**`FVMAIN`'s reported free space is block-alignment slack.** `gauguin.fdf:19-22`
+declares `BlockSize = 0x1000, NumBlocks = 0`, so GenFv sizes the volume to the next
+4 KiB boundary above its content and "free" is the remainder in that last block. It is
+therefore always in [0, 4095] and says nothing about capacity:
+
+| build | `EFI_FV_TAKEN_SIZE` | `EFI_FV_TOTAL_SIZE` | reported free |
+|---|---|---|---|
+| gauguin, 2026-09-24 23:30 | `0x702d08` | `0x703000` | 760 |
+| gauguin, 2026-09-25 01:20 | `0x72ced0` | `0x72d000` | 304 |
+| upstream `suryaPkg` | `0x676d30` | `0x677000` | 720 |
+
+All three are `(-taken) % 4096`. The two gauguin rows are 172,032 bytes apart: the
+volume grew and the "free" figure fell, which is the opposite of what a capacity limit
+does. What bounds the payload is the enclosing volume — `SILICIUM_UEFI.fd` is
+`FVMAIN_COMPACT`, a fixed 3 MiB, today 35.6% used with 2,025,744 bytes free. And that
+3 MiB is the device's, not this port's: `uefiplat.cfg:20` (recovered from XBL at P0)
+declares `0x9FC00000, 0x00300000, "UEFI FD"`, walled below by `ABOOT FV`
+(`0x9FA00000, 0x00200000`, ending exactly at `0x9FC00000`) and above by `SEC Heap`
+(`0x9FF00000`), with BootShim's `_StackSize` and the FV header's `FvLength` both
+`0x300000`. The decisive measurement is simpler still: the
+`USE_CUSTOM_DISPLAY_DRIVER=1` build, which contains `DisplayDxe`, was built and
+validated in this same volume at `FVMAIN` `0x753000` with 47 images.
+
+**`AcpiTableUpdate` is a deliberate no-op, but that is our choice, not the platform's.**
+All thirteen sibling packages implement `UpdateAcpiTables ()`, and every one of them
+patches the DSDT and reinstalls it — ours is the only one of the fourteen that patches
+nothing. Sizes run 1,188–11,685 bytes and `AslUpdateName` call counts run 2–32. The two
+SoCs nearest SM7225 in the tree are the heaviest of the small ones: `KodiakPkg` (SM7325,
+7,142 bytes) and `RennellPkg` (SM7125, 5,897) call `LocateTableBySignature` for the
+DSDT, locate the ChipInfo, SMEM and PlatformInfo protocols, then write **32 named
+fields** with `AslUpdateName (DsdtTable, SIGNATURE_32 (...), …)` — `SOID SKUV SDDR STOR
+SIDV SVMJ SVMI SDFE SIDM SUFS PUS3 SUS3 SIDT SJTG EMUL SOSN PLST RMTB RMTX RFMB RFMS
+RFAB RFAS TPMA TDTV TCMA TCML SOSI PRP0 PRP1 SIDS UAON` — and finish with
+`ReinstallTable (DsdtTable, &DsdtHandle)`. Even the floor is not zero: `MolokaiPkg`'s
+1,188 bytes read one value out of MMIO and write two fields.
+
+So the machinery for patching a table at runtime is two directories away, on the SoCs
+whose generation byte SM7225 most plausibly shares. Our source comment says the reason
+is "there is no DSDT for gauguin yet" — that is now stale, since the DSDT exists and is
+in the firmware volume. The live reason is narrower and better: all 32 of those fields
+are modem, ADSP and TZ shared-memory values read out of SMEM, and `tools/acpi/gauguin.asl`
+declares none of them. Editing that comment is deferred — a comment still moves debug
+line numbers and so moves the hash of the staged payload, and the staged payload is what
+the P2 gate is waiting on.
 
 ### Reading the volume takes some care, and got it wrong twice
 
@@ -2492,14 +2542,30 @@ for the CPU skeleton at `Silicon/Qualcomm/Moorea/DSDT_Minimal.asl`, and 20 platf
 >   `ASL|` entries, exactly the set argued for above, plus `Common/SSDT.aml`. It
 >   resolves as `gauguin/AcpiTables.inf` because `Silicium-ACPI/Platforms/Xiaomi`
 >   is on `PackagesPath`, the way surya's does. The DSDT has no separate
->   `gauguin.dsl`: `tools/acpi/gauguin.asl` (**21,615 bytes**) is the source and
+>   `gauguin.dsl`: `tools/acpi/gauguin.asl` is the source and
 >   `tools/sync-uefi-platform.sh` compiles it to the 1,520-byte `DSDT.aml` beside
 >   the `.inf`.
+>
+>   The byte figure for that source moved and the copies did not, so the chain is
+>   worth writing down. `make_uefi_platform.py:1246` copies
+>   `tools/acpi/gauguin.asl` → `uefi/Silicium-ACPI/Platforms/Xiaomi/gauguin/gauguin.asl`
+>   (`$GEN`), and `sync-uefi-platform.sh:116` copies that → the same path under
+>   `work/uefi/Mu-Silicium` (`$MU`) and runs `iasl` there. As of this edit the
+>   source is **23,575 bytes** while both installed copies are **21,615**, because
+>   the difference is entirely a comment block added to the source after the last
+>   run of the generator. The compiled `DSDT.aml` is therefore byte-identical and
+>   the built payload is unaffected — which is exactly why it is written down
+>   rather than fixed: propagating it means re-running `make_uefi_platform.py`
+>   over the whole generated tree, which is not worth doing while a payload hash
+>   is what P2 is waiting on.
 > - **2.** `gauguin.fdf:73` is **live**, not commented out.
 > - **3.** `gauguin.dsc` has a `[Components]` section (line 91) whose only member
 >   is `gauguin/AcpiTables.inf`.
 > - **4.** `AcpiTableUpdateLib` is unchanged, and with the tables verified correct
->   on this board (below) it should stay a no-op.
+>   on this board (below) it should stay a no-op — but not because the platform
+>   works that way. See "The volume is not short of room, and `AcpiTableUpdate` is
+>   a no-op in ours alone" above: all 13 sibling packages implement it, and the two
+>   nearest SoCs patch 32 named DSDT fields and reinstall the table.
 >
 > **And the tables are not merely declared — they are built into the payload, and
 > each one was read back out of it.** In the firmware volume of the build behind

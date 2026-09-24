@@ -7625,6 +7625,18 @@ fit alongside it. Which puts the whole of P3 behind the same reading P2 has been
 > `EFI_FV_TAKEN_SIZE`, and not the 1,265-byte sum of file headers and data that a naive walk of the
 > volume gives.
 
+> **Corrected again, 2026-09-25.** The figure is arithmetically right and still
+> misleading: `FVMAIN` is `BlockSize = 0x1000, NumBlocks = 0`, so 760 is just
+> `(-0x702d08) % 4096` — the slack in the volume's last 4 KiB block. It is always in
+> [0, 4095] and carries no capacity information, which is why today's build reports 304
+> on a volume 172,032 bytes *larger*. The paragraph above at 7615 — "the payload has 760
+> bytes free … DisplayDxe, UsbBusDxe and ButtonsDxe do not fit alongside it" — draws a
+> conclusion the number does not support, and the `USE_CUSTOM_DISPLAY_DRIVER=1` build
+> containing `DisplayDxe` was itself built and validated in this volume. See the new
+> section in `docs/07` for the measured version; `docs/00-plan.md`'s P3 entry is
+> corrected too. `P2BRINGUP` still has to come out before the payload is a shipping
+> one, but that is a cleanliness step, not a size gate.
+
 Nothing was flashed and nothing in the firmware changed. This step read an artifact that was already
 built and corrected two documents that described it wrongly.
 

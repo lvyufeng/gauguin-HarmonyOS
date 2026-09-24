@@ -18,7 +18,7 @@ the sections under it are the plan.
 | **P0** survey + backup | partitions dumped and verified; no existing port | **done** — 74 partitions carved and signature-checked, `boot`/`abl`/`recovery` hashes match the device, 86 XBL drivers recovered, and `git ls-files Silicon/Qualcomm` confirms no SM7225 package upstream |
 | **P1** mainline kernel | device boots mainline and prints something | **not done** — `work/out/boot-pstore.img` is built, reproducible (`make_boot_image.py --kernel`), and carries both channels a device with no UART needs: the panel itself (`simple-framebuffer` + `simpledrm` + fbcon, so the boot log is photographed off the screen) and pstore (`console-ramoops-0`, readable from Android after a warm reboot). The earlier `fastboot boot` was refused with `Failed to load/authenticate boot image` on the RAM path, and the partition path has never been tried |
 | **P2** UEFI skeleton | the boot manager draws on the phone's screen and UFS appears as a block device | **half met, and it is the half that decides viability** — **our firmware executes on this phone**. The image carrying the current device tree was written to `boot`, and on the reboot the panel filled with our own output, ending in `ASSERT [DxeCore] DxeMain.c(593)`. That text can only come from us: `DxeMain.c:593` is our line, and in a DEBUG build `SerialPortLib` is bound to `FrameBufferSerialPortLib`, so every `DEBUG ()` string is drawn into the framebuffer — which is why the firmware can talk while there is no shell, no boot-manager menu and no UART. (It also means text on the panel is not evidence that BDS ran.) What remains is the second half: DXE stops because at least one *architectural protocol* was never installed, and the name of the first missing one is printed two lines above the assert, on a screen that is legible by design (`GetFontScale ()` gives 10×24 glyphs, ~90×100 of them) and is wiped only when it scrolls. `docs/08` step 4.8 has the reading, and the dep chain that narrows it. The three earlier attempts stopped before any of our code for a reason now fixed: the tree in the image had no `/__symbols__`, so ABL refused the vendor overlay (`docs/07`). The gate said "reaches a shell" until the volume was inventoried and the shell turned out to be absent from *every* platform in the tree, `suryaPkg` included, so it would not have distinguished our firmware from a working one |
-| **P3** ACPI | Windows installer boots and sees UFS | **item 1 half done, 2–4 not started** — the DSDT, `APIC`, `FACP`, `FACS`, `GTDT` and the shared `SSDT` are in the build and were read back out of the artifact; UFS and USB are described and I2C, GPIO, buttons and thermal are not. Those four need `_HID`s a device tree does not carry, and the reference corpus shows the id is `QCOM<family byte><block index>` — the index is readable off the corpus, the byte is not, and it comes from a driver set. `AcpiTableUpdate` stays a deliberate no-op until there is a table to patch |
+| **P3** ACPI | Windows installer boots and sees UFS | **item 1 half done, 2–4 not started** — the DSDT, `APIC`, `FACP`, `FACS`, `GTDT` and the shared `SSDT` are in the build and were read back out of the artifact; UFS and USB are described and I2C, GPIO, buttons and thermal are not. Those four need `_HID`s a device tree does not carry, and the reference corpus shows the id is `QCOM<family byte><block index>` — the index is readable off the corpus, the byte is not, and it comes from a driver set. `AcpiTableUpdate` is a no-op in ours alone: all 13 sibling packages implement it, 1,188–11,685 bytes, and every one patches the DSDT and reinstalls it. The two nearest SoCs, Kodiak (SM7325) and Rennell (SM7125), write 32 named fields; even the smallest sibling writes two. So the machinery exists and what is missing is the SMEM-derived values our DSDT does not declare. 2–4 are **not** volume-gated: see the space note below |
 | **P4** Windows | desktop appears | not started — destroys `userdata` |
 | **P5** peripherals | touch, Wi-Fi, GPU, audio | not started |
 
@@ -363,11 +363,33 @@ resources belong to, and a PMIC node carries the same family byte (`PM01` is
 `QCOM<family>2D` in the modern tables and `QCOM<family>30` under 05 08 14). So
 the buttons wait for the same byte the rest of the blocks do.
 
-Items 2–4 have a shared precondition that is worth stating plainly: **the payload has
-760 bytes of free volume**, and the P2 debugging instrumentation (`P2BRINGUP`) is what
-occupies the rest. Adding DisplayDxe, UsbBusDxe or ButtonsDxe to the volume before
-that instrumentation is deleted will not fit. So P3's driver work is gated on P2
-reaching BDS in practice, not only in principle.
+Items 2–4 were said to be gated on volume space: "**the payload has 760 bytes of free
+volume**", so DisplayDxe, UsbBusDxe and ButtonsDxe "will not fit" beside the P2
+instrumentation. **That is a misreading of the figure, and the gate is not there.**
+
+`FVMAIN` is declared `BlockSize = 0x1000, NumBlocks = 0` in `gauguin.fdf:19-22`, so
+GenFv sizes it to the next 4 KiB boundary above its content and the reported "free"
+is the slack left in that last block. Measured, it is exactly that and nothing else:
+the 2026-09-24 23:30 build reports `0x702d08` taken → `0x703000` → 760 free, today's
+01:20 build `0x72ced0` → `0x72d000` → 304 free, and upstream `suryaPkg` `0x676d30` →
+`0x677000` → 720 free. All three are `(-taken) % 4096`; the number is always in
+[0, 4095] and carries no capacity information at all. `FVMAIN` in fact **grew by
+172,032 bytes between those two gauguin builds** and would have grown further.
+
+What the payload is actually bounded by is the enclosing volume: `SILICIUM_UEFI.fd`
+is `FVMAIN_COMPACT`, a fixed 3 MiB region, and today it is **35.6% used with
+2,025,744 bytes free**. That 3 MiB is not a Mu-Silicium convention either — it is
+the device's own memory map, from the `uefiplat.cfg` recovered out of XBL at P0:
+`0x9FC00000, 0x00300000, "UEFI FD"`, walled below by `ABOOT FV` (`0x9FA00000`,
+`0x00200000`, ending exactly at `0x9FC00000`) and above by `SEC Heap`
+(`0x9FF00000`), with BootShim's `_StackSize` and the FV header's `FvLength` both
+equal to `0x300000`.
+
+The refutation needs no arithmetic, though: the `USE_CUSTOM_DISPLAY_DRIVER=1` build —
+the one that contains `DisplayDxe` — **has already been built and validated** in this
+volume (`Mu-gauguin.img` 1,210,368 bytes, `FVMAIN` `0x753000`, 47 images). So P3 items
+2–4 are gated on P2 reaching BDS unconditionally, which is a statement about when the
+debug instrumentation can be deleted, not about whether their drivers fit.
 
 ---
 
