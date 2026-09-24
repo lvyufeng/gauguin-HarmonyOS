@@ -100,8 +100,13 @@ The correlating detail: the downstream Thunderbolt ports (`03:02.0` and
 (`00:1c.4`, `02:00.0`) are `ASPM Disabled`. The switch is left in an
 aggressive-L1 state on a link whose partner is a flapping Thunderbolt bridge.
 The registered policy is already `performance`; the per-link setting is what
-disagrees, and `pcie_aspm=off` on the kernel command line is the way to force it
-(the sysfs policy file is read-only on this build).
+disagrees, and `pcie_aspm=off` on the kernel command line was the proposed way to
+force it (the sysfs policy file is read-only on this build).
+
+**That proposal has since been tested and refuted — see "ASPM is cleared on every
+link, and the flap does not change" below.** The reading of the registers is
+still correct; the inference from it to the cause is withdrawn, and
+`pcie_aspm=off` is not worth a reboot.
 
 ### What this means in practice
 
@@ -143,6 +148,69 @@ exactly like a phone arriving.
 One measurement note, because it cost time: a one-minute `dmesg | grep -c` sample
 read `1` while `journalctl -k` counted nine in the same minute. The kernel ring buffer
 drops messages. Count flaps with `journalctl -k`, not `dmesg`.
+
+## Re-measured on 2026-09-25: the flap has no exempt hour, and it is not ASPM
+
+Two things were still open after the reading above — whether the 6.5-second rate
+holds over a long window or was a bad hour, and whether the ASPM observation is the
+cause or a coincidence. Both were settled by measurement, and the second one came
+out negative.
+
+**Every hour in a 26-hour window flaps.** `pcieport 0000:00:1c.4: pciehp: Slot(8):
+Link Down`, counted per clock hour from Sep 24 00:00 to Sep 25 01:32:
+
+| hour (Sep 24) | 00–10 | 11 | 12 | 13 | 14 | 15 | 16–23 | Sep 25 00 | 01 |
+|---|---|---|---|---|---|---|---|---|---|
+| drops | 551–553 each | 487 | 542 | 507 | 536 | 367 | 562–565 each | 563 | 332 (partial) |
+
+So the floor over 26 hours is 367 and the ceiling 565, with twenty of the
+twenty-six hours inside 551–565 — one drop every **6.4 to 6.5 seconds**, sustained.
+Nothing is exempt: the hours around 11:00–15:00 are the only ones off the plateau,
+and they are *lower*, not higher, so whatever varies there does not gate the flap.
+For scale, the kernel journal for the current boot holds **1,955,642** messages and
+essentially all of them belong to this loop; that is why `dmesg` shows only about
+three minutes of history, and why a flap that started hours ago can look new.
+
+**ASPM is cleared on every link, and the flap does not change.** The registers were
+cleared at runtime on all three links that had it enabled —
+`sudo setpci -s <dev> CAP_EXP+10.w=0000` for `0000:03:01.0`, `0000:03:02.0` and
+`0000:6c:00.0` — and re-read to confirm, `ASPM Disabled` on each (the two upstream
+links, `00:1c.4` and `02:00.0`, were already disabled, so the whole chain now has
+none). The rate before the change was 9 drops in 60 s; after it, **15 drops in
+90 s**, i.e. 10.0 per minute against the 9.2 per minute the old rate predicts. The
+flap is unchanged. ASPM is refuted as the cause, and with it `pcie_aspm=off` as the
+cure — which is worth knowing without having spent a reboot on it.
+
+Two corrections to the section above, both from the same session.
+`/sys/module/pcie_aspm/parameters/policy` now reads
+`[default] performance powersave powersupersave`, so the active policy is `default`
+and not the `performance` that paragraph claims. And clearing the bits with
+`setpci` is a runtime change only: it does not survive a reboot, and it costs a
+little idle power on a link that is unusable either way.
+
+**Every time this host has ever seen the phone, it was on `usb 3-1`.** The journal
+keeps every boot back to Sep 21. Grepping it for the phone's vendor IDs over its
+whole history gives **32 enumeration events, on one bus: `usb 3-1`**, first
+`2026-09-22T14:49:23` (`2717:ff18`), last **`2026-09-24T14:59:32`** (`2717:ff68`).
+Not one appears on `usb 1-x` or `usb 2-x`, which is the chipset controller
+(`0000:00:14.0`) — the one that has never dropped the mouse.
+
+That is the whole of this project's connection history, and it means the advice to
+fall back to a chipset port has never actually been followed: there is no reading
+anywhere in it from a chipset port, for good or for ill. So "the USB-A port did not
+work either" is not evidence against a chipset port, because the log says the phone
+was on `usb 3-1` for all 32 events and the chipset ports have not been tried.
+
+**And the phone has presented nothing at all since that last event.** A 30-second
+live watch on 2026-09-25 01:32, with the dock cycling four or five times inside the
+window, produced **zero** `New USB device found` lines for it, and `lsusb -t` shows
+nothing attached to bus 3 or bus 4. Ten and a half hours, no enumeration on any
+port. Read against "The same reading has a second, non-hardware cause" below, that
+is the expected state of a phone that is off, or that is sitting in the boot loop
+of our own payload — which brings up no USB device stack at all, so it presents
+nothing on any port for as long as the loop keeps resetting it. Nothing in the host
+side of this document explains a total absence; a flapping link explains a device
+that arrives and leaves, not one that never arrives.
 
 ## The same reading has a second, non-hardware cause
 
