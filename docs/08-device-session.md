@@ -6962,3 +6962,318 @@ either a full heap or a fragmented one. This step does not change that order. It
 what the census means when it arrives: it is now guaranteed to describe a real request,
 and the `g=` beside it says how much of the run's own instrument it took to know.
 
+
+## Step 4.43 — the census has a predicted number in every field, and `t=` plus `np` name the allocation
+
+Host side only. Nothing was flashed and the device was not attached.
+
+4.42 made the census describe a real request instead of the instrument. This step reads the load
+path that request comes from, and ends with two results that change what the next reading is for.
+Every field of both `P2 FWTY` and `P2 FWHY` now has a predicted value, and `t=` beside `np=`
+identifies which allocation failed, because this build has exactly four memory types on that path
+and one of them can only come from one call site. The second result is that the census decides a
+premise the phase has been standing on since 4.19 — that the 27 failures are 27
+`EFI_OUT_OF_RESOURCES` — and the two answers are mutually exclusive.
+
+### `tools/promote-check.py`, run for the first time since 4.20 wrote it
+
+74 descriptors, 72 with a resource HOB, 4 landing in the GCD map as `Reserved`, and each fails a
+different clause of the gate at `Mem/Page.c:402-405`:
+
+| region | base | why the gate rejects it |
+| --- | --- | --- |
+| `AOP CMD DB` | `0x0000020000` | no `EFI_MEMORY_PRESENT`, no `INITIALIZED` |
+| `SMEM` | `0x0000200000` | no `EFI_MEMORY_PRESENT`, no `INITIALIZED` |
+| `PIL Reserved` | `0x0015800000` | no `EFI_MEMORY_PRESENT`, no `INITIALIZED` |
+| `Display Reserved` | `0x0002400000` | `EFI_MEMORY_TESTED` set — the one bit that must be clear |
+
+`PromoteMemoryResource` therefore returns FALSE from every call site on this board, and the control
+flow at the call site on the load path is why the census is readable:
+
+```
+if (!PromoteMemoryResource ()) {          //  Page.c:1382
+  P2FreeWhy (MaxAddress, NoPages, NewType, Alignment);   //  :1390
+  return 0;                               //  :1391
+}
+return FindFreePages (MaxAddress, NoPages, NewType, Alignment, NeedGuard);  // :1397
+```
+
+* **The recursion at `:1397` is unreachable here**, so `P2FreeWhy` is called **exactly once per
+  failed request** and not twice on a promotion path. There is no factor of two in the census.
+* `g` is therefore the exact number of ladder rungs that found no run of their size: 47 walks of at
+  most 7 rungs, `0 <= g <= 329`, and **`g = 0` is a real answer** — it says a 4096-page allocation
+  succeeded at every instant the ladder was walked, including at the end of the run.
+* The heap cannot grow mid-run, so `free=` and `big=` at the first refusal describe the same map for
+  every request after it. The snapshot is not a state that has passed; it is the ceiling the rest of
+  the run fails under.
+
+### The ladder runs 47 times, and one of the two comments about it says three
+
+`P2LargestAlloc` has three call *sites* — `Dispatcher.c:280`, `:291`, `:683` — which is what
+`Page.c:1159` means by "there are three of them", and that sentence is correct as written. The
+number of times it *runs* is not three: `P2Tick` is called once per attempted driver, at `:1122` for
+each load that failed and `:1167` for each that started, which this run's 46-character SEQ fixes at
+27 + 19 = 46, and `P2 FREE largest=` (`:2434`) walks the ladder once more before `P2Bins` (`:2436`)
+prints the row. **47 runs, and every rung all of them failed is in `g`.**
+
+| where | says | should say |
+| --- | --- | --- |
+| `Dispatcher.c:453-455` | "P2LargestAlloc runs three times before this - once per P2Tick inside the dispatch loop, and once for `P2 FREE largest=` above" (two items, total three) | three call sites, 46 runs inside the dispatch loop plus one for `P2 FREE largest=`, so 47 runs behind the `g=` this row prints |
+| `Mem/Page.c:1250-1254` | "CoreLoadPeImage's other EFI_OUT_OF_RESOURCES is a 200-byte AllocateRuntimePool … so `n=0` beside 27 recorded `L`s names the pool" | the pool it means is 48 bytes and its failure path returns `EFI_SUCCESS`; the only `EFI_OUT_OF_RESOURCES` that function can return is multi-page — see the next section but one |
+| `Mem/Page.c:1258` | "the second line … is now guaranteed to be a real request" | true, and weaker than "an image request": nothing filters on type at `:1185`; the type is read at `:1172-1180` only to choose a tally slot, and the ladder is excluded by the flag at `:1167-1170`, not by its arguments |
+
+### The per-tick `free=` is not a reading, and cannot be
+
+Every `K` line carries a `free=`, so the row set looks like a 46-sample fragmentation trace of the
+whole run. It is unreadable, and not because of the photography: `P2Digest` prints once and then 40
+more times (`Dispatcher.c:2524-2529`), a copy costs about 49 rows against a 99-row panel
+(`tools/console-budget.py`), and `AdvanceNewLine` wipes rather than scrolls — so after the first wipe
+the panel holds nothing but copies of the digest, and every `K` line is printed inside the dispatch
+loop, before the first copy. `:2507-2515`'s conclusion is right and stronger than it is written
+there: the repetition does not merely let the digest win the race, it erases the per-tick rows from
+every reachable state.
+
+The same measurement survives in three places that *are* on the panel — `P2 FREE largest=` after the
+run, and `free=`/`big=` on the census — and those are the reading.
+
+### What the sources say the two lines will read
+
+Both lines print pages, not bytes: `free` is already pages (`Page.c:1218`), and `raw`/`big` are
+shifted down by `EFI_PAGE_SHIFT` at `:1290-1291` before printing. So the quantities are comparable
+and the relations are `big <= raw <= free`.
+
+* **The heap.** The PHIT row is `DXE Heap` `0x9B800000 + 0x02360000` = 9056 pages = 35.4 MiB, the
+  only `Conv` row in the device's own memory map (`tools/heap-compare.py`); every sibling platform at
+  that base declares 15360. `Sec.c:64-65` looks the row up by name to size the PHIT, and 4.27
+  established that `DxeCore`'s own conventional region is the 9056 minus the 1795 pages PrePi takes
+  off the top for the decompressed FVMAIN (`Gcd.c:2393-2394`) = **7261 pages**, not 9056.
+* **The bins cost nothing of it.** 4.26's reading stands: `AllocateMemoryTypeInformationBins`
+  allocates the 450-page `RequiredSize` and frees it, so the bins leave address windows and consume
+  no page.
+* **The demand.** `tools/pe-facts.py` prints two consumers per slot, and both are live for the whole
+  window: the image request (`SizeOfImage + SectionAlignment` when that is 0x10000) and the FV
+  driver's `AllocateCopyPool` of the entire FFS file, which `FileCached` (`FwVolRead.c:322-332`)
+  latches and nothing on the load path releases. Cumulative to the last success before the run, slot
+  18: 566 image pages + 252 cache pages = 818.
+
+| instant | cumulative demand | `free=` expected |
+| --- | --- | --- |
+| slot 19 refuses, `RpmhDxe` | 818 (nothing taken by the failed request) | **~6,443** |
+| end of the run, all 46 attempted | 1,562 image + 759 cache = 2,321 | **~4,940** |
+
+So `free=` at the first refusal should read in the **thousands** — near 6,400, less whatever else
+the started drivers hold in pools — and `big=` should be within a few hundred of it, because
+everything the run allocates is taken off one end of the region and the free area is what is left
+behind it. `big == free` exactly is not expected; `big` a small fraction of `free` is the shredded
+case. `c >= 1` whenever `free > 0`, since `c` counts the `EfiConventionalMemory` descriptors that
+survived the `EFI_MEMORY_SP` test (`Page.c:1207-1218`). And at the end of the run `P2 FREE
+largest=` should read **4096**: the predicted surviving run is about 4,940 pages, so the ladder's
+first rung succeeds. `1024` in that field is one grade down and still says room was never the
+problem; `16` or below would say the whole region is in pieces of 64 KiB or less.
+
+`a=1` is not a prediction, it is a consequence. `CoreInternalAllocatePages` takes `Alignment` from
+the memory type (`Page.c:1451`, `:1458`), and on this build `RUNTIME_PAGE_ALLOCATION_GRANULARITY` is
+0x1000 like the default, because `SiliciumPkg.dsc.inc:14` compiles with
+`__DEPRECATED_AARCH64_4K_RUNTIME_GRANULARITY` and `ProcessorBind.h:164-170` makes the runtime
+granularity 0x10000 only in the `#else` arm. So every request on the load path has a one-page
+alignment, and the rounding at `:1478-1479` is a no-op — which is also why `np=` is exactly the
+caller's page count.
+
+### `t=` is the field that names the allocation, because there are only four types on this path
+
+| `t` | type | what asks for it on this path |
+| --- | --- | --- |
+| 3 | `EfiBootServicesCode` | a boot-service driver's own image pages — `Image.c:731` passes `ImageCodeMemoryType`, and `:636-638` sets that from the PE subsystem |
+| 4 | `EfiBootServicesData` | `AllocatePool` — the FV file cache, and DxeCore's own bookkeeping |
+| 5 | `EfiRuntimeServicesCode` | a runtime driver's own image pages (`:640-642`) |
+| 6 | `EfiRuntimeServicesData` | `AllocateRuntimePool` — of which `CoreLoadPeImage` has exactly two, and neither can be a tens-of-pages request |
+
+That last row is the new one, and it is arithmetic rather than argument.
+`Image->ImageContext.FixupDataSize` is `DirectoryEntry->Size / sizeof (UINT16) * sizeof (UINT64)`
+(`BasePeCoff.c:1515`) — four bytes per two bytes of base relocation — and `AllocateRuntimePool`
+rounds through `Size = ALIGN_VARIABLE (Size) + POOL_OVERHEAD` to `EFI_SIZE_TO_PAGES`
+(`Pool.c:409-431`). Measured over the 46 promoted images: the largest `FixupData` is 16,384 bytes
+for a 4,096-byte relocation directory, which is **5 pages**; everything else is 1 page or is served
+from an existing pool page and never reaches the page allocator at all. Of the whole promoted set
+only two images have a 4,096-byte directory — `EnvDxe`, which starts, and `SdccDxe`, which does not.
+The other `AllocateRuntimePool` in `CoreLoadPeImage` is `sizeof (EFI_RUNTIME_IMAGE_ENTRY)` = 48
+bytes (`Image.c:837`, `Protocol/Runtime.h:39-61`: four 8-byte fields and a 16-byte `LIST_ENTRY`),
+which is filtered out of the census by the `NumberOfPages < 4` test at all times.
+
+So the census is decidable from the two fields together. If the failure is an image's own pages, `np`
+must be one of these, and `t` says which family:
+
+| slot | entry | `np` | `t` | | slot | entry | `np` | `t` |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 19 | `RpmhDxe` | 16 | 3 | | 33 | `SPMI` | 11 | 3 |
+| 20 | `PdcDxe` | 9 | 3 | | 34 | `ResetSystemRuntimeDxe` | 96 | 5 |
+| 21 | `ClockDxe` | 47 | 3 | | 35 | `PmicDxe` | 34 | 3 |
+| 23 | `ScmDxe` | 12 | 3 | | 36 | `WatchdogTimer` | 9 | 3 |
+| 24 | `DiskIoDxe` | 12 | 3 | | 37 | `SecurityStubDxe` | 14 | 3 |
+| 25 | `PartitionDxe` | 13 | 3 | | 38 | `EmbeddedMonotonicCounter` | 96 | 5 |
+| 26 | `EnglishDxe` | 9 | 3 | | 39 | `RealTimeClock` | 96 | 5 |
+| 27 | `SdccDxe` | 26 | 5 | | 40 | `PrintDxe` | 10 | 3 |
+| 28 | `UFSDxe` | 28 | 3 | | 41 | `DevicePathDxe` | 19 | 3 |
+| 29 | `Fat` | 18 | 3 | | 42 | `CapsuleRuntimeDxe` | 96 | 5 |
+| 30 | `TzDxe` | 15 | 3 | | 43 | `HiiDatabase` | 35 | 3 |
+| 31 | `VariableRuntimeDxe` | 112 | 5 | | 44 | `BdsDxe` | 97 | 3 |
+| 32 | `DALTLMM` | 9 | 3 | | 45 | `GpiDxe` | 22 | 3 |
+| | | | | | 46 | `I2C` | 10 | 3 |
+
+21 of the 27 are subsystem 11, so `t=3`; 6 are subsystem 12, so `t=5`. A `t=6` row means the
+`FixupData` pool, and it can then only be `np=5` — `SdccDxe`'s load, at slot 27, whose image pages
+were allocated and then freed at `Done:` (`Image.c:946-950`) on the way out. A `t=4` row means the
+failure was a pool chunk and not an image load at all.
+
+`n` counts every failed page search of any size, because the tally at `Page.c:1182-1183` runs before
+the size filter at `:1185`; the ladder's probes are excluded from it by the guard at `:1167-1170`,
+which returns before the tally. `bc`/`bd`/`rt`/`oth` are the same count split by type — and `rt`
+merges the two runtime types, so the tally alone cannot separate a runtime image's pages from a
+`FixupData` pool. That is what `t=` is for.
+
+### The load path, resolved to one live call
+
+`CoreLoadPeImage`'s allocation block (`Image.c:676-742`) is three `CoreAllocatePages` calls of which
+two are dead on this platform, and it is worth writing down which, because the first is the one that
+could have made every load a fixed-address request and therefore invisible to the whole census:
+
+* `:702` `if (PcdGet64 (PcdLoadModuleAtFixAddressEnable) != 0)` — 0. `MdeModulePkg.dec:1154` sets the
+  default and no platform DSC, INC or INF overrides it, which is also why `CoreLoadingFixedAddressHook`
+  (`Page.c:579-581`) never runs. **Dead.**
+* `:719-720` `if ((PcdGetBool (PcdImageLargeAddressLoad) && (Image->ImageContext.ImageAddress >=
+  0x100000)) || Image->ImageContext.RelocationsStripped)` — `PcdImageLargeAddressLoad` is TRUE
+  (`MdeModulePkg.dec:1379`, consumed at `DxeMain.inf:206`, never overridden) but the address is 0:
+  `ImageContext.ImageAddress` is `OptionalHeader.ImageBase` and nothing else (`BasePeCoff.c:624`,
+  `:629`), and `tools/pe-facts.py` measures `ImageBase 0x0` on all 80 `DRIVER` files with
+  `IMAGE_FILE_RELOCS_STRIPPED` clear on all of them. Both arms FALSE, so the `AllocateAddress` call
+  at `:722-727` is **skipped**.
+* `:730-735` `if (EFI_ERROR (Status) && !RelocationsStripped)` — `Status` is the
+  `EFI_OUT_OF_RESOURCES` preset at `:697`, so this is TRUE by construction and its `AllocateAnyPages`
+  at `:731` is **the one live allocation** for all 46 promoted loads, with
+  `ImageCodeMemoryType` as the type.
+
+This is also the only place on the load path that can return `EFI_OUT_OF_RESOURCES` while the page
+allocator never ran, and it cannot: `:740-742` returns the status of the allocation, and the preset
+at `:697` is always overwritten before that: `IMAGE_FILE_RELOCS_STRIPPED` is clear on all 80
+promoted images, so the second arm of `:730`'s test is always TRUE and the call at `:731` always
+runs. The preset is unreachable, and the live call's status is what the dispatcher sees.
+
+### The contradiction the census resolves
+
+`CoreLoadPeImage` has exactly two `EFI_OUT_OF_RESOURCES` (`Image.c:697`, `:795`) and one more in the
+runtime pool beside them:
+
+* `:697` — the preset above. Unreachable.
+* `:795` — `Image->ImageContext.FixupData = AllocateRuntimePool (...)`, reached only when the
+  attribute requests runtime registration *and* `ImageType == EFI_IMAGE_SUBSYSTEM_EFI_RUNTIME_DRIVER`
+  (`:791-793`). Real, multi-page, and **runtime-driver-only — so it can account for at most the 6
+  subsystem-12 failures and never the other 21.**
+* `:837-840` — the 48-byte `EFI_RUNTIME_IMAGE_ENTRY` pool, whose failure path is `if
+  (Image->RuntimeData == NULL) { goto Done; }` with `Status` left at the `EFI_SUCCESS`
+  `PeCoffLoaderRelocateImage` set at `:804` and checked at `:805`. **It returns `EFI_SUCCESS` from
+  `CoreLoadPeImage` with `RuntimeData` NULL.** So it cannot be the source of an `EFI_OUT_OF_RESOURCES`
+  from anywhere, and it is not a tens-of-pages request in any case: the largest `FixupData` in the
+  promoted set is 5 pages and this one is 48 bytes. The note at `Page.c:1250-1254` names "a 200-byte
+  AllocateRuntimePool" for exactly this role, and the only allocation that can be is this one — the
+  other candidate, the preset at `:697`, is not an allocation at all.
+
+And the pool path is closed too: every reachable `EFI_OUT_OF_RESOURCES` out of `CoreAllocatePool`
+comes from `CoreAllocatePoolPages` failing (`Pool.c:242`, `:247`), except the `Size > MAX_POOL_SIZE`
+gate at `Pool.c:231`, whose threshold is `MAX_ADDRESS - POOL_OVERHEAD`. So on this platform:
+
+**`EFI_OUT_OF_RESOURCES` out of an image load requires `FindFreePages` to have returned 0, which
+requires `P2FreeWhy` to have been called, which means `n >= 1`.**
+
+The other possible source, a `CoreConvertPages` failure after a successful search, has no way to
+fire either. `CoreConvertPagesEx`'s three failure returns are all `EFI_NOT_FOUND` (`Page.c:664`,
+`:686`, and the single-entry rule at `:672-676`), and the single-entry rule is the one that could
+have been live: it fires only when the range being converted is not covered by one memory-map
+descriptor, and the range the search returns is inside one by construction — `CoreFindFreePagesI`
+clips `DescEnd` to `Entry->End` and then takes `Target = DescEnd - (NumberOfBytes - 1)`
+(`Page.c:984-1040`), so `Start + bytes - 1 <= Entry->End` always. The memory lock is held across both
+(`:1561`), so the map cannot change in between.
+
+Put together: **`n = 0` and "27 × `EFI_OUT_OF_RESOURCES`" cannot both be true.** One of the two
+premises is wrong, and the premise that is weaker than it looks is the second one. "The 27 are all
+`EFI_OUT_OF_RESOURCES`" rests on a single status name read off a screen in an earlier session — the
+answer to "屏幕上 Out of source 指的是哪个?" was "是状态名 Out of Resources" — and on no census of the
+other 26. The alphabet at `Dispatcher.c:166-170` exists precisely because
+`EFI_OUT_OF_RESOURCES`, `EFI_NOT_FOUND` and `EFI_SECURITY_VIOLATION` have no mechanism in common.
+
+The good news is that the same panel decides it, on two rows that are already there. `P2 ERR %r x%d`
+(`:2375`) prints one line per *distinct* status with how many failures share it, so
+`Out of Resources x27` and `Device Error x4` + `Not Found x23` are different readings of one line.
+And `P2 DIAG %c %g %r` (`:2391-2398`) prints one line per failure with the driver's GUID beside the
+status in words, up to 64 records (`:78`, `:86`) — which is why the per-failure list moved into the
+repeated digest, and why "printed once, three of the twenty-seven were unreachable" (`:2496-2504`).
+
+### The tree the next reading walks
+
+Read `P2 ERR` first; it is one line and it settles the premise.
+
+1. **`P2 ERR` shows more than one status** → the 27 were never one problem. The memory-type-bin
+   change is aimed at the wrong thing, and `P2 DIAG`'s per-driver GOUs are the new work list.
+2. **`P2 ERR` shows one status and it is not `Out of Resources`** → the same, and cheaper: the
+   mechanism is named on the line.
+3. **`P2 ERR` shows `Out of Resources x27` and there is no `P2 FWHY` line (`n = 0`)** → the reading
+   above says this combination is impossible, so the fault is in the instrument: the census's tally
+   is being reset, or the row is being printed before the failures it counts. `P2 FWTY` alone, with
+   `n=0` and `bc/bd/rt/oth` all zero, is the evidence for that, and it is a host-side fault.
+4. **`P2 FWHY` present, with `t=6 np=5`** → `SdccDxe`'s `FixupData` pool, i.e. the one runtime
+   allocation on this path that cannot be served from the bin. Its image pages were allocated and
+   freed, so the same heap was large enough 26 pages earlier and this is a `RuntimeServicesData`
+   window question, not a size question.
+5. **`P2 FWHY` present with `t=3` or `5` and `np` equal to one of the rows in the table above** →
+   the failure is that image's own pages, and `big=` against `np=` decides whether the region was
+   too small or the search was wrong: `big < np` with `free` in the thousands is shredding, `big >=
+   np` is the map refusing a request it could satisfy.
+6. **`P2 FWHY` present with `np` that matches no image** → the failure is a pool chunk (`t=4`), which
+   means the heap was short for an allocation no driver's size explains.
+
+That is a decision procedure rather than a set of hypotheses, which is what 4.42 was aiming at, and
+it needs one photograph of the bottom of the panel.
+
+### Two comment defects, recorded and left in place
+
+The whole `P2BRINGUP` block is scheduled for deletion when DXE reaches BDS, which is the same step
+that has to happen for the 760 bytes of volume it costs, and a comment edit here would move the hash
+of the payload that identifies `p2-freewhy-g` — staged, gated and waiting to be flashed. So the two
+defects are recorded in the table above and not fixed, under 4.42's rule: a source edit invalidates
+the hash of an artifact that was measured, and re-measuring is only worth what it costs when the
+artifact is the one about to be flashed.
+
+### The bin question, now bounded
+
+While reading `t=6` back to its source, one thing about the pending memory-type-bin change became
+checkable, and it is worth writing down before the change is designed rather than after.
+`BuildMemoryTypeInformationHob` — the one this platform links, `EmbeddedPkg`'s, at
+`PrePiHobLib/Hob.c:887-908`, because `SiliciumPkg.dsc.inc:345` binds `HobLib` to
+`PrePiHobLib.inf` for `SEC` — builds a five-entry HOB and reads five PCDs: `ACPIReclaimMemory`,
+`ACPIMemoryNVS`, `EfiReservedMemoryType`, `RuntimeServicesData`, `RuntimeServicesCode`. The DSC sets
+nine of them (`SiliciumPkg.dsc.inc:45-53`), and the four it sets that nothing on this path reads are
+`PcdMemoryTypeEfiBootServicesCode|1000` (`:50`), `PcdMemoryTypeEfiBootServicesData|800` (`:51`),
+`PcdMemoryTypeEfiLoaderCode|10` (`:52`) and `PcdMemoryTypeEfiLoaderData|0` (`:53`).
+That is the whole of why the bins are 450 pages and not 2,250, and it is a measurement now rather
+than an inference: a grep over the tree finds those four PCDs in the DSC, in `EmbeddedPkg.dec`'s
+declaration and in `EmbeddedPkg.dsc`, and in no `.c` file at all. The one PCD in the group that *is*
+read elsewhere, `PcdMemoryTypeEfiACPIReclaimMemory`, is read by
+`ArmPlatformPkg/MemoryInitPei/MemoryInitPeim.c:43` — the PEI path, which this platform does not
+link for its DXE bins (it sets that PCD to 0, so the entry is a no-op either way).
+
+What the change should be is not this step's to decide. It alters firmware behaviour on a run whose
+screen has not been read, and the ordering rule is unchanged: **先读屏，再刷下一次**.
+
+### The reading is still owed, and this step is what makes it decisive
+
+```
+tools/probe-fingerprint.py --read        # in TWRP: must report p2-variants
+tools/panel-text.py --decode PHOTO.jpg   # boot it, photograph the bottom of the panel
+python3 tools/probe-fingerprint.py --expect P2FreeWhy \
+    work/out/p2-freewhy-g/Mu-gauguin-silicon-gzip.img   # passes; do this before flashing
+```
+
+Nothing here was flashed and nothing in the firmware changed. What changed is that the census now
+has a predicted number in every field, that `t=` beside `np=` names the allocation that failed
+rather than merely describing a request, and that the row can no longer be read as "the page
+allocator ran out" without also being read as "the 27 failures were not all the same status" — the
+two readings cannot both be right, and one photograph of the bottom of the panel says which.
