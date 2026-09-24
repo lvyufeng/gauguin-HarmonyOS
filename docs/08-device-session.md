@@ -1256,6 +1256,30 @@ move step is what any future reordering experiment needs, and the tool that read
 the order back *out of the image* rather than out of the file is the only thing
 that makes such an experiment readable at all. They are simply not the next move.
 
+> **Correction, added 2026-09-24 (step 4.20): the retirement reason above is
+> unsound as written, for two independent reasons.**
+>
+> The stated reason is that "the batch stops producing promotable entries at a
+> *physical file* boundary". Step 4.17 retracted that reading: the SEQ's letters,
+> not its length, refute both physical stops, decisively at slot 21. So the
+> sentence carries no argument any more.
+>
+> And its conclusion — that the variant "would therefore have reproduced the same
+> 46-character string" — is the opposite of what steps 4.18 and 4.20 imply. Both
+> narrow the 27 to heap state at the instant each request arrives, and 4.20 closes
+> the only mechanism that could have made the boundary order-independent by
+> injecting memory. Under that model the allocation sequence *is* what decides who
+> fails, so reordering the Apriori array is exactly the experiment that would move
+> the boundary: a different set of drivers failing at the same *count* is evidence
+> for "a fixed quantity of heap, whoever arrives first", and a different count is a
+> counterexample to it.
+>
+> The variant stays unflashed and is still not the next move — `P2 ERR` is one
+> flash away and answers more per flash. But it is a live candidate again, not a
+> closed one, and `work/out/retracted/Mu-gauguin-arch-first-gzip.img` (sha256
+> `9a7e8ab8235f8f24f70e1012df7b840645043dc34d256dc156e093d3d2c35ce3`) is a built,
+> never-flashed image with a known-good payload.
+
 The phone was off USB for every build in steps 4.9 and 4.10, and neither step was
 run on the device — which is also why the baseline had to be re-flashed in 4.11
 rather than being re-read.
@@ -3361,6 +3385,154 @@ Six lines now, and the first three are the ones this step exists for:
    `P2 DIAG`'s 27 records; `P2 APRI`'s `bytes=`/`entries=`/`sum=` against
    `P2 STATS apriori=46/70` or `46/47`; `P2 WHY`, still never read; the five
    `P2 WALK` lines; and the 46-character `P2 SEQ`.
+
+## Step 4.20 — The one mechanism that could grow the heap mid-run cannot fire here
+
+Step 4.18 ruled out a running-total boundary and a request-size boundary and
+narrowed the 27 to heap state at the instant each request arrives. That left one
+shape of explanation standing beside it: a mechanism that *hands the allocator
+memory* partway through the run. Such a thing produces exactly the observed
+pattern — fail, fail, then succeed at a request the same size as one that just
+failed, then fail again — and it would be invisible to every cumulative
+calculation, which is why 4.18 could not exclude it by arithmetic.
+
+There is exactly one such mechanism in DxeCore, and this step reads it, finds
+its gate, and evaluates that gate against this device's own memory map. **It
+cannot fire on this board.** The 27 are therefore heap state at request time,
+and no region can be injected under them.
+
+### The function, and the two places it is called
+
+`PromoteMemoryResource` is at `Mu_Basecore/.../Dxe/Mem/Page.c:382`. It walks the
+GCD memory-space map and, for every entry that qualifies, flips a whole region
+into the conventional pool at once:
+
+```c
+if ((Entry->GcdMemoryType == EfiGcdMemoryTypeReserved) &&
+    (Entry->EndAddress < MAX_ALLOC_ADDRESS) &&
+    ((Entry->Capabilities & (EFI_MEMORY_PRESENT | EFI_MEMORY_INITIALIZED | EFI_MEMORY_TESTED)) ==
+     (EFI_MEMORY_PRESENT | EFI_MEMORY_INITIALIZED)))
+{
+  ...
+  CoreAddRange (EfiConventionalMemory, Entry->BaseAddress, Entry->EndAddress,
+                Entry->Capabilities & ~(EFI_MEMORY_PRESENT | EFI_MEMORY_INITIALIZED |
+                                        EFI_MEMORY_TESTED | EFI_MEMORY_RUNTIME));
+  Promoted = TRUE;
+}
+```
+
+Note the shape of the condition: it wants a region that is **present and
+initialized but not tested**. A region nobody has tested is the one thing it is
+willing to hand out, which is the opposite of what a platform's own "reserved"
+list usually means.
+
+It has two call sites and no others in the tree:
+
+- `Page.c:1129`, the last rung of `FindFreePages`. The ladder is: preferred bin →
+  default bin → anywhere. Then, verbatim, `if (!PromoteMemoryResource ()) { return 0; }`
+  and `return FindFreePages (...)` if it promoted anything. **So a failure on this
+  rung returns 0 — that is, `EFI_OUT_OF_RESOURCES` — not because the heap is empty
+  but because the ladder ran out of rungs.**
+- `Page.c:1333`, the `CoreConvertPages` failure path inside
+  `CoreInternalAllocatePages`, which re-attempts the conversion after a promotion.
+
+### The gate is not written in the platform's own words
+
+This is why the question needed evaluating rather than reading off. The device's
+descriptors are written in one vocabulary and the gate tests bits from another,
+and two lookup tables sit between them.
+
+`MemoryMapLib.c` describes regions as `Reserv`, `Conv`, `RtData` — but those are
+the `MemoryType` column, which is what the *EFI memory map* will call the region.
+The gate first asks a different question: what is the region's **GcdMemoryType**,
+and what capabilities does it carry. Both are decided in `Gcd.c`'s
+`CoreInitializeGcdServices` HOB walk (`Gcd.c:2646-2731`):
+
+- **Type** comes from `ResourceType`, at `Gcd.c:2653-2699`. Only
+  `EFI_RESOURCE_MEMORY_RESERVED` and `EFI_RESOURCE_MEMORY_MAPPED_IO_PORT` map
+  straight to `EfiGcdMemoryTypeReserved`. A `SYSTEM_MEMORY` descriptor's type is
+  decided by `(ResourceAttribute & MEMORY_ATTRIBUTE_MASK)` compared against three
+  masks — **three separate `if`s, not a switch, so the last one that matches
+  wins**. And `MEMORY_ATTRIBUTE_MASK` (`Gcd.c:19-31`) is much wider than the three
+  lifecycle bits: it also carries `READ_PROTECTED`, `WRITE_PROTECTED`,
+  `EXECUTION_PROTECTED`, `READ_ONLY_PROTECTED`, the 16/32/64-bit IO bits,
+  `PERSISTENT` and `SPECIAL_PURPOSE`. A system-memory descriptor that also sets
+  any of those matches none of the three masks and ends up `NonExistent` — no GCD
+  entry at all.
+- **Capabilities** come from `mAttributeConversionTable` (`Gcd.c:81-99`) through
+  `CoreConvertResourceDescriptorHobAttributesToCapabilities` (`Gcd.c:2145`). The
+  three bits the gate reads are in that table, and each is marked `Memory = FALSE`.
+  The predicate at `Gcd.c:2157` is
+  `if (Conversion->Memory || ((GcdMemoryType != SystemMemory) && (GcdMemoryType != MoreReliable)))`,
+  so those three are converted **only for a GCD type that is not system memory**.
+  That is why a `Reserved` region can carry `PRESENT|INITIALIZED|TESTED` and a
+  `SystemMemory` one cannot — and it is also why the same three bits appear in the
+  gate at `Misc/MemoryProtection.c:1062`, whose guard-page pass uses this predicate
+  verbatim.
+
+One more thing the descriptors do not say: `AddHob` in `MemoryInitPei.c:92` only
+calls `BuildResourceDescriptorHob` for `AddMem`, `AddDev` and
+`HobOnlyNoCacheSetting`. A `NoHob` region never becomes a HOB, so it never reaches
+the GCD map at all.
+
+### The four regions that land as Reserved, and each one's disqualification
+
+`tools/promote-check.py` evaluates all of it — it parses the generated map, resolves
+the `#define`s out of `MemoryMapLib.h`, `PiHob.h`, `UefiSpec.h` and `DxeMain.h`,
+parses `mAttributeConversionTable` out of `Gcd.c`, applies the type rules in the
+same order the `if`s are written, and prints the verdict per region. Of 74
+descriptors, 72 get a resource HOB and **four** land in the GCD map as `Reserved`:
+
+| region | length | attribute as written | capabilities | why it fails the gate |
+|---|---|---|---|---|
+| `AOP CMD DB` | 128 KiB | `UNCACHEABLE` | none of the three | `PRESENT` and `INITIALIZED` are not set |
+| `SMEM` | 2 MiB | `UNCACHEABLE` | none of the three | same |
+| `PIL Reserved` | 352 MiB | `UNCACHEABLE` | none of the three | same |
+| `Display Reserved` | 36 MiB | `SYS_MEM_CAP` | `P/I/T` | `TESTED` is set, and the gate needs it clear |
+
+Everything else is `SystemMemory` or `MemoryMappedIo`, and the gate requires
+`Reserved`. Two near-misses are worth naming, because a reader working from the
+`MemoryType` column would pick them:
+
+- **`ABOOT FV`**, 2 MiB, is `ResourceType SYS_MEM` — its `Reserv` is the *memory
+  type*, not the resource type — so it becomes `EfiGcdMemoryTypeSystemMemory` and
+  fails on the type test rather than the bit test. An inspection by eye that took
+  the `Reserv` column for the resource type would have listed it as the leading
+  candidate. This is the slip the instrument exists to prevent; here it does not
+  change the verdict, but it would have changed which regions a hand-written
+  candidate set named.
+- **`Kernel`**, 128 MiB, is the same shape as `ABOOT FV` and the same outcome.
+
+`SYS_MEM_CAP` itself is the reason the `SYS_MEM` regions cannot qualify even by
+accident: `SYSTEM_MEMORY_RESOURCE_ATTR_CAPABILITIES` in `MemoryMapLib.h` contains
+`TESTED`, so every descriptor that uses it carries the one bit the gate excludes.
+
+### What this closes, and what it does not
+
+Both call sites are now no-ops on this board, so:
+
+- the third rung of `FindFreePages` returns 0 on its own terms, and the recursive
+  retry below it never runs;
+- the promotion retry on `CoreConvertPages`' failure path never runs.
+
+And the heap cannot grow at all during dispatch. Every other route into
+`EfiConventionalMemory` is either DXE-init time — `CoreAddMemoryDescriptor` from
+the same HOB walk, from `CoreSetMemoryTypeInformationRange`'s bins, and from
+`CoreInitializeMemoryServices` — or a page coming back (`CoreFreePages`,
+`Page.c:1500`; `CoreFreePoolPages`, `Page.c:2287`). That is what makes step 4.18's
+phrase "heap state at request time" a closed statement rather than a placeholder.
+
+What it does **not** do is answer the question. It removes a competing
+explanation; it does not produce the reason. **`P2 ERR` is still first**, and
+`P2 BIN` / `P2 RETRY` / `P2 FREE largest=` are still the instruments that measure
+the state this step has now proved the failures must be in.
+
+| | |
+|---|---|
+| instrument | `tools/promote-check.py` — reads the map the build used, and compares it against the committed one so the analysis is of the image and not of a stale copy |
+| verdict | no descriptor satisfies the gate; `PromoteMemoryResource` returns `FALSE` from both call sites |
+| closes | the "a region is injected mid-run" family, which was the last alternative to heap state in step 4.18 |
+| does not close | the 27. `P2 ERR` remains the only route to the reason |
 
 ## Step 5 — Leave it bootable
 
