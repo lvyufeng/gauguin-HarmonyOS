@@ -4700,6 +4700,87 @@ compare the demand against a number DxeCore never has.
 | instrument | `tools/heap-compare.py` (this config vs the siblings, plus the holes); `tools/pe-facts.py` (declared extent vs post-PrePi extent) |
 
 
+## Step 4.29 — The panel is 90 columns by 100 rows, and the last text row on it is `P2 RETRY`
+
+Step 4.24 established that `P2 RETRY` reads last — `P2Bins` takes its readings
+first and prints its line after the four `P2 BIN` lines — and that is why `bs9=`
+is the field the whole P2 question turns on. What was never established is where
+on the panel that line lands, and four sessions have now failed to read `bs9=` off
+the phone. The answer is that it is the **last text row on the screen**, and the
+reason it has been missed is that "the last line of the digest" is easy to hear as
+"the bottom of a full screen" when the screen is in fact part-filled with blank
+rows beneath the cursor.
+
+**The geometry, from four sources rather than from a photograph of text.**
+`gauguin.dsc:71-73` sets `PcdFrameBufferWidth|1080`, `Height|2400`, `ColorDepth|32`;
+`Font.h:34-35` sets `FONT_WIDTH 5` and `FONT_HEIGHT 16`; `GetFontScale`
+(`FrameBufferSerialPortLib.c:125-133`) is `(ShorterDimension < 426) ? 1 :
+ShorterDimension / 426`; and `GetFbPositions` (`:135-154`) divides:
+
+```c
+LocalMaxPosition.XPos = FB_WIDTH  / ((FONT_WIDTH  + 1) * FontScale);   // 1080 / 12 = 90
+LocalMaxPosition.YPos = FB_HEIGHT / ((FONT_HEIGHT - 4) * FontScale);   // 2400 / 24 = 100
+```
+
+So **90 columns by 100 rows**, each glyph 12×24 px. The digest's own comment
+already assumed these figures — "at most 65 columns against the ninety", "the
+hundred or so the panel holds" — so this is the arithmetic behind a number that
+was being estimated, not a correction of it.
+
+**Two behaviours, both of which the row count depends on.**
+
+- *It wraps.* `WriteFrameBuffer:213-217`: `CurrentPosition->XPos++` then `if
+  (CurrentPosition->XPos >= MaxPosition.XPos) AdvanceNewLine (…)`, which sets
+  `XPos = 0` and adds a row. A line wider than 90 columns is therefore not
+  truncated and not lost — it costs a second row, and its tail is on that row.
+- *It wipes rather than scrolls.* `AdvanceNewLine:115-122`: on `YPos >=
+  MaxPosition.YPos` it calls `ZeroMem` on the entire framebuffer and restarts at
+  (0, 0). There is no scrollback, so the panel holds the **last 99 rows of
+  output, never the first** — which is what the 41 repetitions of the digest are
+  for, and why the once-printed `P2 NOLOAD` block is only visible during the
+  first two windows and gone afterwards.
+
+**One copy of the digest costs about 45 rows, so this run is nowhere near the
+ceiling.** Fixed lines 15 rows (the one wrapper among them is `P2 APRI first=%g
+last=%g` at 92 columns), plus `diag=27`, `err=1`, `walk=2`. Two copies fit in 99
+rows. The design's own worst case is not this run's: with the full `diag=64` and a
+distinct status per failure the digest is **115 rows against the 99-row panel**,
+and then the head of a copy is wiped while its tail is printing. That ceiling is
+worth knowing and is not a fault in this reading.
+
+**And the RETRY line is the last populated row in every state — that is the
+finding.** `P2Bins` prints it last, its `P2Hold` pause (2e9 volatile
+read-modify-writes, seconds each, 40 of them) follows immediately, so printing
+stops on that line and does not resume for seconds. The wipe does not move it
+either: a wipe lands *inside* a copy, and the remainder of that same copy prints
+from the top of the cleared panel and ends on the same line. So the row to
+photograph is not the bottom of the screen — it is the last row that has any text
+on it, and the rows beneath it are blank.
+
+Whether that row is the whole line or its tail depends on the run: the format is
+44 columns of fixed text plus six status names with 46 columns to share, i.e.
+**86 to 152 columns**, so one row only if the six names fit in 46 — which for a
+run with `Out of Resources` in it they do not. When it wraps the break falls in
+the middle of a field, and `bs9=` and `bs16=` — the two fields the retry exists to
+report — are on the row *below*, which is the last populated one. Either way `bs9=`
+is on the last text row, and there is nowhere else on the screen it can be.
+
+**Instrument:** `tools/console-budget.py`, which reads the panel PCDs, the font,
+the scale rule and both console behaviours out of their sources, takes the digest's
+DEBUG formats out of `P2Retry`/`P2Bins`/`P2Digest` by parsing the C, groups the
+if/else variants of one line (keyed on the set of named fields, so `matched=none`
+and `matched=%d..%d` count once and `APRI bytes=` and `APRI first=` do not), and
+reports columns, rows per copy, and where the RETRY line sits.
+
+| | |
+|---|---|
+| finds | the panel is **90 columns × 100 rows** (1080/12, 2400/24); the console **wraps** (`WriteFrameBuffer:213-217`) and **wipes** rather than scrolls (`AdvanceNewLine:115-122`), so the panel holds the last 99 rows, never the first |
+| reading | **the last row of the panel that has text on it is `P2 RETRY`**, and `bs9=` is on it — as the whole line if the six statuses fit in 46 columns, otherwise as the wrapped tail on the row below |
+| budget | one digest copy ≈ 45 rows (15 fixed + diag 27 + err 1 + walk 2); two copies fit the 99; the storage caps would make it 115 and overflow — a ceiling, not this run |
+| why `bs9=` was missed | it is not at the bottom of a filled screen: after a wipe the panel refills from the top, so the rows below the cursor are blank and the cursor's row is the reading |
+| instrument | `tools/console-budget.py` |
+
+
 ## Step 5 — Leave it bootable
 
 Whatever the outcome, end the session with the stock image back on `boot`:
