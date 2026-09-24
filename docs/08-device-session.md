@@ -5735,3 +5735,138 @@ those into a name. `tools/probe-fingerprint.py --expect P2Key IMG` is the
 pre-flight for the other direction: it is the check that the payload being
 written is one whose screen can be read at all, and it is the check that a size
 comparison passes while being blind to.
+
+---
+
+## Step 4.36 — The ring is rebuilt every boot, so `logfs` cannot carry a dead payload's words
+
+`tools/read-logfs.py` arrived in step 4.6 and its five slots have been read more
+than once, but always for their *stages* — the table of
+`Start EBS`, `Shutting Down UEFI Boot Services` and so on that tells a reader how
+far a boot got. This step read them for a different question: **are they five
+different boots, or one log repeated?** The answer decides whether physical
+memory is worth mining for the payload's output, so it had to be settled before
+any of that work was worth doing.
+
+### The five slots are five consecutive bootloader runs, and the difference between them is nothing
+
+Measured on `work/bllog-20260924-logfs/txt/`, slot 0 being the newest:
+
+```
+UEFILOG0.TXT  13,232 bytes   286 lines   Shutting Down UEFI Boot Services: 4391 ms   Start EBS [ 4391]
+UEFILOG1.TXT  13,289 bytes   288 lines   Shutting Down UEFI Boot Services: 4130 ms   Start EBS [ 4131]
+UEFILOG2.TXT  13,291 bytes   288 lines   Shutting Down UEFI Boot Services: 4126 ms   Start EBS [ 4126]
+UEFILOG3.TXT  13,291 bytes   288 lines   Shutting Down UEFI Boot Services: 4134 ms   Start EBS [ 4134]
+UEFILOG4.TXT  13,289 bytes   288 lines   Shutting Down UEFI Boot Services: 4145 ms   Start EBS [ 4145]
+```
+
+Each file is a fresh ring, beginning with the three-line legend and then SBL's own
+statistics — the file on the phone and not a rendering of a persisted buffer:
+
+```
+Format: Log Type - Time(microsec) - Message - Optional Info
+S - QC_IMAGE_VERSION_STRING=BOOT.XF.3.3-00285-BITRALAZ-4
+S - IMAGE_VARIANT_STRING=BitraPkgLAA
+S - OEM_IMAGE_VERSION_STRING=c4-miui-ota-bd105.bj
+S - Serial Number @ 0x00786134 = 0xd695efb1
+S - Core 0 Frequency, 1459 MHz
+S -     82913 - PBL, End
+S - DDR Frequency, 1555 MHz
+```
+
+and each ends at the handoff. Diffing slot 0 against slot 1 with every digit
+masked gives **53 differing lines, essentially all of them the whitespace of the
+time column** — `D -         N - boot_flash_init` against `D -        N -
+boot_flash_init`. So the five files are one bootloader run written five times, not
+five different events.
+
+Two readings come out of that, and the second is the one that matters:
+
+  * **The ring is per-boot and the renderer emits only its own boot's entries.**
+    There is no preserved tail from the boot before, which is what a persisted
+    ring would show at the top of every file after the first. Whatever the
+    `-*-LOG_OVERLAP-*-BOOT=` string in `ULogDxe.efi` is for, it is not firing:
+    `grep -ac LOG_OVERLAP UEFILOG*.TXT` is 0 in all five.
+  * **The payload's death is invisible in `logfs`.** Five boots, and every one of
+    them reached `Start EBS`, spread over 265 ms (4126 to 4391 ms of bootloader
+    time). ABL stops logging at the handoff and the reset that follows is not
+    written by anything, because the only thing running when it happens is the
+    payload that cannot write. So even if every slot were readable perfectly,
+    the bootloader's own account of a failed run is one line that says the
+    handoff happened.
+
+### A `grep` that answered "nothing" for the wrong reason
+
+The first pass over these files reported no hits at all — no `LOG_OVERLAP`, no
+`boot`, no `reset`, no `watchdog` — and that looked like a clean negative result.
+It was not. Each file carries 800 NUL bytes, so `grep` classifies them as binary:
+`file` says `data`, and a plain `grep -l`/`grep -c` against them produced silence
+rather than a count, which is not the same thing as zero matches. Adding `-a`
+made the `S - ` lines appear immediately.
+
+This is the third instance in this phase of a tool reporting absence for a reason
+that has nothing to do with the thing being absent, and it is the same mistake
+each time: the 80-byte toybox `dd` statistics shift, the hand-typed fingerprint
+marker that read `err=%a` where the source says `err=%r at=%d`, and now a text
+search over a file the search decided was not text. **Everything read out of
+`logfs` needs `-a`**, and the negative result above was re-taken with it.
+
+### Two things the platform map got corroborated against
+
+Neither of these was the object of the step, and both are cheap enough to record.
+
+  * **`MaxMemoryRegions = 74` is the row count of its own table.** The
+    `[Config]` key was previously noted as having no consumer anywhere in this
+    repo, which is true of a grep for the *string*; the `[MemoryMap]` table in
+    the same file has exactly 74 rows, as `tools/read-dram.py`'s parser now reads
+    it. So the number is XBL's count of the rows in this file, not a Mu-Silicium
+    parameter, and the earlier note was about the wrong question.
+  * **The device tree keeps Linux out of the framebuffer.** `reserved-memory` has
+    `memory@a0000000 { reg = <0x00 0xa0000000 0x00 0x2300000>; }` and
+    `memory@a2300000 { reg = <0x00 0xa2300000 0x00 0x100000>; }`, which together
+    are `0xa0000000..0xa2400000` — **exactly** the map's
+    `Display Reserved 0xA0000000 + 0x02400000` row, to the byte. Two independent
+    descriptions of the same region agreeing is worth something. It is not worth
+    much, though, and the caveat has to travel with it: the DT's outer
+    `memory@80000000` node ships with size 0 and is patched by XBL at runtime, so
+    the DT readable here is not the DT the kernel is given.
+
+### What this kills, and what it leaves
+
+**It kills the idea that the payload's output can be mined out of DRAM from
+TWRP.** The reasoning is now two-legged rather than one: the ring is rebuilt on
+every boot, so a payload's writing into it would be superseded before anyone
+could read it; and `0x9FFF7000` has no `reserved-memory` node covering it, so the
+Linux kernel behind TWRP owns that page and has been running for minutes by the
+time `adb` answers. Either leg alone would be enough. **The panel therefore
+remains the only channel for the run that just failed**, and the pending reading is
+unchanged by everything in this step.
+
+What it leaves is `tools/read-dram.py`, and one honest use rather than four
+speculative ones: `--probe` answers a question this project has never once asked,
+which is whether physical memory is readable on this phone at all. `/dev/mem`
+requires `CONFIG_DEVMEM` and not `CONFIG_STRICT_DEVMEM`, and TWRP's kernel is not
+this project's to choose. Until it is tried, every instrument that would sit on
+top of a memory reader is built on an assumption. The other three subcommands
+(`--iomem`, `--ulog`, `--fb`) are here because they cost a line each and because
+each is a second, independent statement about a map this project has been reading
+as ground truth for several sessions.
+
+The tool is read-only, and it inherits the two rules this phase has already paid
+for — `status=none` **with** a per-chunk truncation, because TWRP's toybox 0.8.4
+writes `dd`'s statistics to stdout where `adb exec-out` collects them; and an
+on-device `sha256sum` as a second opinion that is not the host, because every
+other check compares two copies one program made. It adds a third: `bs=4096` with
+`skip=addr/4096` and never a large block with a proportional skip, because a skip
+that is not a whole number of blocks silently reads from somewhere else and a
+memory reader that is 4 KiB out returns plausible bytes.
+
+It was exercised against a synthetic 64 KiB "memory" carrying two markers, with a
+fake `dd` that appends toybox's statistics tail exactly as the real one does. Four
+assertions pass: the truncation (the reconstruction is byte-exact), the two hits
+reported at `0x2000` and `0x9000` with their surrounding text, an absent marker
+exiting 1 with a reading rather than a crash, and a dead link stopping at 0 bytes
+instead of silently zero-filling the rest.
+
+What it does **not** answer is whether `/dev/mem` is readable on this TWRP at all.
+That is one `--probe` away and it needs the phone.
