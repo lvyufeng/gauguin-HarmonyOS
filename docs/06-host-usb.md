@@ -212,6 +212,85 @@ nothing on any port for as long as the loop keeps resetting it. Nothing in the h
 side of this document explains a total absence; a flapping link explains a device
 that arrives and leaves, not one that never arrives.
 
+## `usb 3-1` is the dock, and the chipset controller has had six kernel events in three days
+
+The two paragraphs above say the phone has only ever been seen on `usb 3-1` and
+that `usb 3-1` is not a chipset port. They do not say *whose* port it is, and that
+gap has a cost: the standing instruction in this project is "plug into a chipset
+USB-A port", and on a desk with a dock on it, "the USB-A port" reads as the one on
+the dock. So the chain was resolved rather than assumed.
+
+```
+/sys/bus/usb/devices/usb3
+  -> ../../../devices/pci0000:00/0000:00:1c.4/0000:02:00.0/0000:03:02.0/0000:6c:00.0/usb3
+```
+
+| | device | driver |
+|---|---|---|
+| `0000:00:1c.4` | Intel Cannon Point-LP PCI Express Root Port #5  (`8086:9dbc`) | `pcieport` |
+| `0000:02:00.0` | Intel JHL6340 Thunderbolt 3 Bridge, Alpine Ridge 2C 2016  (`8086:15da`) | `pcieport` |
+| `0000:03:02.0` | the same bridge's downstream port  (`8086:15da`) | `pcieport` |
+| `0000:6c:00.0` | Intel JHL6340 Thunderbolt 3 USB 3.1 Controller  (`8086:15db`) | `xhci_hcd` |
+
+**`usb 3-1` is the USB port on the Thunderbolt dock.** Every one of the 32
+enumerations in this project's history is on the dock's controller — the same
+silicon the `## Cause` section at the top of this document identifies as the
+fault, still powered on and still cycling.
+
+**The failure is not a link blip; it is the bus ceasing to exist.** Each
+`Link Down` on `00:1c.4` runs the whole teardown, so a device attached to the dock
+is not "dropped from an idle link" — its controller is removed and re-probed. In
+the current boot's kernel log (2,038,841 lines, sudo needed to read it):
+
+| event | count |
+|---|---|
+| `0000:00:1c.4: pciehp: Slot(8): Link Down` | 16,035 |
+| `0000:00:1c.4: pciehp: Slot(8): Link Up` | 16,035 |
+| `xhci_hcd 0000:6c:00.0: USB bus 3 deregistered` | **16,037** |
+| `xhci_hcd 0000:6c:00.0: USB bus 4 deregistered` | **16,037** |
+| `xhci_hcd 0000:6c:00.0: xHCI Host Controller` (new) | 32,076 |
+| `xhci_hcd 0000:6c:00.0: remove, state` | 32,074 |
+| `xhci_hcd 0000:6c:00.0:` — every line | **160,424** |
+| `xhci_hcd 0000:00:14.0:` — every line | **6** |
+
+The chipset controller's six lines are all from `Sep 22 13:41:36`: two
+`xHCI Host Controller`, two `new USB bus registered` (buses 1 and 2), one
+`hcc params`, and `Host supports USB 3.1 Enhanced SuperSpeed`. **It has not been
+touched since** — no reset, no removal, in two and a half days — and the mouse
+plugged into it (`1-1`, `12d1:10d8`) has been up for the whole of it. The dock
+controller's 160,424 lines are the same interval.
+
+A live watch made the shape of it visible directly, 2026-09-25 02:35:10 to
+02:36:53 — **103 seconds, 16 deregistrations of each bus**, i.e. one every 6.4 s,
+which is exactly the `Link Down` rate the section above measured over 26 hours:
+
+```
+02:35:16  DISCONNECTED
+02:35:16  CONTROLLER  xhci_hcd 0000:6c:00.0: USB bus 4 deregistered
+02:35:16  DISCONNECTED
+02:35:16  CONTROLLER  xhci_hcd 0000:6c:00.0: USB bus 3 deregistered
+02:35:18  ROOT HUB BACK  1d6b:0002   <- the host's own hub, not a device
+02:35:18  ROOT HUB BACK  1d6b:0003
+```
+
+A device on `usb 3-1` therefore has a **6.4-second window in which to enumerate,
+and then its bus is destroyed and rebuilt underneath it**. That is the mechanism
+behind the `## Symptom` at the top — "works for a few seconds to a minute, then
+vanishes" — stated as an interval rather than as a tendency, and it is why
+`fastboot boot` can succeed once and then fail on the stock image.
+
+**So the port to use has a name.** `0000:00:14.0`, the Cannon Point-LP chipset
+xHCI: bus 1 (USB 2.0, 12 ports) and bus 2 (USB 3.1, 6 ports), 18 ports of which
+one is the mouse. Never `3-x` or `4-x`, which are the dock's, no matter which
+physical socket on the dock the cable goes into.
+
+That also re-reads one thing the user reported. "我换了usb-A，但是没有反应" —
+switched to the USB-A, no response — is not evidence about a chipset port: the
+log has no enumeration from `usb 1-x` or `usb 2-x` at any point in its history, so
+if the cable was moved to a USB-A socket it was still on the dock's controller.
+Both readings are the same reading, and neither of them is about the laptop's own
+ports.
+
 ## The same reading has a second, non-hardware cause
 
 `Not-connected Link:RxDetect` on every port means nothing is pulling up D+. There are
@@ -302,6 +381,14 @@ Added as `/etc/udev/rules.d/51-android.rules` (13 vendor IDs, `MODE="0666"`).
    `tools/watch-usb.sh` first — it reads the port registers and counts the PCIe
    link-downs, so it says whether anything is electrically present *and* whether
    the port it is present on can hold a link, before any cable gets swapped.
+   **Be exact about which socket that is**: the chipset controller is
+   `0000:00:14.0` and its ports are `usb 1-x` and `usb 2-x`; `usb 3-x` and
+   `usb 4-x` belong to the dock's JHL6340 and flapping, and a "USB-A port" on the
+   dock is still `3-x`. One check settles it before flashing:
+
+   ```sh
+   lsusb -t | grep -A2 'Bus 001\|Bus 002'   # bus 1/2 = chipset; 3/4 = dock
+   ```
 2. Check the controller did not re-enter suspend:
    `cat /sys/bus/pci/devices/0000:6c:00.0/power/runtime_status`
 3. Re-scan the bus without unplugging: `echo 1 | sudo tee /sys/bus/pci/rescan`
