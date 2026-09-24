@@ -67,6 +67,17 @@ is what the phase turns on: it names the first position that failed, which is wh
 `KEY`'s `at=` should say, and it counts the failure classes, which is what `KEY`'s
 `err=` gives in words for the first one only.
 
+**`--sizes` is a convenience, and `tools/pe-facts.py` is the tool for that
+question.** The boundary question - does any size separate the loads from the
+refusals - was answered there first, field by field over 80 drivers, and its
+verdict is *"no field separates the 19 s from the 27 L by a single value or a
+threshold"*; it also reports the cumulative demand in the pages the allocator
+actually hands out, which this tool does not. What is here is the same walk and
+the same column (`SizeOfImage`, the field `CoreLoadPeImage` acts on) plus the one
+number `pe-facts.py` leaves qualitative: how wrong the best candidate cut is. If
+the question is *why* a particular driver was refused rather than *whether* size
+explains the run, neither tool is the one - `P2 WHY` is.
+
 Usage:
     tools/apriori-index.py IMG                                   # the whole table
     tools/apriori-index.py IMG --at 21                           # one position

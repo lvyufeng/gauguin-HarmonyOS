@@ -5966,6 +5966,43 @@ the characters already recorded:
 
 ### The cause is not room, and the host can say so without the panel
 
+> **Read this subsection as a re-derivation, not a discovery.** Everything in it
+> except the threshold count was already established earlier in this same document,
+> and is only being re-measured here through a second walk. The
+> `PdcDxe`/`ShmBridgeDxe` pairing first appears in step 4.12's "What the host can
+> rule out, and it is more than expected" (`PdcDxe` … `36,864` and an `L` at
+> position 19; `ShmBridgeDxe` … `36,864`), becomes the boundary argument in step
+> 4.17 and step 4.18 ("Identical request, opposite result"), survives step 4.23's
+> corrected table in the unit that matters (`PdcDxe` 9 pages, `ShmBridgeDxe` 9
+> pages, 56 pages of cumulative demand apart), and reaches its final form in
+> `tools/pe-facts.py`,
+> whose closing note says *"the deciding factor is neither the request nor the
+> total: it is heap state at the moment each one arrives"* and whose verdict on
+> the field-by-field question is *"no field separates the 19 s from the 27 L by a
+> single value or a threshold."* Writing it here as a finding was a slip. The tool
+> this step adds is a **decoder**; its `--sizes` mode walks ground
+> `tools/pe-facts.py` had already walked, and the docstring now says so. The two
+> agree to the byte, which is the useful part of the repetition and the only reason
+> to keep it.
+>
+> **The two size tables in this document are on different columns and must not be
+> read as contradicting each other.** The prose in step 4.12's "Ruled out: the PE
+> images" quotes `ffs_size` — 9,338 B for `ReportStatusCodeRouterRuntimeDxe`,
+> 19,050 B for `EmbeddedMonotonicCounter`, 307,246 B for `DALSys`, 385,166 B for
+> `BdsDxe` — while this subsection quotes `SizeOfImage`. On the same 46 entries the
+> `ffs_size` ranges are 9,338..307,246 (`s`) and 19,050..385,166 (`L`), so on that
+> column the smallest success really is smaller than the smallest failure in
+> `ReportStatusCodeRouterRuntimeDxe` vs `EmbeddedMonotonicCounter` — the sentences
+> are both true and about two different numbers. `SizeOfImage` is the one to prefer
+> when the question is what the allocator sees, because it is the field
+> `CoreLoadPeImage` acts on; the two columns also rank the candidate cuts
+> differently, and `SizeOfImage` cuts better (17 wrong against 18).
+>
+> What this step actually adds on the size axis is the count, not the verdict:
+> **the best `SizeOfImage` threshold is 17 wrong of 46**, where `pe-facts.py` had
+> stated the verdict qualitatively. The decoder, the corrected anchor pair and the
+> 46-versus-69 closure below are new; this is not.
+
 This is the part worth having before anyone photographs a screen, because it
 retires the move the phase has been circling: **the failures are not the big
 ones.** Measured out of the payload itself, using `fv-inventory.py`'s section walk
@@ -5992,9 +6029,11 @@ carries a UI section):
     successes 32,768..393,216 (`PlatformInfoDxeDriver` and `CmdDbDxe` at the
     bottom, `RuntimeDxe` and `ReportStatusCodeRouterRuntimeDxe` at the top, median
     49,152), failures 36,864..397,312 (`PdcDxe`, `DALTLMM`, `WatchdogTimer` and
-    `EnglishDxe` sharing the bottom, `BdsDxe` the top, median 73,728) — and only
-    three failures (`VariableRuntimeDxe`, `ResetSystemRuntimeDxe`, `BdsDxe`) are
-    above the largest success at all.
+    `EnglishDxe` sharing the bottom, `BdsDxe` the top, median 73,728) — and **only
+    `BdsDxe` is strictly above the largest success** (397,312 against 393,216),
+    with `VariableRuntimeDxe` and `ResetSystemRuntimeDxe` sitting exactly on it at
+    393,216. Three are at or above that value; one is above it. The strict reading
+    is the one to keep, because the at-or-above pair is a tie and not a separation.
   * Physical position does not separate them either, and this is a re-confirmation
     rather than a discovery: the failures sit at physical file indices 5,6,7,8,9,
     12,13,15,16,18,19,23,33..38,40,44..49,54,73 and the successes at
