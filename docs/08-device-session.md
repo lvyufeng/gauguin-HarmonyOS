@@ -5774,11 +5774,12 @@ S -     82913 - PBL, End
 S - DDR Frequency, 1555 MHz
 ```
 
-and each ends at the handoff. Diffing slot 0 against slot 1 with every digit
-masked gives **53 differing lines, essentially all of them the whitespace of the
-time column** — `D -         N - boot_flash_init` against `D -        N -
-boot_flash_init`. So the five files are one bootloader run written five times, not
-five different events.
+and each ends at the handoff. Raw, slot 0 against slot 1 is **354 differing
+lines**, because every line that carries a time carries a different one; masking
+the digits collapses that to **53**, essentially all of them the whitespace of the
+time column — `D -         N - boot_flash_init` against `D -        N -
+boot_flash_init`. So the substantive difference between the five is small, and the
+correction below is about what the small difference actually is.
 
 Two readings come out of that, and the second is the one that matters:
 
@@ -5794,6 +5795,46 @@ Two readings come out of that, and the second is the one that matters:
     payload that cannot write. So even if every slot were readable perfectly,
     the bootloader's own account of a failed run is one line that says the
     handoff happened.
+
+### Correction: the five slots are not five iterations of the loop, and slot 0 is the recovery boot
+
+The paragraph above first went into this document saying the five files were "one
+bootloader run written five times, not five different events", on the strength of
+the 53 masked diff lines. That is wrong, and the lines that make it wrong are two
+that the digit-masking hid because they contain no digits — plus a third that is
+identical in all five and therefore says more by its sameness than by its value.
+Comparing all five properly:
+
+```
+                        slot 0   slots 1-4
+KeyPress:1, BootReason:0     1        0      <- the two lines the masking hid
+Fastboot=0, Recovery:1       1        0
+PM: HARD RESET by PS_HOLD   yes      yes      <- identical in all five
+PON Reason is 1 cold_boot:1 yes      yes
+```
+
+**Slot 0 is the boot into recovery** — `Recovery:1` and `KeyPress:1`, which is the
+key the user held to take this very dump. So it is not an iteration of anything;
+it is the intervention that produced the file. And **slots 1–4 are four boots, each
+one entered by a `PS_HOLD` hard reset** — the PMIC's own record of what made the
+reset that preceded the boot, read by SBL1 at init. `PS_HOLD` is the power button,
+so those four boots were entered by the user's own twenty-second hold, not by the
+payload. **Not one of the five slots is a watchdog-triggered boot.**
+
+That does not weaken the per-boot conclusion; it strengthens it, because a slot is
+written with content specific to the boot that wrote it, and slot 0 differs from
+the other four in exactly the two lines a recovery boot would differ in. A ring
+that persisted across boots would still be visible, and is not.
+
+What it does add is the one thing `logfs` turns out to hold that this document did
+not know it held: **the cause of the reset that preceded each boot.** It is not a
+record of *why* a payload died — `BootReason:0` and `PON Reason is 1 cold_boot:1`
+are identical in all five and do not distinguish a power-hold from anything else
+here, and ABL's own last act is still the handoff. Whether a watchdog-triggered
+reset is named differently from `PS_HOLD` is untested. Testing it costs a boot loop
+plus a `logfs` read and yields only the datum that the payload died, which is
+known already, so it is recorded here as a capability and not proposed as a next
+step.
 
 ### A `grep` that answered "nothing" for the wrong reason
 
