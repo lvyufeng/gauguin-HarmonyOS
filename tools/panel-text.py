@@ -97,7 +97,18 @@ FB_C = f"{FB_DIR}/FrameBufferSerialPortLib.c"
 FONT_H = f"{FB_DIR}/Font.h"
 
 GLYPH_ROWS = 12  # FONT_HEIGHT - 4, the rows DrawGlyph actually draws
-MAX_SIDE = 3000  # a photograph larger than this is decimated; no glyph needs it
+# The bound on what the alignment is ever handed, and it is applied to the text
+# block rather than to the photograph - see `decimate`. 3000 is also as large as
+# it can safely be: 3000 px across 90 columns is a 33 px cell, and the cell
+# search in `align` looks from 0.4 to 3.0 cells (`:544`), i.e. up to 36 px. Raise
+# this past 3240 and the estimator stops being able to describe what it is
+# looking at.
+MAX_SIDE = 3000
+# The frame bound, which is only about memory: `Otsu` and `lit_mask` each walk the
+# whole picture before anything is cropped, and a 12 Mpx photograph is already 48
+# MB per float32 array with several alive at once. 6000 px of long side is 36 Mpx
+# worst case, which is as much as this is willing to materialise.
+MAX_FRAME = 6000
 
 
 def die(msg):
@@ -245,6 +256,59 @@ def _advance(y, fb, geo):
     return 0, y, fb
 
 
+# How many rows the panel holds, for `console_rows` to model the wipe against. A
+# module-level cell rather than a parameter because the one caller is the
+# scaffold's reporting path, where the geometry is already in hand and threading
+# it through would only make that call site noisier.
+PANEL_ROWS = [100]
+
+
+def console_rows(lines, columns):
+    """The rows the console would hold, as strings - wrap and wipe included.
+
+    `console_render` gives the same layout as ink, which is what the decoder is
+    tested against; this gives it as *text*, which is what a reader needs. The
+    distinction matters because two conventions are both plausible and only one
+    is right: a decoder could return one row per line that was printed, or one
+    row per row of the panel. `decode` does the second, because that is what a
+    photograph contains - so the scaffold now wraps, and a row-by-row comparison
+    against the input has to know which rows are continuations.
+
+    It mirrors `console_render` rather than sharing code with it, so the two can
+    drift apart. `selftest` renders this back through `console_render` and
+    requires the ink to match, so a drift is reported as a scaffold fault rather
+    than blamed on the decoder.
+    """
+    rows = [""]
+    x = 0
+    for line in lines:
+        for ch in line + "\n":
+            if ord(ch) >= 127:
+                continue
+            if ord(ch) < 32:
+                if ch == "\n":
+                    rows.append("")
+                    x = 0
+                elif ch == "\r":
+                    x = 0
+                continue
+            if x == 0 and ch == " ":
+                continue
+            rows[-1] += ch
+            x += 1
+            if x >= columns:
+                rows.append("")
+                x = 0
+    # A trailing newline leaves an empty row behind, and blank rows carry no
+    # reading either way, so they are dropped rather than compared.
+    rows = [r for r in rows if r]
+    # The wipe: only the rows still on the glass when the cursor passed the last
+    # one are in the photograph, and they are the last PANEL_ROWS of them.
+    if len(rows) > PANEL_ROWS[0]:
+        rows = rows[len(rows) - PANEL_ROWS[0]:]
+    return rows
+
+
 def soften(bits, passes):
     """A glyph template spread over its neighbours, in cell units.
 
@@ -339,8 +403,40 @@ def normalise(a):
     return np.clip((a - bg) / (fg - bg), 0.0, 1.0), thr, bg, fg
 
 
+def decimate(a, max_side=MAX_SIDE):
+    """(image, factor) - the picture with its longest side no longer than `max_side`.
+
+    Applied to the text block rather than to the frame it was cut out of, and that
+    is the point rather than a detail. The bound exists because the alignment's
+    cost is linear in pixels and because no glyph needs that many; the background
+    around the screen is pixels that cost the same and that nothing samples. So
+    decimating the frame first spends the whole budget on the wall behind the
+    phone.
+
+    Measured on this tool's own scaffold - a 5080x2380 photograph of a block that
+    is 2207x1137, tilted 2.5 degrees - decimating the frame first gave a 14.2 px
+    cell and read **917 of 1064 characters wrong**: the continuation row of
+    `P2 APRI first=…` came back as ``3-S3-E-J-F- | - `|`` instead of `31`.
+    Decimating the block leaves the cell at 24 px, and the same photograph then
+    reads **one** character wrong - the `R` the report already flags as doubtful.
+    """
+    k = 1.0
+    if max_side and max(a.shape) > max_side:
+        k = max_side / max(a.shape)
+        im = Image.fromarray((np.clip(a, 0, 1) * 255).astype(np.uint8))
+        im = im.resize((max(1, int(im.width * k)), max(1, int(im.height * k))),
+                       Image.LANCZOS)
+        a = np.asarray(im, dtype=np.float32) / 255.0
+    return a, k
+
+
 def load_photo(path, invert=False, rotate=0.0, crop=None):
-    """The photograph as a float ink image, at its own scale and in its own frame."""
+    """The photograph as a float ink image, at its own scale and in its own frame.
+
+    The only decimation here is the frame bound, which is a memory guard: the
+    bound that decides how finely the *text* is sampled is applied to the crop,
+    after the wall around it has been thrown away. Both are in `decimate`.
+    """
     try:
         img = Image.open(path)
     except OSError as exc:
@@ -356,8 +452,8 @@ def load_photo(path, invert=False, rotate=0.0, crop=None):
         img = img.crop((x0, y0, x1, y1))
     if rotate:
         img = img.rotate(rotate, resample=Image.BILINEAR, fillcolor=0)
-    if max(img.size) > MAX_SIDE:
-        k = MAX_SIDE / max(img.size)
+    if max(img.size) > MAX_FRAME:
+        k = MAX_FRAME / max(img.size)
         img = img.resize((max(1, int(img.width * k)), max(1, int(img.height * k))),
                          Image.LANCZOS)
     a = np.asarray(img, dtype=np.float32) / 255.0
@@ -648,6 +744,12 @@ def templates(font, passes=3):
 
     Each is returned with its own ink count, because the objective below needs it.
 
+    The second and third are a fallback that has never been observed to engage:
+    the pick in `decode` chooses the sharp font at every blur radius the scaffold
+    can make, up to and including radii where the decode has already failed. The
+    measurement is at the pick, and it is the reason these are kept rather than
+    assumed to be doing something.
+
     `WriteFrameBuffer` returns early for `Character >= 127`, so the 96th constant -
     which is blank, and therefore scores exactly what a space scores - can never be
     drawn. It needs no special case here: a blank template ties with the space on a
@@ -767,6 +869,18 @@ def decode(ink, geo, font, info, drift=6, drift_x=3, min_margin=1.5):
 
     # Which softness explains the picture? Decided once, globally: the blur is a
     # property of the lens and the exposure, not of a row.
+    #
+    # Measured, because the answer is not the one the ladder's name suggests: this
+    # picks `soft0` at every blur radius the scaffold can make, from a clean render
+    # to r=6 - including r=4 and r=6, where the decode has already collapsed to 840
+    # and 1042 wrong characters. The lead narrows as the blur grows (soft0 beats
+    # soft1 by 10,300 on the probe at r=0 and by 1,155 at r=6) and never closes, so
+    # neither softened copy is ever selected. Forcing one is worse than inert: at
+    # r=1, where the shipped pick decodes exactly, forcing soft1 costs 1051
+    # characters and soft2 1058. So "the sharp font wins" is load-bearing rather
+    # than a formality, and nothing measured here says the softened copies help -
+    # which is why they are neither trusted nor deleted. A real photograph blurrier
+    # than r=3 is what would settle that, and no photograph has been read yet.
     probe = rows_present[:8]
     pick = None
     for name, t, pop in tmpl:
@@ -791,12 +905,25 @@ def decode(ink, geo, font, info, drift=6, drift_x=3, min_margin=1.5):
         runner[np.arange(n), idx] = -np.inf
         second = runner.argmax(1)
         margin = sc[np.arange(n), idx] - runner[np.arange(n), second]
-        text, weak = [], []
+        text, weak, rival = [], [], {}
         for c in range(n):
             ch = chr(int(idx[c]) + 32)
             text.append(ch)
             if ch != " " and margin[c] < min_margin:
                 weak.append(c)
+                # The runner-up is kept, not just the fact of the doubt. A flag
+                # that says "column 89 is uncertain" asks the reader to squint at
+                # a photograph; one that says "column 89 is P or R" tells them
+                # which two shapes to compare, and on this panel that is the whole
+                # difference between a usable reading and a re-shoot. It is also
+                # the case the scaffold found: `R` and `P` differ by four pixels -
+                # a diagonal leg at rows 6 to 9, `#.#..` and `#..#.` against
+                # `#....` - and one 3-tap pass of `soften` puts those four at
+                # 0.56, 0.38, 0.63 and 0.56, straddling the half-ink line, with a
+                # second pass taking all four under it. They are the only pixels
+                # in the glyph with no inked neighbour, and `R` is the letter this
+                # device's status line is made of.
+                rival[c] = chr(int(second[c]) + 32)
         line = "".join(text).strip()
         # `weak` is reported as a position in the line the reader is holding, not as
         # a cell index: the cell range now starts wherever the ink starts, so a cell
@@ -807,6 +934,7 @@ def decode(ink, geo, font, info, drift=6, drift_x=3, min_margin=1.5):
         lines.append(line)
         report.append({"row": r, "dx": dx, "dy": dy,
                        "weak": [c - lead + 1 for c in weak], "text": line,
+                       "rivals": {c - lead + 1: rival[c] for c in weak},
                        "margin": float(margin[ink_cols].mean()) if ink_cols else 60.0,
                        "worst": float(margin[ink_cols].min()) if ink_cols else 60.0})
     return lines, report, tname
@@ -883,20 +1011,129 @@ def _glare(a, strength):
     return a * np.linspace(1.0 - strength, 1.0 + strength, a.shape[0])[:, None]
 
 
+# The screen the selftest asks the decoder for. Every line is a format string
+# out of the DxeCore Dispatcher or Mem/Page.c with this device's readings
+# substituted, because a scaffold is only worth its runtime if it renders the
+# screen that will actually be photographed - and the earlier fixture did not.
+# It was written from memory of the digest rather than from it, and three of its
+# eight lines were not lines this firmware can print at all:
+#
+#   * `P2 APRI ... promoted=46` - there is no `promoted` field. Dispatcher.c:2279
+#     is `P2 APRI bytes=%d entries=%d sum=%x`, and `%x` prints bare hex, so
+#     `sum=0xa998b263` was the wrong spelling of a value that is real.
+#   * `P2 BIN init=1 code=150 data=800 bs9=Success bs16=Success` - `code=`,
+#     `data=`, `bs9=` and `bs16=` are not fields of any `P2 BIN` line. The four
+#     BIN formats (Dispatcher.c:466-489) carry `init=/hob_rc=/hob_rd=`,
+#     `rc=..used=`, `rd=..used=` and `def=`. `bs9=`/`bs16=` are the last two of
+#     the six `%r` fields on `P2 RETRY` (:495) - so the fixture tested `bs9=`
+#     in a position it never occupies, and a decoder that dropped it in its real
+#     one, fifth of six and past a wrap, would still have passed.
+#   * `P2 FREE largest=16 MiB in EfiRuntimeServicesCode` - :2462 prints
+#     `P2 FREE largest=%d pages`; the words are not in the format.
+#
+# The two things the fixture most needed to exercise and did not are the ones
+# that have already cost this project readings. The SEQ line is 46 characters of
+# `s` and `L`, and the earlier fixture rendered 46 `s` - so the one discrimination
+# the single most important reading depends on, `L` against the `l` and `1` that
+# surround it in a hex GUID, was never tested. And no line in it was long enough
+# to wrap, so the console's wrap - which is what puts half of `P2 RETRY` and the
+# tail of `P2 APRI first=` on an unlabelled row of their own - went untested too.
+# Both are here now, and the wrap is covered by the assertion rather than by a
+# comment: `console_render` lays these lines out with the real wrap, so the
+# decoder has to return the continuation rows *and* join back to the input.
+SEQ_LINE = "ssssssssssssssssssLLLsLLLLLLLLLLLLLLLLLLLLLLLL"
+P2_SCREEN = [
+    "P2 APRI bytes=1120 entries=70 sum=a998b263",           # :2279, %x bare
+    # 97 columns against a 90-column console: always wraps, and the last two
+    # hex digits of the second GUID land alone on the next row.
+    "P2 APRI first=EBF342FE-B1D3-4EF8-957C-8048606FF671 "
+    "last=462CAA21-7614-4503-836E-8AB6F4662331",            # :2286
+    "P2 APRI matched=0..45 unhit=24",                       # :2295
+    "P2 APRI miss=18 6D6F6475-6C65-0000-0000-000000000000",  # :2316
+    f"P2 SEQ [{SEQ_LINE}]",                                  # :2348
+    # WHY is the same 46 positions with a status letter each, out of
+    # `P2WhyLetter` (:197): s, R, N, X, D, E, P, U and O for anything else. The
+    # letters are the reading; `P2 ERR` below is the same statuses in words.
+    "P2 WHY [ssssssssssssssssssRRRsRNNNXDDEPPUOOOOOOOOOOOO]",  # :2349
+    "P2 ERR Out of Resources x27",                          # :2403
+    "P2 DIAG L EBF342FE-B1D3-4EF8-957C-8048606FF671 Out of Resources",  # :2422
+    "P2 STATS discovered=69 apriori=46/70 started=19 diag=27 noload=27",  # :2431
+    "P2 WALK t=0 seen=80 iter=81 "
+    "last=EBF342FE-B1D3-4EF8-957C-8048606FF671",            # :2454
+    "P2 FREE largest=1024 pages",                           # :2462, P2LargestAlloc
+    "P2 BIN init=1 hob_rc=Success hob_rd=Success",          # :466
+    "P2 BIN rc=6D6F6475..6C65 used=150/200",                # :473
+    "P2 BIN rd=6D6F6475..6C65 used=150/200",                # :481
+    "P2 BIN def=6D6F6475..6C65",                            # :489
+    # Six `%r` fields, all six at the status this run produced. That is 140
+    # columns against the 90-column console, so it wraps, and it wraps *before*
+    # `bs9=` - the field name starts at column 98, on the second row, with the
+    # first four readings' tail on row 1 and no label on row 2 at all. This is
+    # the arrangement the reading of `bs9=` has to survive and the reason the
+    # line is here; the all-Success form is 86 columns and does not wrap, so the
+    # harder case tests strictly more.
+    "P2 RETRY rc16=Out of Resources rc48=Out of Resources "
+    "rc112=Out of Resources rd16=Out of Resources "
+    "bs9=Out of Resources bs16=Out of Resources",           # :495
+    "P2 FWTY bc=12 bd=3 rt=8 oth=1 n=24",                   # Page.c, P2FreeWhyReport
+    "P2 FWHY t=0 np=4096 a=1 big=1024 raw=2048 free=1024 c=1 g=0",  # Page.c
+    "K 19 Ss 19/46 free=1024 "
+    "6D6F6475-6C65-0000-0000-000000000000",                 # the per-dispatch line
+    "KEY 27/46 err=Out of Resources at=18 free=1024 miss=18",  # P2Key, printed last
+]
+
+
 def selftest(geo, font, verbose=True):
-    """Render, degrade, decode - and require the text back exactly."""
-    text = [
-        "P2 SEQ [ssssssssssssssssssssssssssssssssssssssssssssss]",
-        "P2 WHY [ssssssssssssssssssssssssssssssssssssssssssssss]",
-        "P2 ERR Out of Resources x27",
-        "P2 APRI bytes=1120 entries=70 sum=0xa998b263 promoted=46",
-        "P2 BIN init=1 code=150 data=800 bs9=Success bs16=Success",
-        "KEY 27/46 err=Out of Resources at=18 free=1024 miss=18",
-        "K 19 Ss 19/46 free=1024 6D6F6475-6C65-0000-0000-000000000000",
-        "P2 FREE largest=16 MiB in EfiRuntimeServicesCode",
-    ]
+    """Render, degrade, decode - and require the text back exactly.
+
+    Returns `(results, tally)`: one bool per case, and how many characters across
+    all the failures were flagged weak against how many were not. The bools are
+    the test; the tally is what says whether a failure is the decoder being wrong
+    or the flag doing its job, and it is returned rather than printed so a caller
+    can state it without parsing the report.
+
+    The scaffold asserts its own coverage before it runs, which is the lesson of
+    the fixture above: a test whose fixture quietly stops containing the case it
+    was written for reports success for the wrong reason, and 11/11 from a
+    screen that cannot fail on `L` against `1` is worth less than a smaller
+    number that can. Both properties below are properties of the fixture, so
+    they are checked against `geo`'s own column count rather than a literal 90.
+    """
+    text = P2_SCREEN
+    cols = geo["columns"]
+    seq = P2_SCREEN[4]
+    if "L" not in seq or "s" not in seq:
+        sys.exit("panel-text: the SEQ fixture no longer mixes s and L, which is the one "
+                 "discrimination the probe reading depends on - see SEQ_LINE")
+    wrapping = [ln for ln in text if len(ln) > cols]
+    if not wrapping:
+        sys.exit(f"panel-text: no fixture line exceeds the {cols}-column console, so the "
+                 "wrap the digest relies on is not being tested")
+    retry = next((ln for ln in text if "bs9=" in ln and "P2 RETRY" in ln), None)
+    if retry is None:
+        sys.exit("panel-text: the fixture has no P2 RETRY line, so bs9= is not tested "
+                 "in the position it actually occupies")
+    beyond = retry.index("bs9=") >= cols
+    if not beyond:
+        sys.exit(f"panel-text: P2 RETRY's bs9= starts at column {retry.index('bs9=')} of "
+                 f"{cols}, so the fixture no longer tests the case where the field name "
+                 "lands on the wrapped row below its line")
     ref = "".join(text)
     scene = make_photo(geo, text, font)
+    # `console_rows` is a second spelling of `console_render`'s rules, so it is
+    # checked against it before it is used to judge anything. Only the ink
+    # identity is required, and only when it holds exactly: a continuation row
+    # that begins with a space would be dropped as a leading space when rendered
+    # on its own but kept inside the line it wrapped from, so in that one case
+    # the two models are allowed to differ and the scaffold says so rather than
+    # claiming a decoder fault.
+    PANEL_ROWS[0] = geo["rows"]
+    ROWS = console_rows(text, cols)
+    same_ink = np.array_equal(console_render(ROWS, geo, font),
+                              console_render(text, geo, font))
+    if not same_ink and any(r[:1] == " " for r in ROWS):
+        print("  note: console_rows and console_render differ (a wrapped row begins "
+              "with a space); the row-level report below is approximate")
 
     cases = [
         ("clean screen in a scene", scene),
@@ -914,6 +1151,7 @@ def selftest(geo, font, verbose=True):
     ]
 
     results = []
+    tally = {"flagged": 0, "unannounced": 0}
     for name, arr in cases:
         ink, thr, bg, fg = normalise(np.clip(arr, 0.0, 1.0))
         cropped, _ = crop_to_ink(ink, geo)
@@ -925,18 +1163,67 @@ def selftest(geo, font, verbose=True):
         joined = "".join(lines)
         ok = joined == ref
         results.append(ok)
+        # Every disagreement is classified, whether or not the caller asked to see
+        # the report, because "wrong" is not one thing: a position `decode` flagged
+        # is the tool reporting doubt, and a position it did not is the tool
+        # asserting something false. Only the second is a defect, and a count that
+        # adds them together hides which of the two a failure is - which matters
+        # here because the case that fails on this scaffold fails by one character
+        # whose margin is 0.02, and the flag names that character and its rival.
+        flagged, confident = [], []
+        if not ok:
+            for i, (want, got) in enumerate(zip(ROWS, lines)):
+                if want == got:
+                    continue
+                weak = set(report[i]["weak"]) if i < len(report) else set()
+                for c, (a, b) in enumerate(zip(got, want)):
+                    if a != b:
+                        (flagged if c + 1 in weak else confident).append((i, c + 1, a, b))
+            tally["flagged"] += len(flagged)
+            tally["unannounced"] += len(confident)
         if verbose:
             note = "" if ok else f"   rot={info.get('rot', 0):+.2f} mag={info.get('mag', 0):.3f}"
             print(f"  {'ok  ' if ok else 'FAIL'}  {name}{note}")
             if not ok:
-                for a, b in zip(lines + [""] * len(text), text):
-                    if a != b:
-                        print(f"        got  {a!r}")
-                        print(f"        want {b!r}")
+                # Row-by-row against the *input* no longer lines up: the fixture
+                # wraps, so `decode` returns more rows than the input has lines
+                # and each continuation row belongs to the line above it. So the
+                # first comparison is on the joined text, and the row-level one
+                # is against `console_rows` - the console's own layout - rather
+                # than against the input, which is what made the earlier version
+                # of this report blame the wrapped line for a fault elsewhere.
+                at = next((i for i, (a, b) in enumerate(zip(joined, ref))
+                           if a != b), min(len(joined), len(ref)))
+                start = 0
+                for src in text:
+                    if start + len(src) > at:
                         break
-                else:
-                    print(f"        got {len(lines)} rows, want {len(text)}")
-    return results
+                    start += len(src)
+                print(f"        {len(lines)} rows decoded, {len(ROWS)} laid out, "
+                      f"{len(ref)} columns expected")
+                print(f"        first difference at column {at} of the whole screen,")
+                print(f"        in the line beginning {src[:24]!r} at column {at - start}")
+                print(f"        got  {joined[max(0, at - 24):at + 24]!r}")
+                print(f"        want {ref[max(0, at - 24):at + 24]!r}")
+                if len(lines) != len(ROWS):
+                    print(f"        !! {len(lines)} rows returned for {len(ROWS)} on the "
+                          "panel: a row is missing or spurious, which no character "
+                          "comparison can see")
+                for i, (want, got) in enumerate(zip(ROWS, lines)):
+                    if want != got:
+                        print(f"        first differing panel row {i}:")
+                        print(f"          got  {got!r}")
+                        print(f"          want {want!r}")
+                        break
+                if flagged or confident:
+                    print(f"        {len(flagged) + len(confident)} characters differ: "
+                          f"{len(flagged)} flagged weak, {len(confident)} unannounced")
+                for i, c, a, b in confident[:3]:
+                    print(f"        UNANNOUNCED  row {i} column {c}: got {a!r} want {b!r}")
+                for i, c, a, b in flagged[:3]:
+                    print(f"        flagged      row {i} column {c}: got {a!r} want {b!r}"
+                          f" - either {a} or {b}, to be read off the panel")
+    return results, tally
 
 
 def lit_mask(ink):
@@ -1093,8 +1380,21 @@ def main():
 
     if args.selftest:
         print("\npanel-text: does the decoder survive a photograph?\n")
-        results = selftest(geo, font)
+        results, tally = selftest(geo, font)
         print(f"\n  {sum(results)}/{len(results)} degraded photographs decoded exactly")
+        # The tally is printed before the exit code, because it is the part a
+        # reader needs to judge the number above it. A failed case whose differing
+        # characters were all flagged is not the same result as a failed case whose
+        # decoder asserted a character the panel does not have, and this scaffold
+        # has both kinds of outcome available to it; which one it produced is a
+        # measurement, so it is stated rather than assumed either way.
+        if tally["flagged"] or tally["unannounced"]:
+            print(f"  {tally['flagged']} differing characters were flagged weak and "
+                  f"{tally['unannounced']} were not flagged")
+            if tally["unannounced"]:
+                print("  An unannounced difference is the decoder being confidently "
+                      "wrong - the one outcome worth fixing. A flagged one is the "
+                      "reading itself saying which two glyphs it is between.")
         if not all(results):
             return 1
 
@@ -1107,6 +1407,24 @@ def main():
         print(f"  {photo.shape[1]}x{photo.shape[0]} px, Otsu threshold {thr:.3f},"
               f" black {bg:.3f}, white {fg:.3f}")
         src, _off = (ink, (0, 0)) if args.no_crop else crop_to_ink(ink, geo)
+        src, dec = decimate(src)
+        if dec != 1.0:
+            print(f"  the text block is {src.shape[1]}x{src.shape[0]} px, decimated"
+                  f" from the photograph by {dec:.3f} - the bound applies to the"
+                  f" block, not to the frame")
+        # Ink against the edge of the picture is the one failure here that no flag
+        # can report, because the missing characters are not in the image. Measured
+        # by rotating one of this tool's own renders - which has text at x=0 - by
+        # 2.5 degrees: every row lost its first three or four characters, and a
+        # line the panel prints as `P2 RETRY` decoded as `ETRY` with nothing
+        # marked. The crop has a cell of margin, so ink on the crop's border means
+        # the block ran into the frame and was cut, not that the margin is thin.
+        edge = lit_mask(src)
+        if edge[0].any() or edge[-1].any() or edge[:, 0].any() or edge[:, -1].any():
+            print("  !! ink reaches the edge of the picture: the text block is cut")
+            print("     off, and the characters outside the frame cannot be decoded"
+                  " or flagged.")
+            print("     Re-shoot with the whole screen well inside the frame.")
         if src.shape[0] < geo["cell_h"] * 2 or src.shape[1] < geo["cell_w"] * 2:
             print("  the lit region is smaller than two cells - nothing to read")
             return 1
@@ -1129,14 +1447,20 @@ def main():
             flag = ""
             if rep["weak"]:
                 weak_total += len(rep["weak"])
-                flag = f"   <- {len(rep['weak'])} weak: chars {rep['weak']}"
+                # Each doubtful position is printed with its runner-up, so the two
+                # candidate shapes are named rather than left to a squint. That is
+                # the difference between a flag and an instruction.
+                pairs = ", ".join(f"{p} ({rep['text'][p-1]} or {rep['rivals'][p]})"
+                                  for p in rep["weak"])
+                flag = f"   <- {len(rep['weak'])} weak: {pairs}"
             print(f"  {rep['row']:3d} |{rep['text']}|{flag}")
         print(f"\n  weakest row margin {min(r['worst'] for r in report):.2f} of 60"
               f" sub-blocks; --min-margin is {args.min_margin}")
         if weak_total:
-            print(f"  {weak_total} characters are below it - the `chars` above are"
-                  f" counted from the first character of the line, so read those"
-                  f" positions against --render, not off this output")
+            print(f"  {weak_total} characters are below it. Each is printed above as the")
+            print("  two glyphs it is between - the first is the one on the line, the")
+            print("  second the runner-up - so check those positions against the panel")
+            print("  rather than trusting the line as read.")
             return 1
 
     return 0

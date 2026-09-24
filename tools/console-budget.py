@@ -74,6 +74,10 @@ DIGEST_FUNCS = [
 STATUS_WIDEST = 18  # "Security Violation"
 STATUS_SUCCESS = 7  # "Success"
 STATUS_TYPICAL = 15  # "Out of Resources"
+# The status this device's run actually produced - `P2 ERR Out of Resources x27` is
+# on record - so the RETRY mixes below can include the one that really happened
+# rather than only the bounds.
+P2_STATUS_OBSERVED = "Out of Resources"
 GUID_WIDTH = 36
 DIGITS = 5  # counts and indexes on this run: 46, 27, 19 - not ten digits
 HEXDIGITS = 8  # %lx here is an address in the DXE heap, not a 64-bit value
@@ -182,6 +186,77 @@ def group_key(fmt):
     lead = " ".join(words[:2])
     fields = frozenset(re.findall(r"\b(\w+)=", fmt))
     return lead, fields
+
+
+def field_spans(fmt, statuses, strlen=46, digits=DIGITS, hexdigits=HEXDIGITS):
+    """Where each `name=value` field of `fmt` starts and ends, in columns.
+
+    A row count says a line wraps; it does not say which fields survive on the
+    first row, and for the RETRY line that is the whole question - `bs9=` is one
+    of the readings to take off the panel and it moves between rows depending on
+    how long the six status names came out. So this walks the format the same way
+    `render_width` does and records the column span of every named field, which
+    is what turns "one or two rows" into "`bs9=` is on row 1 in this case and row
+    2 in that one".
+
+    The name is the literal run ending in `=`; the value is however wide the
+    conversion after it renders, and `statuses` supplies one name per `%r` in
+    order so a mix of statuses can be measured and not just the widest. Both ends
+    are reported - where the name starts and where the value ends - because the
+    two answer different questions: the name's start says which row a reader
+    looking for `bs9=` finds it on, and the value's end says whether the value
+    itself is split across the wrap.
+    """
+    col = 0
+    i = 0
+    pending = None  # (name, name column, value start column)
+    spans = []
+    it = iter(statuses)
+
+    def close(end):
+        if pending is not None:
+            spans.append((pending[0], pending[1], end))
+
+    while i < len(fmt):
+        if fmt[i] != "%":
+            j = i
+            while j < len(fmt) and fmt[j] != "%":
+                j += 1
+            lit = fmt[i:j]
+            for m in re.finditer(r"(\w+)=", lit):
+                # A run that names a second field closes the first at the second
+                # name's start, so `a=%d b=%d` does not read as one wide field.
+                close(col + m.start())
+                pending = (m.group(1), col + m.start(), col + m.end())
+            col += len(lit)
+            i = j
+            continue
+        m = re.match(r"%[-+ #0]*\d*(?:\.\d+)?(?:ll|l|h)?([a-zA-Z%])", fmt[i:])
+        if not m:
+            col += 1
+            i += 1
+            continue
+        spec, conv = m.group(0), m.group(1)
+        if conv == "%":
+            w = 1
+        elif conv == "g":
+            w = GUID_WIDTH
+        elif conv == "r":
+            w = len(next(it, "Success"))
+        elif conv == "a":
+            w = strlen
+        elif conv in "diu":
+            w = digits
+        elif conv in "xX":
+            w = hexdigits
+        else:
+            w = 1
+        col += w
+        close(col)
+        pending = None
+        i += len(spec)
+    close(col)
+    return spans
 
 
 def main():
@@ -297,7 +372,10 @@ def main():
 
     # The one line whose width is not fixed by the format. Its six statuses are
     # names of 7 to 18 columns, so the same line is one row or two depending on
-    # what the run did - and a two-row one breaks inside a field.
+    # what the run did - and a two-row one breaks inside a field. "One or two
+    # rows" is not actionable on its own: the reader needs to know which of the
+    # six readings is still on the first row, because `bs9=` is the one the P2
+    # work is gated on and it is the fifth of them.
     for name, fmt in lines:
         if "bs9=" in fmt:
             fixed = len(re.sub(r"%[-+ #0]*\d*(?:ll|l|h)?[a-zA-Z]", "", fmt))
@@ -311,6 +389,41 @@ def main():
             print(f"     it is one row only if the six names fit in {budget} columns, "
                   f"which is not")
             print("     the common case, and then the break falls in the middle of a field")
+            print()
+            # Which field survives the break, for each mix that can actually
+            # happen. The six are independent reads of six different allocations,
+            # so every combination is reachable; the extremes bound them, and a
+            # field's row is decided by its own ending column against `columns`.
+            mixes = [
+                ("all six Success", ["Success"] * 6),
+                ("all six the observed status",
+                 [P2_STATUS_OBSERVED] * 6),
+                ("all six the widest", ["Security Violation"] * 6),
+            ]
+            print("  where each reading lands, by mix (the name is on row 1 while its")
+            print(f"  starting column is <= {columns}; a value ending past {columns} is split")
+            print("  by the wrap, and its tail is the unlabelled row below):")
+            for label, mix in mixes:
+                spans = field_spans(fmt, mix)
+                width = fixed + sum(len(s) for s in mix)
+                print(f"    {label}: {width} cols -> {-(-width // columns)} row"
+                      f"{'s' if width > columns else ''}")
+                for n, ns, ve in spans:
+                    row = 1 + ns // columns
+                    split = ""
+                    if ve > columns >= ns:
+                        split = "  <- value split by the wrap"
+                    elif ns > columns:
+                        split = "  <- name itself on the next row"
+                    mark = "  <- the reading the gate waits on" if n == "bs9" else ""
+                    print(f"        {n + '=':<6} cols {ns:>3}..{ve:<3} row {row}"
+                          f"{split}{mark}")
+            print()
+            print("  So `bs9=` is on row 1 only while the four readings before it are")
+            print("  short enough to leave it there, and reading the RETRY line means")
+            print("  reading the row it starts on and, when it starts one, the row below")
+            print("  it too - a continuation with no line label of its own. The `P2 BIN`")
+            print("  rows above it are the same shape and the same hazard.")
             print()
             break
 

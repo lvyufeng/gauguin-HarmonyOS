@@ -9194,3 +9194,229 @@ a-priori drivers failed to load, and that reading still has not been taken.
 | instrument | `tools/depex-census.py` — FFS walk via `tools/fv-inventory.py`, a-priori array read out of the image via `tools/apriori-order.py`, depex GUIDs resolved against `MdePkg`/`MdeModulePkg`/`EmbeddedPkg`/`ArmPkg`/`SiliciumPkg`/`QcomPkg` headers and `.dec` files; `Dispatcher.c` and `Dependency.c` read at the lines cited |
 | bounds | producer-to-protocol is not recoverable from a volume in general, so above the nine mapped GUIDs a driver gated on some other uninstalled protocol would read as healthy. The reverse direction is also open: a driver whose depex names only installed protocols is not proved schedulable, only not proved blocked |
 | does not close | the P2 gate. `P2 SEQ`, `P2 STATS discovered=` and the 27 `CoreLoadImage` failures are where the eight missing protocols actually live, and none of it is readable without the device |
+
+## Step 4.56 — the decoder's fixture was three lines this firmware cannot print, and every character it gets wrong it now names as a doubt
+
+The panel is the only read-out this project has. There is no serial console, no
+log partition, no debugger — `P2Digest` prints to the framebuffer and the reading
+comes off a photograph of the glass. So the decoder in `tools/panel-text.py` is
+not a convenience, it is the instrument, and an instrument whose test fixture is
+made of text its subject cannot emit is worse than no test: step 4.48 found the
+tool's own scaffold had been decoding to the wrong *grid* for eleven steps while
+reporting success, because the fixture was written from memory of the digest
+rather than from the digest.
+
+This step re-read the fixture against `Dispatcher.c`, and three of its eight
+lines were not lines this firmware can print.
+
+### The three impossible lines
+
+* `P2 APRI … promoted=46`. There is no `promoted` field. `Dispatcher.c:2279` is
+  `"P2 APRI bytes=%d entries=%d sum=%x\n"` — and `%x` prints **bare** hex, so
+  `sum=0xa998b263` was the wrong spelling of a value that is real (`a998b263`,
+  the digest on the panel two steps ago).
+* `P2 BIN init=1 code=150 data=800 bs9=Success bs16=Success`. `code=`, `data=`,
+  `bs9=` and `bs16=` are fields of no `P2 BIN` line. The four BIN formats
+  (`:466`, `:473`, `:481`, `:489`) carry `init=/hob_rc=/hob_rd=`, `rc=…used=`,
+  `rd=…used=` and `def=`. `bs9=` and `bs16=` are the **fifth and sixth of the six
+  `%r` fields on `P2 RETRY`** (`:495`) — so the fixture was testing `bs9=` in a
+  position it never occupies, and a decoder that dropped it in its real one,
+  fifth of six and past a wrap, would have passed the test that exists to catch
+  exactly that.
+* `P2 FREE largest=16 MiB in EfiRuntimeServicesCode`. `:2462` prints
+  `"P2 FREE largest=%d pages\n"`. The words are not in the format.
+
+The replacement is twenty lines, every one of them a format string out of
+`Dispatcher.c` or `Mem/Page.c` with this device's own readings substituted, each
+annotated with its source line. Two of the twenty wrap, so the twenty render as
+twenty-two rows of the panel — which is what the scaffold compares against. It is
+two and a half times the length of the old fixture and it renders a screen the
+device has actually produced, including the 46-character SEQ with its `L`s and
+the `P2WhyLetter` alphabet on the `P2 WHY` row.
+
+### The two properties it never exercised, and both have cost readings
+
+**`L` against `l` and `1`.** The old fixture rendered the SEQ as 46 `s`. The
+single most important reading this project has taken — `ssssssssssssssssssLLLsLL…`
+— is a discrimination between `L`, `l` and `1` inside a band of hex GUIDs, and no
+test in the scaffold could fail on it or pass on it. It now renders the real
+string, and `selftest` exits with a named reason if the fixture stops mixing the
+two letters.
+
+**The wrap.** No line in the old fixture reached 90 columns, so the console's
+wrap was untested — and the wrap is what puts half of `P2 RETRY` and the tail of
+`P2 APRI first=` on an unlabelled row of their own. Two of the new lines exceed
+the console, and `selftest` exits if none does.
+
+The wrap needed a model of the console's layout in *text*, because `decode`
+returns one row per row of the panel, not one row per printed line. `console_rows`
+is that model: the leading-space skip, the break at `columns`, and the wipe as a
+truncation to the last `PANEL_ROWS`. It is written as a second spelling of
+`console_render`'s rules rather than sharing code with them, and `selftest`
+renders its rows back through `console_render` and requires the ink to be
+identical — so if the two models drift, the scaffold says so instead of blaming
+the decoder. At zero degrees they agree exactly, and `decode` returns the same
+twenty-two rows with the same joins.
+
+### Where `bs9=` actually lands
+
+`tools/console-budget.py` could already say the RETRY line is one row or two
+depending on the six status names. That is not actionable, because the reading
+this project is gated on is `bs9=` — the fifth of the six — and "two rows" does
+not say which row it is on. The new `field_spans` walks a format the same way
+`render_width` does and reports the column span of every named field, and the
+mixes are now tabulated:
+
+* all six `Success` — 86 columns, one row, `bs9=` at columns 62–73;
+* all six at the status this run produced (`Out of Resources`) — 140 columns,
+  two rows, **`bs9=`'s name at column 98**, on the second row, with its value
+  running to 118 and the first row ending mid-`rd16=`;
+* all six at the widest (`Security Violation`) — 152 columns, `bs9=` at 106.
+
+So on the observed status the field name is not on the line's first row at all.
+That is the arrangement the fixture now reproduces, and the reason a reader who
+reads only the RETRY line's first row reads no `bs9=`.
+
+### The decimation was applied to the frame, and it cost whole rows
+
+`load_photo` cut any picture whose long side exceeded 3000 px down to 3000 before
+anything else looked at it, and the stated reason was sound — the alignment's
+cost is linear in pixels and no glyph needs more. What it missed is that the
+photograph is mostly wall. The bound was being spent on the background around the
+screen, so the *text* was sampled at whatever resolution was left over.
+
+Measured through the CLI on one saved photograph — the scaffold's own render,
+padded, tilted 2.5°, 2380x5080 px, text block 2207x1137:
+
+| pipeline | cell | rows | characters wrong | flagged weak |
+|---|---|---|---|---|
+| decimate the frame to 3000 (before) | 14.2 px | 22 | **917** of 1064 | 129 |
+| decimate the block to 3000 (after) | 24.0 px | 22 | **1** | 46 |
+| no tilt, block (after) | 24.0 px | 22 | 0 | 49 |
+
+The before-case does not lose characters off the end of a line — it reads the
+continuation row of `P2 APRI first=…` as ``3-S3-E-J-F- | - `|`` where the console
+printed `31`, which is what a 14 px cell does to a 12-px glyph. `decimate` is now
+applied to the crop, and `load_photo` keeps only a memory guard (`MAX_FRAME`,
+6000 px) for the frame it still has to threshold whole. The coupling that bounds
+`MAX_SIDE` is recorded where the constant is: 3000 px over 90 columns is a 33 px
+cell, and the cell search looks from 0.4 to 3.0 cells, so anything past 3240 px
+would be looking at a cell its own estimator cannot describe.
+
+The scaffold itself bypasses `load_photo`, so this A/B is measured through
+`--decode` on a written PNG and not by `--selftest`; the scaffold's cases are
+decoded at the 2x-native cell of `make_photo` and never at the decimated one.
+That gap is real and is left open on purpose — closing it means a 27 Mpx render
+per case for one constant's worth of coverage.
+
+### The one failure no flag can reach is ink against the edge of the frame
+
+Everything above is a failure the instrument reports. There is a failure it cannot
+report at all, and the same A/B produced it: if the text block runs off the
+photograph, the missing characters are not in the image, so there is nothing to
+be doubtful about. The crop that precedes decoding has a cell of margin inside
+the ink, so ink touching the border of the cropped block is unambiguous evidence
+that the block was cut rather than that the margin is thin.
+
+Measured by decoding this tool's own unpadded render — `/tmp/p2screen-2p5.png`,
+1080x2400 with text at x=0, which `--render-file` writes and which is therefore
+exactly the picture a careless shot of the glass produces:
+
+| picture | rows | characters wrong | flagged weak |
+|---|---|---|---|
+| `p2screen-2p5.png`, ink at x=0 | 21 | **937** of 1064 | 60 |
+| `p2photo-2p5.png`, padded by (110, 140) | 22 | **1** | 46 |
+
+The clipped one loses a row outright and every row's leading characters: `P2
+RETRY` reads as `ETRY`, `P2 APRI` as `PPl`, and the tool says nothing — it
+returns its rows and its flags as though the picture were complete. That is the
+same magnitude as the decimation bug and it is worse in kind, because the
+decimation at least produced characters that were wrong in place. So `--decode`
+now checks the cropped block's four borders for ink before it decodes anything,
+and names the one thing the reader can do about it: re-shoot with the whole
+screen inside the frame. Confirmed to fire on the clipped picture and to stay
+silent on the padded one, which is the only pair of photographs that can test it.
+
+### The softening ladder never engages, and forcing it is worse
+
+`decode` picks one glyph-template softness for the whole picture from a ladder of
+three: the font, and two softened copies written to model lens defocus. Measured
+on the scaffold's own probe, it picks **`soft0` at every blur radius the scaffold
+can make** — from a clean render to r=6, including r=4 and r=6, where the decode
+has already collapsed to 840 and 1042 wrong characters. The lead narrows with
+blur (soft0 beats soft1 by 10,300 on the probe at r=0 and by 1,155 at r=6) and
+never closes.
+
+Forcing the choice answers the other question, and answers it against the ladder:
+at r=1, where the shipped pick decodes exactly, forcing `soft1` costs **1051**
+characters and `soft2` **1058**; at r=4, where the sharp pick is already failing
+with 840, they are worse at 1006 and 1019. So the softened copies have never been
+observed to help in any condition the scaffold can produce, and the sharp font
+winning is load-bearing rather than a formality. They are kept, not deleted: a
+real photograph blurrier than r=3 is the case that would settle it, and no
+photograph has been read yet.
+
+One measurement of my own was wrong before it was right, and it is recorded
+because it failed in the direction of a finding. The first probe accumulated
+every `score_cells` call tagged by softness level, which mixes `align`'s bulk
+scoring into the total, and it reported that `soft0` loses by a factor of 28 —
+i.e. that the ladder was silently in use with the wrong rung. Counting each
+level's *first* run of same-sized calls, which is the pick and nothing else,
+reverses it. A probe that answers a question about a closure has to be checked
+against what the closure does, not against what it plausibly does.
+
+### What is left wrong, and why it is reported rather than fixed
+
+The corrected scaffold decodes **9 of 11** degraded photographs exactly. Both
+failures are one glyph wide and both are the same glyph:
+
+* **2.5° off level** — one character, `rd16=Out of Resources`'s `R` read as `P`,
+  on panel row 16 at column 89.
+* **all of it** (glare, noise, blur, 1.5° tilt, a 2% zoom and a shift together) —
+  three characters: `P2 APRI`'s `R` read as `P` and its `I` as `l`, and one `P`
+  read as `|`.
+
+`R` and `P` differ by four pixels: the diagonal leg at rows 6 to 9,
+`#.#..`/`#..#.`/`#...#`/`#...#` against `#....`/`#....`/`#....`/`#....`. Those
+four are the only pixels in the glyph with no inked neighbour, and one 3-tap pass
+of `soften` puts them at 0.562, 0.375, 0.625 and 0.562 — straddling the half-ink
+line — with a second pass taking all four under it (0.492, 0.344, 0.473, 0.410).
+`R` is the letter this device's status line is made of: `Out of Resources`, six
+times on the RETRY line alone.
+
+So the residual is real and it is characterised. What changed is not the decode
+but the report: `decode` now records the runner-up glyph at every doubtful
+position, and `--decode` prints it — the two rows below are verbatim from the
+tilted CLI run in the table above, and they carry three things at once: the wrap
+that puts `bs9=`'s name on a row with no label (`29 |sources bs9=…`), the twelve
+positions on the RETRY line that the tool is not sure of, and the one it is
+actually wrong about, at column 89, named as a choice between two glyphs:
+
+```
+   28 |P2 RETRY rc16=Out of Resources rc48=Out of Resources rc112=Out of Resources rd16=Out of Pe|   <- 12 weak: 19 (o or c), 25 (o or c), 41 (o or c), 47 (o or c), 64 (o or c), 67 (R or P), 70 (o or c), 79 (1 or l), 80 (6 or S), 82 (O or C), 86 (o or c), 89 (P or R)
+   29 |sources bs9=Out of Resources bs16=Out of Resources|   <- 4 weak: 17 (o or c), 23 (o or c), 39 (o or c), 45 (o or c)
+```
+
+and the selftest stops totalling "wrong" as one thing. Each differing character
+is classified: **flagged** if the decoder also marked it weak, **unannounced** if
+the decoder asserted it confidently. The tally for this scaffold is **4 differing
+characters, 4 flagged, 0 unannounced** — the decoder never once asserted a
+character the panel does not have. That is the distinction worth having, because
+an unannounced difference is a defect and a flagged one is the instrument saying
+which two glyphs to compare against the glass. The failures still count as
+failures: `--selftest` exits 1 and prints 9/11.
+
+| | |
+|---|---|
+| finds | the decoder's fixture was written from memory and **3 of its 8 lines** were formats this firmware cannot print — `promoted=`, `P2 BIN code=/data=/bs9=/bs16=`, `P2 FREE largest=16 MiB in …`. `bs9=` was being tested in a position it never occupies. The fixture is now 22 lines, each a real format string with this device's readings, cited to its `Dispatcher.c`/`Page.c` line |
+| coverage now asserted | the SEQ mixes `s` and `L` (the `L`/`l`/`1` discrimination the SEQ reading depends on); at least one fixture line exceeds the console's 90 columns (the wrap); the RETRY line exists; and `bs9=` starts at or past the column limit. `selftest` exits with a named reason if any is lost |
+| wrap model | `console_rows` gives the console's layout as text — leading-space skip, break at `columns`, wipe as a truncation to the last `PANEL_ROWS`. Verified by ink identity against `console_render`, and at 0° against `decode`: 22 rows, identical strings and joins |
+| `bs9=`'s row | `tools/console-budget.py --mu …` now reports field spans: at the observed status (`Out of Resources` ×6) the RETRY line is 140 columns and **`bs9=`'s name starts at column 98, on the second row**, with no label on that row. At six `Success` it is 86 columns and `bs9=` is at 62–73 on row 1 |
+| softness ladder | `decode` picks `soft0` at every blur radius 0–6, including radii where it is already failing (840 wrong at r=4). Forcing `soft1`/`soft2` costs 1051/1058 characters at r=1, where the shipped pick is exact. The copies are kept, not deleted, and are on record as never having been observed to help |
+| decimation | the 3000 px bound was applied to the frame, so it was spent on the wall around the screen and left a 14.2 px cell. Applied to the crop instead, the same 2.5° photograph goes from **917 wrong characters of 1064** to **1**. `MAX_FRAME` (6000 px) is now only a memory guard, and `MAX_SIDE`'s ceiling is recorded where the constant is: past 3240 px the cell exceeds 3.0 cells and the estimator can no longer describe it |
+| frame edge | a block that runs off the photograph loses characters that are not in the image, so no flag can reach them: this tool's own unpadded render at 2.5° decodes **937 wrong of 1064** with `P2 RETRY` reading `ETRY`, and says nothing. `--decode` now tests the cropped block's four borders for ink first and tells the reader to re-shoot |
+| residual | **9/11** exact, and through `--decode` on a realistic photograph the same tilt costs **1** character of 1064. The failures are the `R`-vs-`P` (or `I`-vs-`l`) confusion: `R`'s four leg pixels have no inked neighbour, and one soften pass puts them at 0.375–0.625, at the half-ink line |
+| what changed for the reader | `decode` returns the runner-up glyph at each doubtful position and `--decode` prints `89 (P or R)` instead of `89`; `selftest` classifies each differing character as flagged or unannounced and prints the tally — **4 flagged, 0 unannounced** on this scaffold |
+| wrong answer recorded | my own first probe reported that `soft0` loses the pick by 28× and the ladder was therefore in use with the wrong rung. It counted `align`'s bulk scoring as part of the pick. Counting each level's first run of same-sized calls reverses the result |
+| does not close | the P2 gate, and it cannot: no photograph of the panel has been read, and the device has not been attached to this host this session. `bs9=`, `P2 SEQ`, `P2 STATS discovered=` and the 27 `CoreLoadImage` failures all still need the glass |
+
