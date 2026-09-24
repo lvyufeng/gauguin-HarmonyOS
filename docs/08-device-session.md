@@ -6306,3 +6306,143 @@ pool-or-page), and `RETURN_LOAD_ERROR` from the loader's own guards (all clean).
 `EFI_DEVICE_ERROR` is produced nowhere in the path. **The live candidates are
 `EFI_OUT_OF_RESOURCES` and `EFI_NOT_FOUND`, and `P2 ERR` distinguishes them in one
 line.**
+
+## Step 4.40 — The reading stops being a transcription, and the decoder is honest about what it cannot do
+
+Every `P2 …` reading this phase has produced came from a person looking at the panel
+and typing back a row of characters. Steps 4.29, 4.31, 4.33 and 4.39 each cost a
+session that way, and 4.39 found why it kept costing them: the row a person *can*
+transcribe and the row that *answers the question* are different rows, and the build
+on the phone printed only the transcriber's row. A reader who mis-transcribes one `L`
+in a run of 46 `s` and `L` has no way to know, and neither does anyone reading the
+transcription afterwards.
+
+`tools/panel-text.py` removes the transcription. Its input is a photograph of the
+panel and its output is the text, and **everything it needs comes out of the sources
+rather than out of anyone's memory**: the 96 glyphs are parsed from `Font.h`, the
+cell size is computed from the same `PcdFrameBuffer*` and `FONT_WIDTH`/`FONT_HEIGHT`
+the firmware computes it from, and the drawing rules are transcribed from
+`FrameBufferSerialPortLib.c`. A font change or a panel change moves the numbers
+instead of silently invalidating them.
+
+### The font, decoded, because none of it is visible in the header
+
+`GlyphFont[]` is 96 `UINT64` constants and nothing in `Font.h` says how they are
+laid out. From `DrawGlyph` and `DrawRow`:
+
+  * `DrawGlyph` splits each constant into `TopGlyph = (UINT32)(Glyph >> 32)` and
+    `BottomGlyph = (UINT32)Glyph`. Rows **0–5** are `TopGlyph`, rows **6–11** are
+    `BottomGlyph`, five bits per row, `RowData >>= 5` between rows.
+  * `DrawRow` takes the **low** bit first and advances the cursor right, so within
+    each 5-bit group **bit 0 is the leftmost pixel**. Checked against the glyphs that
+    are not mirror-symmetric — `1`, `[`, `]`, `/`, `B`, `b` — because `0`, `A` and
+    `X` read the same either way and cannot settle it.
+  * The top half is 6 rows × 5 bits = 30 bits of a 32-bit dword, so **the top two
+    bits of `TopGlyph` are unused.** Read that as a fact before reading it as a bug.
+
+Geometry, computed rather than assumed: panel 1080×2400 → `FontScale` 2 → **90
+columns × 100 rows**, **12×24 px per cell**, of which the left **10 px** carry ink
+(the 12th column of each cell is the inter-character gap, and `DrawGlyph`'s stride
+arithmetic is what puts it there). Three console rules decide how a reading is taken,
+and all three are read off `WriteFrameBuffer` and `AdvanceNewLine`:
+
+  * **It wraps at 90 columns.** A line longer than the panel is not truncated and not
+    lost — it costs a second row. The `P2 RETRY` line is the only digest line that can
+    exceed 90, which is why `tools/console-budget.py` says to read the row below it.
+  * **It wipes rather than scrolls.** `AdvanceNewLine` past the last row calls
+    `ZeroMem` on the whole framebuffer, so the panel holds the *last* 100 rows of
+    output and never the first.
+  * **A leading space is skipped.** `if (CurrentPosition->XPos == 0 && Character ==
+    ' ') return;` — so a line that begins with a space is drawn one cell to the left of
+    where its source string puts it. This is why the decode is compared against
+    `--render` output and not against the format string.
+
+### Five wrong readings, each of which looked like a right one
+
+`--selftest` renders text through the console model, places it in a larger black
+scene the way a phone appears in a photograph, applies the degradations a hand-held
+photograph has, and requires the text back exactly — each degradation alone and then
+all of them together. It went **0 of 11 → 11 of 11** over the two sessions it took to
+build, and the distance is the useful part, because every failure in it was a
+plausible wrong answer rather than a crash:
+
+| symptom | what was actually wrong | measurement |
+| --- | --- | --- |
+| `P` and `2` decoded as `\|--l … }\|` while the report said `dx=0` | `score_rows` returned the scores of the *last* `dx` tried, not the winner's — it sampled `x0+3` and reported `dx=0`, and a 3-px shift lands inside the next cell | `dx` searched `x0±3`; glyph boundaries are 12 px apart |
+| alignment impossible to move, answer frozen at the estimate | `align` initialised `best` to a score measured at magnification **1.0** labelled as `mag0`; when the estimate was wrong the answer was compared against a number it could never beat | returned `mag0` four decimals deep on a case whose truth was 1.00 |
+| `P2 SEQ` decoded as `P7 ##W [####…]` | `normalise` used the *mean* of the above-threshold pixels as white; on a blurred picture most of those are half-lit edges | white read 0.29 against a true 1.0, saturating the strokes **and** the gaps |
+| sampling preferred the space beside the text | the objective `sum_k [ t·c + (1-t)·(1-c) ]` has a constant 60 per cell and the term that varies is 4% of the total; it rewards sampling *more* ink, so row 1 of a tilted screen chose an empty band while rows 2–8 decoded exactly | fixed by expanding the squared distance: per-cell value `max_g(2·sum_ink c − popcount_g) − sum(c²)` |
+| an empty panel row read as populated; the crop became the whole scene | `ink > 0.5` fires on sensor noise and on the faint edge of a stroke; on the combined scene the crop read **2679×1277** — the entire photograph — and every alignment score fell under 0.07 | replaced by a 3×3 box mean (`lit_mask`) |
+
+Two more came out of the same bench and are worth separating from the decoder,
+because neither was a decoder bug:
+
+  * **The last character of a line was being dropped.** The columns to decode were
+    `np.arange(90)` — the panel's width — anchored at the grid's phase. The crop puts
+    one cell of margin around the text and the warp then re-centres whatever it was
+    given, so the text starts at an arbitrary cell: measured, a 60-character `KEY` /
+    `K 19 Ss` row landed in cells 30–89 on a clean screen and in cells **31–90** once
+    the alignment came out one pixel over, and cell 90 is not in `arange(90)`. The
+    row came back 59 characters long. **The columns now come from where the ink is**,
+    and the last character of a `KEY` line is the most important one on the panel.
+  * **The scaffold was testing a resolution no photograph of this phone will have.**
+    It rendered the panel at one photograph pixel per panel pixel, where a glyph
+    stroke is two pixels wide and a blur of radius 2 deletes it before the decoder
+    runs — which is why `lens blur r=2` decoded to `''` with the alignment *correct*
+    to 0.04° and 1.000×. A photograph has the panel at two to three pixels per panel
+    pixel; `make_photo(scale=2)` is that, and it turned three failures into passes
+    without the decoder changing at all.
+
+**11 of 11, exactly, in 2m06 on this host.** The last degradation to fall was
+`all of it` — blur, a 5% brightness ramp, sensor noise at σ=0.2, a 1.5° tilt and an
+offset together — and it fell to the white-level rule, not to the alignment: with
+σ=0.2 the above-threshold class is *mostly noise*, Otsu split the noise at 0.131, the
+90th percentile of that class read 0.472 against a true white of 1.0, dividing by it
+inflated the noise 2.1×, and the background then read as 0.7 of white everywhere. The
+white level is now the **mean of the brightest 1% of the above-threshold pixels** —
+the robust maximum of that class — which measures 1.000 on the clean scene, 0.813 at
+blur radius 2 and 0.842 on the combined scene, and decodes all three. The top 0.1% is
+too high (0.866 at blur 2, which then loses the first row), so it is deliberately the
+top percent and not the top of the distribution.
+
+### What the tool says when it is not sure, which is the point of it
+
+On a deliberately hard synthetic photograph — blur 1.6, a 15% ramp, noise, a 1.5°
+tilt, an offset — the CLI returns all eight rows correctly **and** flags 57 of their
+411 characters as below `--min-margin`, with the position of each within the line:
+
+```
+    7 |KEY 27/46 err=Out of Resources at=18 free=1024 miss=18|   <- 9 weak: chars [9, 19, 22, 25, 35, 36, 43, 53, 54]
+    8 |K 19 Ss 19/46 free=1024 6D6F6475-6C65-0000-0000-000000000000|   <- 8 weak: chars [3, 9, 13, 20, 25, 27, 34, 36]
+```
+
+and exits 1. The margin is the gap between the best glyph and the runner-up, so a
+flagged position is one where two glyphs explain the cell almost equally well; the
+tool's own instruction is to read those positions against `--render` rather than off
+the decode. **A tool that returned the text without saying this would be worse than
+no tool**, because the failure it is there to prevent is exactly a confident wrong
+reading.
+
+The one thing it does *not* claim: the alignment's own estimate of the cell phase can
+be one pixel off on a blurred picture (measured, the blur-2 case reads phase 0 where
+the clean case reads 11), and the decode is insensitive to that because the ink
+plateau is 10 of the 12 pixels of a cell. `--grid-check` is what to look at when a
+decode is wrong in a way this does not explain.
+
+### The device-side reading is unchanged, and it is still the bottom of the panel
+
+Nothing here changes what the phone is doing, and the two requests are the same two:
+
+```
+tools/probe-fingerprint.py --read        # in TWRP: which payload is actually on `boot`
+tools/panel-text.py --decode PHOTO.jpg   # boot it, photograph the bottom of the panel
+```
+
+  * **`P2 SEQ` present with no `P2 ERR` anywhere on the panel** ⇒ the payload is
+    `boot-now-0923`, and no reading of that screen can produce a status.
+  * **`P2 RETRY` as the last populated row**, or any `Loading driver at …` row ⇒ the
+    `p2-4.20`-class build, and the newest flash did not take.
+  * **`P2 ERR <name> x<count>`** is the row that decides one global cause against
+    twenty-seven, and `KEY <errors>/<promoted> err=<name> at=<i> free=<pages>
+    miss=<i>` is the bottom row on `p2-variants` in every state.
+  * **Read the panel before flashing anything else.** The ring holds one boot.
