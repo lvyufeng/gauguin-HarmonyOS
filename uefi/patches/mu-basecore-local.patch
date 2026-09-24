@@ -1545,10 +1545,10 @@ index 84b1ee80..474fbd60 100644
    return EFI_SUCCESS;
  
 diff --git a/MdeModulePkg/Core/Dxe/Mem/Page.c b/MdeModulePkg/Core/Dxe/Mem/Page.c
-index 928fecb2..554ca91f 100644
+index 928fecb2..190255fa 100644
 --- a/MdeModulePkg/Core/Dxe/Mem/Page.c
 +++ b/MdeModulePkg/Core/Dxe/Mem/Page.c
-@@ -1042,6 +1042,259 @@ CoreFindFreePagesI (
+@@ -1042,6 +1042,263 @@ CoreFindFreePagesI (
    return Target;
  }
  
@@ -1758,12 +1758,16 @@ index 928fecb2..554ca91f 100644
 +// drop it from two copies on the panel to one. The second line is therefore omitted
 +// rather than spelled when there is no image-sized failure to describe, and `n` is
 +// left to carry the rest: `n=0` is no terminal FindFreePages failure in the whole run,
-+// which is the one answer that puts the fault outside this file - CoreLoadPeImage's
-+// other EFI_OUT_OF_RESOURCES is a 200-byte AllocateRuntimePool, and a pool request
-+// that size cannot reach FindFreePages unless the pool heads are empty, so `n=0`
-+// beside 27 recorded `L`s names the pool. `n` above zero with no second line is
-+// terminal failures that were all smaller than four pages, which is a different
-+// answer again. Both cost nothing to say.
++// which is the one answer that puts the fault outside this file. There are two
++// EFI_OUT_OF_RESOURCES out there and they are not the same one. Image.c:1393's is a
++// 200-byte AllocateZeroPool (sizeof (LOADED_IMAGE_PRIVATE_DATA)) in CoreLoadImageCommon,
++// a boot-services pool, so it shows as `t=4`. Image.c:795's is AllocateRuntimePool
++// (FixupDataSize) in CoreLoadPeImage, a runtime pool, so it shows as `t=6`; FixupDataSize
++// is four times the PE relocation directory, which is 16,384 bytes for the two subsystem-12
++// blobs in this payload. Neither reaches FindFreePages unless its pool head is empty, so
++// `n=0` beside 27 recorded `L`s names a pool - and `t=` is what says which. `n` above zero
++// with no second line is terminal failures that were all smaller than four pages, which is
++// a different answer again. Both cost nothing to say.
 +//
 +// What the second line describes is now guaranteed to be a real request. It was not
 +// before: the ladder's own failed rungs reached P2FreeWhy too, and the first of them
@@ -1808,7 +1812,7 @@ index 928fecb2..554ca91f 100644
  /**
    Internal function.  Finds a consecutive free page range below
    the requested address
-@@ -1127,6 +1380,14 @@ FindFreePages (
+@@ -1127,6 +1384,14 @@ FindFreePages (
    // If allocations from the preferred bins fail, then attempt to promote memory resources.
    //
    if (!PromoteMemoryResource ()) {

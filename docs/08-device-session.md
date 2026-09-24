@@ -7106,7 +7106,7 @@ must be one of these, and `t` says which family:
 | slot | entry | `np` | `t` | | slot | entry | `np` | `t` |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | 19 | `RpmhDxe` | 16 | 3 | | 33 | `SPMI` | 11 | 3 |
-| 20 | `PdcDxe` | 9 | 3 | | 34 | `ResetSystemRuntimeDxe` | 96 | 5 |
+| 20 | `PdcDxe` | 9 | 3 | | 34 | `ResetSystemRuntimeDxe` | **112** | 5 |
 | 21 | `ClockDxe` | 47 | 3 | | 35 | `PmicDxe` | 34 | 3 |
 | 23 | `ScmDxe` | 12 | 3 | | 36 | `WatchdogTimer` | 9 | 3 |
 | 24 | `DiskIoDxe` | 12 | 3 | | 37 | `SecurityStubDxe` | 14 | 3 |
@@ -7124,6 +7124,17 @@ must be one of these, and `t` says which family:
 `FixupData` pool, and it can then only be `np=5` — `SdccDxe`'s load, at slot 27, whose image pages
 were allocated and then freed at `Done:` (`Image.c:946-950`) on the way out. A `t=4` row means the
 failure was a pool chunk and not an image load at all.
+
+> **Corrected in step 4.46.** Slot 34's `np` read 96 here and is 112. `Image.c:682-688` makes
+> `SizeOfImage` the whole story only when `SectionAlignment` is `0x1000`; above that the request is
+> `EFI_SIZE_TO_PAGES (SizeOfImage + SectionAlignment)`, and `ResetSystemRuntimeDxe` is a
+> `0x10000`-alignment module with `SizeOfImage` 393216, so `(393216 + 65536) / 4096 = 112`. The row
+> directly above it, slot 31 `VariableRuntimeDxe`, has the identical pair of values and was already
+> 112, which is what makes this a transcription slip rather than a formula error in the table. It
+> costs a distinction the table exists to draw: `t=5` at 96 names one of `EmbeddedMonotonicCounter`,
+> `RealTimeClock` or `CapsuleRuntimeDxe`, `t=5` at 112 names `VariableRuntimeDxe` or
+> `ResetSystemRuntimeDxe`, and 96 for slot 34 collapsed that pair into the wrong group. `tools/pe-facts.py`
+> prints the two inputs and this cell is the only one of the 27 whose arithmetic disagrees with them.
 
 `n` counts every failed page search of any size, because the tally at `Page.c:1182-1183` runs before
 the size filter at `:1185`; the ladder's probes are excluded from it by the guard at `:1167-1170`,
@@ -7241,6 +7252,16 @@ of the payload that identifies `p2-freewhy-g` — staged, gated and waiting to b
 defects are recorded in the table above and not fixed, under 4.42's rule: a source edit invalidates
 the hash of an artifact that was measured, and re-measuring is only worth what it costs when the
 artifact is the one about to be flashed.
+
+> **One of the two was fixed in step 4.46, and the rule was read rather than broken.** The rule's
+> reason is the hash of the staged payload. A comment is not in the binary, so a comment-only edit
+> that does not rebuild leaves that hash alone, and step 4.46 checked both ends rather than assuming
+> it: `sha256` on `work/out/p2-freewhy-g/Mu-gauguin-silicon-gzip.img` is still
+> `cbe5a131…e0102132`, and `tools/probe-fingerprint.py --expect P2FreeWhy` on it still exits 0 with
+> all ten instruments present. No build was run and nothing was re-staged. What 4.43's sentence
+> conflates is *editing* with *rebuilding* — a rebuild moves the FV header's timestamp whatever the
+> edit was, so the rule is about rebuilds and this was not one. Which of the two defects this is, and
+> why 4.43's own diagnosis of it was wrong, is in step 4.46.
 
 ### The bin question, now bounded
 
@@ -7506,3 +7527,178 @@ fit alongside it. Which puts the whole of P3 behind the same reading P2 has been
 
 Nothing was flashed and nothing in the firmware changed. This step read an artifact that was already
 built and corrected two documents that described it wrongly.
+
+## Step 4.46 — `has_reloc=False` is not `RelocationsStripped`, and one cell of the decision table is 16 pages light
+
+### The arm that would have made the loads invisible, measured over the whole payload
+
+The line worth doubting is `Image.c:719-720`:
+
+```c
+if ((PcdGetBool (PcdImageLargeAddressLoad) && (Image->ImageContext.ImageAddress) >= 0x100000)) ||
+    Image->ImageContext.RelocationsStripped)
+```
+
+If either arm is true the load's page request becomes `AllocateAddress` at the image's *linked* base
+(`:722-727`), `FindFreePages` is never entered for it, `P2FreeWhy` is never called, and the census
+is blind to it. `PcdImageLargeAddressLoad` is TRUE here and not overridable — `AutoGen.h:214` in the
+generated build is `_PCD_VALUE_PcdImageLargeAddressLoad 1U`, and `:166` is
+`_PCD_VALUE_PcdLoadModuleAtFixAddressEnable 0ULL`, so the fixed-address branch at `:702` is dead and
+the `else` arm at `:719-736` is the live one. That leaves the address and the stripped flag as the whole
+question, and step 4.43 answered them for the 80 DRIVER files. This step answered them for
+everything the dispatcher can load:
+
+* **145** `.efi` under `Build/gauguinPkg/DEBUG_CLANGPDB/AARCH64` — `ImageBase 0x0` on every one,
+  `RELOCS_STRIPPED` clear on every one.
+* **55** blobs under `Binaries/gauguin` — the same, on every one.
+
+200 files, no exception. Mu-Silicium relinks the XBL blobs to base zero and rebuilds their
+relocation directories, which is what that directory is for, so the `>= 0x100000` arm is not merely
+false for the promoted 46 — **it is unreachable for any image this firmware will ever load**, and
+`PcdImageLargeAddressLoad` is a dead knob in both positions on this platform.
+
+### `RelocationsStripped` is a header bit, and `has_reloc` is a different field
+
+The second arm is the one that nearly got through, and it is the reason this step exists.
+`tools/pe-facts.py` prints a column called `has_reloc`, and it is `False` for four of the 46
+promoted entries: `StatusCodeHandlerRuntimeDxe` (slot 2, which starts), `EmbeddedMonotonicCounter`
+(38), `RealTimeClock` (39) and `CapsuleRuntimeDxe` (42) — three of the four among the 27 failures.
+An image with no base relocations *and* `RelocationsStripped` set would take the `AllocateAddress`
+arm at address 0, with no fallback to `AllocateAnyPages` (`:730`'s guard needs
+`!RelocationsStripped`). Read that way, `has_reloc=False` tracks the failure set and looks like the
+mechanism the whole P2 investigation has been looking for.
+
+It is not. `BasePeCoff.c:660-666` is the only place the field is assigned, and for a PE image it
+reads one file-header bit:
+
+```c
+if ((!(ImageContext->IsTeImage)) && ((Hdr.Pe32->FileHeader.Characteristics & EFI_IMAGE_FILE_RELOCS_STRIPPED) != 0)) {
+  ImageContext->RelocationsStripped = TRUE;
+} else if ((ImageContext->IsTeImage) && (Hdr.Te->DataDirectory[0].Size == 0) && ...) {
+  ImageContext->RelocationsStripped = TRUE;
+} else {
+  ImageContext->RelocationsStripped = FALSE;
+}
+```
+
+The second branch is TE images only, and nothing in this payload is a TE image. So for all 46 the
+question is `Characteristics & 0x0001`, and the tool's own `chars` column answers it: `0x2022` for
+`StatusCodeHandlerRuntimeDxe`, `EmbeddedMonotonicCounter`, `RealTimeClock` and `CapsuleRuntimeDxe`
+— executable, large-address-aware, debug-stripped, **bit 0 clear**. The comment above that code
+names this exact case: *"Image has no base relocs, RELOCS_STRIPPED==0 => Image is relocatable but
+has no base relocs to apply."* That is what `has_reloc=False` means on these four, and it is the
+opposite of stripped.
+
+The consequence is one field further on. `FixupDataSize = DirectoryEntry->Size / sizeof (UINT16) *
+sizeof (UINT64)` (`BasePeCoff.c:1515`, and `:1521` for the TE case), so a zero-sized relocation
+directory gives `FixupDataSize = 0`, and `Image.c:793`'s `AllocateRuntimePool (0)` is a 40-byte pool
+chunk — a live allocation, but not a page request, and one that cannot return `EFI_OUT_OF_RESOURCES`
+unless the pool head is empty. So the `n = 0` closure step 4.43 proved is not disturbed by these
+four entries; they fail somewhere else.
+
+`has_reloc` is a true statement about the `.reloc` section and a false hint about
+`RelocationsStripped`; the two are different fields of different structures with different meanings,
+and the tool prints the one whose name suggests the other. Worth carrying into the reading on its
+own account: `pe-facts.py`'s per-field verdict table reports `shared` for every field it examines
+except `ffs_size`, so **no PE header field separates the 19 from the 27** — which is the host's own
+statement that the split is not a property of the files. The `chars` column is the one that would
+have, and it does not.
+
+### The one cell, and what a 16-page slip costs
+
+Writing the `np` values out from the tool's own two inputs found an error in 4.43's decision table.
+`Image.c:682-688` is:
+
+```c
+if (Image->ImageContext.SectionAlignment > EFI_PAGE_SIZE) {
+  Size = (UINTN)Image->ImageContext.ImageSize + Image->ImageContext.SectionAlignment;
+} else {
+  Size = (UINTN)Image->ImageContext.ImageSize;
+}
+Image->NumberOfPages = EFI_SIZE_TO_PAGES (Size);
+```
+
+so `SectionAlignment` joins the request only above `0x1000`. Six of the 27 are subsystem-12 runtime
+drivers, built at `0x10000` alignment:
+
+| slot | entry | `SizeOfImage` | `SectionAlignment` | 4.43 said | correct |
+| --- | --- | --- | --- | --- | --- |
+| 27 | `SdccDxe` | 106496 | `0x1000` | 26 | 26 |
+| 31 | `VariableRuntimeDxe` | 393216 | `0x10000` | 112 | 112 |
+| 34 | `ResetSystemRuntimeDxe` | 393216 | `0x10000` | 96 | **112** |
+| 38 | `EmbeddedMonotonicCounter` | 327680 | `0x10000` | 96 | 96 |
+| 39 | `RealTimeClock` | 327680 | `0x10000` | 96 | 96 |
+| 42 | `CapsuleRuntimeDxe` | 327680 | `0x10000` | 96 | 96 |
+
+`SdccDxe` is `0x1000`-aligned, so its `np` is `106496 / 4096` and the rule does not reach it. The
+other five are `SizeOfImage / 4096 + 16`: `393216 / 4096 + 16 = 112` and `327680 / 4096 + 16 = 96`.
+Slot 34 is the only one that disagrees, and the row directly above it — slot 31, with the identical
+pair of inputs and the identical expected output — was already 112. That is a transcription slip and
+not a second formula, and the table is corrected in place above rather than left for the reader.
+
+What it costs is the distinction the table exists to draw. A `t=5` row at 96 names one of
+`EmbeddedMonotonicCounter`, `RealTimeClock` or `CapsuleRuntimeDxe`; at 112 it names
+`VariableRuntimeDxe` or `ResetSystemRuntimeDxe`. With `ResetSystemRuntimeDxe` listed at 96, a panel
+reading of `t=5 np=112` would have excluded it, and a reading of `t=5 np=96` would have included it
+wrongly — in the one column that gets compared against a number printed on the screen.
+
+### The comment, fixed, and 4.43's diagnosis of it corrected
+
+4.43 recorded two comment defects and left both, on the ground that a source edit moves the hash of
+the payload staged as `p2-freewhy-g`. One of the two — the note above `P2FreeWhyReport` at
+`Mem/Page.c:1250-1256` — is now fixed, because it is part of how the panel gets read and because
+the ground does not apply: **nothing was rebuilt.** `sha256` on
+`work/out/p2-freewhy-g/Mu-gauguin-silicon-gzip.img` is still
+`cbe5a13114fc4a0465677e480a29a76fa2836cf2ae00fb9e9838c490e0102132`, and
+`tools/probe-fingerprint.py --expect P2FreeWhy` on it still exits 0 with all ten instruments present.
+Neither was assumed; both were run. What 4.43's sentence conflates is *editing* with *rebuilding* —
+a rebuild moves the FV header's timestamp whatever the edit was, so the rule is about rebuilds, and
+this was a comment. The correction is folded into `uefi/patches/mu-basecore-local.patch` by
+`tools/regen-mu-basecore-patch.sh`, which reverse-applies the result against the tree it came from.
+
+4.43's diagnosis of that defect was also wrong, which is worth recording because the wrong diagnosis
+is the reason it was left. 4.43 read the sentence as naming `CoreLoadPeImage`'s 48-byte
+`EFI_RUNTIME_IMAGE_ENTRY` pool at `Image.c:837`. The comment's "200-byte" is not that pool. It is
+`CoreLoadImageCommon`'s `AllocateZeroPool (sizeof (LOADED_IMAGE_PRIVATE_DATA))` at `Image.c:1393` —
+a different function from the one the sentence names, and a different pool type, `EfiBootServicesData`,
+so `t=4` where the runtime-entry pool would have been `t=6`. And the sentence omits the allocation
+that *is* `CoreLoadPeImage`'s other `EFI_OUT_OF_RESOURCES` on this path: `Image.c:793`'s
+`AllocateRuntimePool (FixupDataSize)`, whose status lands at `:795`, `t=6`. It is reachable, which 4.43 established, and the
+attribute that opens it is `Image.c:1629`:
+
+```c
+EFI_LOAD_PE_IMAGE_ATTRIBUTE_RUNTIME_REGISTRATION | EFI_LOAD_PE_IMAGE_ATTRIBUTE_DEBUG_IMAGE_INFO_TABLE_REGISTRATION
+```
+
+The comment now names both sites, both pool types, and the `t=` each one shows as.
+
+`FixupDataSize` for the two images that matter is also exact now rather than "the largest is 5
+pages". A 4,096-byte relocation directory is `4096 / 2 * 8 = 16384` bytes of fixup log;
+`CoreAllocatePoolI` then does `ALIGN_VARIABLE (Size) + POOL_OVERHEAD` (`Pool.c:409-411`), where
+`POOL_OVERHEAD = SIZE_OF_POOL_HEAD + sizeof (POOL_TAIL) = 24 + 16 = 40` (`Pool.c:24-32`, `:35-41`),
+giving 16424, and `EFI_SIZE_TO_PAGES (16424)` is 5. So **`t=6` means `np=5`, and the driver is
+`EnvDxe` (slot 0, which starts) or `SdccDxe` (slot 27)** — subsystem 12 is the gate at `Image.c:792`
+and no other subsystem-12 image in the payload has a relocation directory above 116 bytes. 4.43's conclusion,
+with the arithmetic shown instead of asserted.
+
+### What this step did not change
+
+`n = 0` still means no `EFI_OUT_OF_RESOURCES` out of an image load. Nothing here reopened it. The
+`AllocateAddress` arm is dead for all 200 images; the `RelocationsStripped` arm is dead for all 46
+promoted entries even though four of them have no `.reloc` section; `Image.c:697`'s preset is
+overwritten on every branch through `:697-742`; and the two pool sites fail only through
+`CoreAllocatePoolPages`, which is `FindFreePages`. Step 4.43 closed those by argument. This step
+went back to the two that were closed only by assertion — the address on every image, and the
+stripped flag on the four that look stripped — and both held, one of them after nearly going the
+other way.
+
+Nothing was flashed and no build was run. `P2 ERR` is still the first thing to read:
+
+```
+tools/probe-fingerprint.py --read        # in TWRP: must report p2-variants
+tools/panel-text.py --decode PHOTO.jpg   # boot it, photograph the bottom of the panel
+python3 tools/probe-fingerprint.py --expect P2FreeWhy \
+    work/out/p2-freewhy-g/Mu-gauguin-silicon-gzip.img   # passes; do this before flashing
+```
+
+The decision procedure above is unchanged. One of its 27 numbers is not.
