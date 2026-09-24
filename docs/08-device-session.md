@@ -6835,6 +6835,67 @@ strings diff above. `tools/console-budget.py` re-run says the two lines are 52 a
 columns and a digest copy is **49 rows** against a 99-row panel, so two copies still fit:
 `g=%d` cost nothing on the panel either.
 
+### The tool could not see the previous build, which is the build the sentence above is about
+
+That caveat was checked rather than asserted, and the check failed. `probe-fingerprint.py`
+resolves each instrument's marker out of the *current* sources and then searches the image
+for that literal — so the moment `P2 FWHY … c=%d` became `… c=%d g=%d`, the tool stopped
+recognising the build that carries the older spelling:
+
+```
+work/out/p2-freewhy/Mu-gauguin-silicon-gzip.img       P2FreeWhy  ABSENT   -> 9/10
+work/out/p2-freewhy-g/Mu-gauguin-silicon-gzip.img     P2FreeWhy  present  -> 10/10
+```
+
+The first line is false. `p2-freewhy` is where `P2 FWTY`/`P2 FWHY` were introduced, and it
+is the build whose screen the whole `g=` argument is about. A tool that says its tenth
+instrument is missing from it would send the next session looking for a payload that is
+already on disk — and the module's own docstring names this failure mode, one direction
+over: *"a stale marker reports an instrument absent that is present."* It arrived through
+the marker rather than through the search, because every edit to a format string orphans
+every image built before it.
+
+The fix is a second, weaker marker: the **head** of each literal, everything before its
+first `%`, tried only when the whole literal is not in the image, and reported as such —
+
+```
+work/out/p2-freewhy/Mu-gauguin-silicon-gzip.img    P2FreeWhy  present  in DxeCore (2 lines, head-matched)
+```
+
+— because "this image has the instrument in an older spelling" is a different statement
+from "present", and `g=` is what separates them.
+
+**The first version of that fix invented two instruments, and the mistake is worth the
+lines.** `P2Tick`'s literal is `K %d %c%c %d/%d free=%d %g`, so its head is the two bytes
+`K `, which appear in some body of almost every image. With `heads` unguarded, `p2-4.20`
+and its readback went from 7 of 10 to 8 of 10 — reporting `P2Tick` present in a build that
+has no `P2Tick` at all, and silently contradicting the tool's own ladder table two
+hundred lines above. The guard is that a head is kept only when it is **strictly longer
+than the token** it was resolved from, so a head match always states more than a token
+match would; where the guard rejects it, the literal stands in and that instrument stays
+exact-only. Re-measured over the five payloads of record and the archived readback, the
+ladder reads:
+
+| image | before this fix | after | what it is |
+| --- | --- | --- | --- |
+| `work/out/boot-now-0923.img` | 2/10 | 2/10 | `P2 FREE` + `P2 SEQ`, nothing else |
+| `work/out/p2-4.20/…` | 7/10 | 7/10 | step 4.25's build, on the phone until 15:04 |
+| `work/out/p2-variants/…` | 9/10 | 9/10 | **on the phone now** — flashed 15:04, read back identical |
+| `work/out/p2-freewhy/…` | **9/10** | **10/10** | 4.41's build; the ` ABSENT` was the bug |
+| `work/out/p2-freewhy-g/…` | 10/10 | 10/10 | the payload this step stages |
+| `work/out/boot-readback-0924.bin` | 7/10 | 7/10 | the 15:02 control read, identical to `p2-4.20` |
+
+Three gates, run to make sure the weakening did not go the other way: `--expect P2FreeWhy`
+passes on `p2-freewhy-g` at exit 0 and **fails** on `p2-variants` at exit 1, and
+`--expect P2Tick` fails on `p2-4.20` at exit 1.
+
+Which also settles what is on the phone, from the archive and without it: step 4.33's
+commit records the readback at 15:02 as `p2-4.20` over its whole length and then `p2-variants`
+flashed to `sde55` at 15:04, read back identical. Every readback taken since — the empty
+`work/out/boot-readback.bin` at 21:43 is the only one — came back at zero bytes. So the
+payload whose screen is owed is `p2-variants`, and `--read` in TWRP should say so; if it
+says `p2-4.20`, the 15:04 flash did not take, and that is itself the finding.
+
 ### The line numbers this step's edits moved
 
 The doc's citations were stale by the probes' own growth, and this step's edits moved them

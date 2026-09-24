@@ -168,11 +168,13 @@ INSTRUMENTS = [
      "one row per attempted dispatch, so a run that stops inside the loop says where"),
 ]
 
-# The ladder, in the order the rows appear on the panel. Three payloads of record
-# were built before `P2FreeWhy` existed, so the column is 'no' for all three and the
-# 10-rung rung is unbuilt until the next one - which is the point of `--expect`.
-# `P2 FW` is what a build has to carry before the free map at the failure is worth
-# a flash: see docs/08-device-session.md, step 4.18 onward.
+# The ladder, in the order the rows appear on the panel. The three payloads of record
+# were built before `P2FreeWhy` existed, so its column is 'no' for all three. It is
+# built now, in `work/out/p2-freewhy` and `work/out/p2-freewhy-g`, which are the first
+# two rungs of the ladder to carry all ten - and the first two that need the head
+# markers in `resolve_markers()`, since the second build's `P2 FWHY` literal is not the
+# first's. `P2 FW` is what a build has to carry before the free map at the failure is
+# worth a flash: see docs/08-device-session.md, step 4.18 onward.
 
 
 def literal_unescape(raw):
@@ -272,7 +274,29 @@ def resolve_markers():
             sys.exit(f"probe-fingerprint: no line in {func}() contains {token!r}."
                      f" The source moved; the marker is stale, and a stale marker"
                      f" reports an instrument absent that is present.")
-        resolved.append((name, src, func, hits, note))
+        # The head of each literal - everything before its first conversion
+        # specifier - is a second, weaker marker, kept for the case that makes
+        # this tool worth having. A format string gets edited in this phase about
+        # as often as anything else does, and every such edit orphans the literal
+        # the older payloads were built with: `P2 FWHY ... c=%d` became
+        # `... c=%d g=%d` in step 4.42, after which an exact-literal-only match
+        # reported the *previous* build - which does carry the instrument - as
+        # ABSENT. That is this module's own warned-about failure mode arriving
+        # through the marker instead of through the search.
+        #
+        # A head is only kept when it is strictly longer than the token, so a
+        # head match always says more than a token match would. Without that
+        # guard the fallback invents instruments: `P2Tick`'s literal is
+        # `K %d %c%c %d/%d free=%d %g` and its head is the two bytes `K `, which
+        # match some body in almost any image - measured, it made `p2-4.20` and
+        # its readback report `P2Tick` present, in a build that has no `P2Tick`
+        # at all. Where the guard rejects the head, the literal itself is used,
+        # which leaves that instrument exact-only and is the honest answer.
+        heads = []
+        for lit in hits:
+            head = lit.split(b"%", 1)[0]
+            heads.append(head if len(head) > len(token_b) else lit)
+        resolved.append((name, src, func, hits, heads, note))
     return resolved
 
 
@@ -303,14 +327,24 @@ def instruments_in(img, markers, verbose=True):
                                  f" decompressible FVMAIN - nothing to fingerprint")
 
     where, found = {}, set()
-    for name, _src, _func, marker, _note in markers:
-        for (g, _t, s, nm, _st), o in zip(files, offs):
-            body = inner[o:o + s]
-            if all(lit in body for lit in marker):
-                found.add(name)
-                where[name] = f"{nm or g} ({len(marker)} line{'s' if len(marker) > 1 else ''})"
-                break
-    missing = {n for n, _s, _f, _m, _n2 in markers} - found
+    for name, _src, _func, marker, heads, _note in markers:
+        # Exact first, then the heads: see resolve_markers() for why there are
+        # two, and note that a head match is *reported*, not silently accepted -
+        # "this image has the instrument in an older spelling" is a different
+        # statement from "present", and the difference is the whole reason the
+        # `g=` field exists.
+        for exact, tag in ((marker, ""), (heads, ", head-matched")):
+            for (g, _t, s, nm, _st), o in zip(files, offs):
+                body = inner[o:o + s]
+                if all(lit in body for lit in exact):
+                    found.add(name)
+                    plural = "s" if len(exact) > 1 else ""
+                    where[name] = f"{nm or g} ({len(exact)} line{plural}{tag})"
+                    break
+            else:
+                continue
+            break
+    missing = {n for n, _s, _f, _m, _h, _n2 in markers} - found
     return found, missing, where, None
 
 
@@ -362,7 +396,7 @@ def main():
     if args.markers:
         print("markers read from the sources under"
               f" {os.path.relpath(DXE, ROOT)}\n")
-        for name, src, func, marker, note in markers:
+        for name, src, func, marker, _heads, note in markers:
             print(f"  {name:10s} {os.path.relpath(src, DXE)}  {func}()")
             print(f"  {'':10s} {len(marker)} line"
                   f"{'s' if len(marker) > 1 else ' '}  {marker[0]!r}"
@@ -384,7 +418,7 @@ def main():
         sys.exit("probe-fingerprint: give an image, or --read to take one off the"
                  " phone. `--markers` prints what the names mean.")
 
-    names = [n for n, _s, _f, _m, _n in markers]
+    names = [n for n, _s, _f, _m, _h, _n in markers]
     bad = 0
     for img in images:
         if not os.path.isfile(img):
