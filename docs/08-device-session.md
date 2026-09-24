@@ -6098,3 +6098,78 @@ The decoder is a host tool and its input is a string; it changes nothing about w
 the phone is doing. **The pending reading is unchanged and is still the bottom of
 the panel** — the `KEY` row and the `P2 WHY` row under it. What has changed is that
 neither of them now requires anyone to write down a GUID.
+
+## Step 4.38 — The one loader failure that memory cannot explain is also not happening, and it is measured over the bytes
+
+Step 4.37 left the 27 `L`s with a verdict — not room — and no mechanism. There is
+exactly one failure inside `CoreLoadPeImage` that is neither memory nor the image's
+own headers, and it was the last candidate standing on the host's side of the
+panel, so it is worth closing by measurement rather than by argument.
+
+**The mechanism, from the source.** `PeCoffLoaderRelocateImage` walks each base
+relocation record and switches on the top four bits of the word
+(`BasePeCoff.c`, `switch ((*Reloc) >> 12)`). Five codes have their own `case`:
+`0` `ABSOLUTE`, `1` `HIGH`, `2` `LOW`, `3` `HIGHLOW`, `10` `DIR64` — and **every
+other code falls to `default:`**, which calls `PeCoffLoaderRelocateImageEx` and
+returns its status when it fails. On AArch64 that function is
+`MdePkg/Library/BasePeCoffLib/PeCoffLoaderEx.c`'s first entry, and its whole body is
+`return RETURN_UNSUPPORTED;`. `BasePeCoffLib.inf` binds that file for
+`Sources.AARCH64`, so on this platform it is the function that is compiled in. One
+relocation of any other type therefore fails the *entire* load with
+`EFI_UNSUPPORTED` — letter `U` in `P2 WHY` — before `CoreAllocatePages` is ever
+reached. It is a mechanism that would produce any number of contemporaneous
+failures, it needs no allocator state at all, and it is invisible to every
+instrument in this project that watches memory. That is what made it worth
+chasing: `free=` cannot see it.
+
+**It is not happening.** The relocation blocks are bytes, so this is answerable from
+the image on the host. `tools/pe-facts.py` now walks them: for each promoted
+DRIVER it finds the `IMAGE_DIRECTORY_ENTRY_BASERELOC` directory (data directory 5),
+walks its blocks by their own `SizeOfBlock` fields, and collects the type code of
+every entry.
+
+- **measured over all 69 DRIVER entries of `work/out/p2-variants/Mu-gauguin-silicon-gzip.img`
+  (every entry of the Apriori array that resolves to a DRIVER), the set of
+  relocation types present is `{0, 10}`** — `ABSOLUTE` and `DIR64`, two of the five
+  the loader handles itself. **The unhandled set is empty.**
+- **over the 46 promoted entries alone it is the same `{0, 10}`, empty unhandled,
+  on both sides of the `s`/`L` split.**
+
+So the `default:` arm is reached by nothing in this volume. The AArch64 stub is
+compiled in and correct to exist, and no image in the run exercises it.
+
+**A correction, stated as one.** An earlier pass over this same question reported the
+type set as `{0, 1, 3, 10}`. That was wrong, and the reason is worth keeping: the
+earlier walk read the relocation words at an offset taken from the section order
+rather than by resolving the directory RVA through the section table. `ABSOLUTE`
+entries (`0`) are padding — the loader skips them and never touch a byte — and the
+`1`/`3` values came from words that were not relocation entries at all. The walk
+that is in the tool now bounds itself three ways: the directory must have a non-zero
+size, its RVA must resolve inside a section, and every block is stepped by its own
+`SizeOfBlock` and abandoned if that field would run past the directory. It is a
+strictly narrower set, and it is the set the loader would see. The exoneration does
+not depend on which reading is right — both leave the unhandled set empty — but the
+tool should print the number the loader acts on.
+
+**Four promoted images have no relocation directory at all**:
+`StatusCodeHandlerRuntimeDxe` (position 3), `EmbeddedMonotonicCounter` (37),
+`RealTimeClock` (38), `CapsuleRuntimeDxe` (41). This is worth naming because it was
+on the list of suspects for a different reason: a file with no `.reloc` cannot be
+rebased, and `CoreLoadPeImage` has a branch for exactly that. It is not the branch
+being taken. `IMAGE_FILE_RELOCS_STRIPPED` — bit 0 of `Characteristics`, the bit the
+loader actually branches on — is **clear on every one of the 80 DRIVER files**, and
+the tool prints both facts separately (`has_reloc` from the section table,
+`reloc_stripped` from the header) precisely so they stop being conflated. All four
+of these take `AllocateAnyPages` like everything else.
+
+**What this leaves.** The loader's failure surface is now enumerated rather than
+searched: `EFI_INVALID_PARAMETER` (a NULL or too-short file path),
+`EFI_UNSUPPORTED` (machine type, subsystem, or an unhandled relocation — the last now
+measured away), `EFI_NOT_FOUND` (`GetFileBufferByFilePath`), the security protocols
+(which are not installed here, because `SecurityStubDxe` is itself one of the 27),
+`EFI_OUT_OF_RESOURCES` (three allocation sites), and `RETURN_LOAD_ERROR` from the
+relocation guards. `EFI_DEVICE_ERROR` is produced nowhere in this path, and
+`RETURN_VOLUME_CORRUPTED` is returned by no PE/COFF loader function at all. The
+remaining live candidate is `EFI_OUT_OF_RESOURCES`, and **the panel is what
+distinguishes it from the rest**: `'R'` in `P2 WHY` is that status and nothing else,
+and it is one character wide.

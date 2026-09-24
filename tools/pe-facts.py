@@ -40,6 +40,29 @@ the file; `reloc_stripped` is what the loader does, and only the second is on th
 load path.  Both columns are printed, from their own sources, so the two cannot be
 conflated again.
 
+The one failure inside `CoreLoadPeImage` that is neither memory nor the image's own
+headers is the relocation *type*, and it is now measured here rather than argued.
+`PeCoffLoaderRelocateImage` switches on the top four bits of each relocation word
+and handles five codes; **everything else falls to `default:`, which calls
+`PeCoffLoaderRelocateImageEx`** - and on AArch64 that function is a stub whose body
+is `return RETURN_UNSUPPORTED;` (`BasePeCoffLib/PeCoffLoaderEx.c`, bound for
+`Sources.AARCH64` in that library's `.inf`).  A single unhandled relocation would
+therefore fail the whole load with `EFI_UNSUPPORTED` before `CoreAllocatePages` is
+reached, which is why no memory instrument in this project can see it.  Measured
+over every DRIVER entry of `work/out/p2-variants/Mu-gauguin-silicon-gzip.img`: the
+type set is `{0, 10}` - `ABSOLUTE` and `DIR64`, two of the five handled - and the
+unhandled set is **empty on both sides of the `s`/`L` split**.  `RELOC_HANDLED`
+names the five and `reloc_types`/`reloc_unhandled` carry the measurement.
+
+An earlier revision of this walk reported `{0, 1, 3, 10}`.  That reading took its
+offset from the section order instead of resolving the directory RVA through the
+section table, so it decoded words that were not relocation entries: `ABSOLUTE`
+entries are padding the loader skips, and the `1`/`3` values were not there.  The
+walk now requires a non-zero directory size, resolves the RVA inside a section, and
+steps each block by its own `SizeOfBlock`, abandoning it if that field would run
+past the directory.  Both readings leave the unhandled set empty - the exoneration
+does not turn on which is right - but the narrower one is what the loader sees.
+
 What is left, and what the tail of the output now measures, is the allocator
 side. **Ten** of the 46 promoted drivers are runtime drivers, and this tool said
 "every one" until that was checked against its own `subsys` column: the
@@ -136,8 +159,60 @@ FIELDS = [
     "SizeOfUninitializedData", "AddressOfEntryPoint", "BaseOfCode", "ImageBase",
     "SectionAlignment", "FileAlignment", "SizeOfImage", "SizeOfHeaders",
     "Subsystem", "DllCharacteristics", "SizeOfStackReserve", "SizeOfHeapReserve",
-    "NumberOfRvaAndSizes", "reloc_size", "has_reloc", "reloc_stripped", "sections",
+    "NumberOfRvaAndSizes", "reloc_size", "has_reloc", "reloc_stripped",
+    "reloc_types", "reloc_unhandled", "sections",
 ]
+
+# The base-relocation type codes this build's `PeCoffLoaderRelocateImage` can
+# apply on AArch64. The switch (`BasePeCoff.c`, the `switch ((*Reloc) >> 12)`)
+# handles exactly these five, and **everything else falls to `default:` and calls
+# `PeCoffLoaderRelocateImageEx`** - which on this architecture is
+# `MdePkg/Library/BasePeCoffLib/PeCoffLoaderEx.c`'s first function, an
+# unconditional `return RETURN_UNSUPPORTED;`. `PeCoffLoaderRelocateImage` passes
+# that straight back, `CoreLoadPeImage` takes `goto Done`, and the driver fails to
+# load with `EFI_UNSUPPORTED` - letter `U` in `P2 WHY`, and nothing to do with
+# memory. It is measured here because it is a property of the *bytes*, so no
+# allocator-side instrument in this project could ever see it, and a rebuild that
+# changed the toolchain could turn it on silently. The file's own `PeCoffLoaderEx.c`
+# is not empty: `PeCoffLoaderImageFormatSupported` lists ARM64 and is used; the two
+# relocation stubs beside it are what is unreachable, and only because no image in
+# this volume needs them.
+RELOC_HANDLED = {0, 1, 2, 3, 10}
+
+
+def base_reloc_types(body, nrva, opt, sects):
+    """(every base-relocation type code present, the ones the loader cannot apply).
+
+    Walked by RVA through the section table rather than by assuming the `.reloc`
+    section is last, because it is not on four of these images - they have no
+    relocation directory at all, and an offset guessed from the section order
+    would read the wrong bytes and report types from a `.pdata` table.
+    """
+    if nrva <= 5:
+        return "", ""
+    rva, size = struct.unpack_from("<II", body, opt + 0x70 + 5 * 8)
+    if size == 0:
+        return "", ""
+
+    def to_off(target):
+        for vaddr, vsize, praw, rsize in sects:
+            if vaddr <= target < vaddr + max(vsize, rsize):
+                return praw + (target - vaddr)
+        return None
+
+    start = to_off(rva)
+    if start is None or start + size > len(body):
+        return "?", "?"
+    seen, p, end = set(), start, start + size
+    while p + 8 <= end:
+        _blk, bsz = struct.unpack_from("<II", body, p)
+        if bsz < 8 or p + bsz > end:
+            break
+        for q in range(p + 8, p + bsz - 1, 2):
+            seen.add(struct.unpack_from("<H", body, q)[0] >> 12)
+        p += bsz
+    return (",".join(str(t) for t in sorted(seen)),
+            ",".join(str(t) for t in sorted(seen - RELOC_HANDLED)))
 
 
 def load_fv_inventory():
@@ -217,13 +292,21 @@ def parse_pe(body):
     if nrva > 5:
         reloc_size = u32(0x70 + 5 * 8 + 4)
 
-    sects, sv = [], e + 24 + optsz
+    sects, secnum, sv = [], [], e + 24 + optsz
     for i in range(nsec):
         b = sv + i * 40
         if b + 40 > len(body):
             break
         name = body[b:b + 8].rstrip(b"\0").decode("ascii", "replace")
+        # VirtualSize(8) VirtualAddress(12) SizeOfRawData(16) PointerToRawData(20).
+        # The address walk below wants the raw numbers; the string above wants the
+        # last one, because `SizeOfRawData` is the only size that bounds bytes that
+        # are actually in the file.
+        vsize, vaddr, rsize, praw = struct.unpack_from("<IIII", body, b + 8)
+        secnum.append((vaddr, vsize, praw, rsize))
         sects.append(f"{name}{struct.unpack_from('<I', body, b + 36)[0]:#010x}")
+
+    reloc_types, reloc_unhandled = base_reloc_types(body, nrva, o, secnum)
 
     return {
         "pe_size": len(body),
@@ -255,6 +338,9 @@ def parse_pe(body):
         # with `AllocateAnyPages` and the page-0 `AllocateAddress` path in
         # `CoreLoadPeImage` is taken by none of them.
         "reloc_stripped": (chars & 0x0001) != 0,
+        # Measured, not read off the header.  See `RELOC_HANDLED`.
+        "reloc_types": reloc_types,
+        "reloc_unhandled": reloc_unhandled,
         "sections": ",".join(sects),
     }
 
@@ -382,6 +468,38 @@ def main():
         print("  -> every promoted image takes the AllocateAnyPages branch; the "
               "page-0\n     AllocateAddress path is taken by none of them, so "
               '"no .reloc" above\n     is not a mechanism for any of the 27')
+
+    # The relocation *type* walk. The one failure in the PE/COFF loader that is
+    # neither memory nor the image's own headers: a base relocation whose type the
+    # AArch64 build cannot apply. `PeCoffLoaderRelocateImage` handles five codes and
+    # sends everything else to `PeCoffLoaderRelocateImageEx`, which on this
+    # architecture is a stub that returns `RETURN_UNSUPPORTED` - the whole load fails
+    # with `EFI_UNSUPPORTED`, letter `U`, and the allocator never sees it. This is
+    # the only measurement in this file that reads the bytes the loader walks, so it
+    # is the only one that could catch it; `RELOC_HANDLED` names the five codes.
+    print()
+    for tag, want in (("s", "s"), ("L", "L")):
+        seen, bad = set(), []
+        for r in rows.values():
+            if r[0] != want:
+                continue
+            if r[2]["reloc_types"] in ("", "?"):
+                continue
+            for t in r[2]["reloc_types"].split(","):
+                seen.add(int(t))
+            if r[2]["reloc_unhandled"]:
+                bad.append(f"{r[1]}({r[2]['reloc_unhandled']})")
+        print(f"base relocation types among the {want}: {sorted(seen) or 'none'} "
+              f"(loader applies {sorted(RELOC_HANDLED)})")
+        print(f"  -> unhandled: {bad if bad else '[]'} — "
+              f"{'NONE, so this is not a mechanism' if not bad else 'CHECK: the '
+                 'default arm is reached and the load fails EFI_UNSUPPORTED'}")
+    no_reloc = [r[1] for r in rows.values() if r[2]["reloc_types"] == ""]
+    print(f"promoted images with no relocation directory at all: "
+          f"{no_reloc if no_reloc else 'none'}")
+    print("  -> a file with no relocations is legitimately unbounded to load "
+          "anywhere; it is\n     not stripped (`reloc_stripped` above is the "
+          "bit that matters) and it is not\n     evidence about the other 27.")
 
     # The exact request, in promotion order: `CoreLoadPeImage` adds SectionAlignment
     # to ImageSize when it exceeds a page, then rounds to pages. This is the number
