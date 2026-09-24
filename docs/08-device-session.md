@@ -8267,3 +8267,304 @@ touched.
 | confirms | step 4.47's and 4.48's readings of the promotion loop, and the two-fates-not-four conclusion of 4.10 — for the right reason now rather than by way of a flag nothing reads |
 | does not close | the 27 `CoreLoadImage` failures, the missing XHCI host driver, and `P2 STATS discovered=`, which is still the field that decides where the 23 went |
 | citation rule | a `file.c:N` in this log is a claim about the patched tree at the revision current when it was written; `git log --follow -S` plus a reconstruction resolves it, and any source edit expires every number below it |
+
+## Step 4.50 — the USB host stack is three sibling blobs, and the 234 bytes that were read as PCI are the architectural set
+
+### The hole is real, and it is not an extraction gap
+
+`MdeModulePkg`'s `UsbBusDxe`, `UsbKbDxe` and `UsbMassStorageDxe` are in this
+firmware's `APRIORI.inc` (lines 75–77) and `DXE.inc` (103–105), and there is
+nothing underneath them. Those three are the consumers: they bind to a
+`EFI_USB2_HC_PROTOCOL` that some host-controller driver is supposed to publish,
+and no driver in this phone's firmware publishes one.
+
+Measured, over the three bootloader images this project has already pulled off
+the device:
+
+| image | size | `xhci` (case-insensitive) | `usbfn` |
+|---|---|---|---|
+| `part-xbl.img` | 7,327,744 B | **0** | 1 |
+| `part-abl.img` | 2,097,152 B | 0 | 0 |
+| `part-ablbak.img` | 2,097,152 B | 0 | 0 |
+
+The negative is a measurement and not a broken search, which is what `usbfn` is
+there for: it is the device-mode (gadget) driver, a different job from the host
+controller, and the same scan finds it once. The same search finds `xhci` 21
+times in bitra's `XhciDxe.efi`, so a firmware that has a host controller is
+something this scan can see.
+
+### The sibling, and why it is bitra
+
+This is the one place in the port where a blob cannot come from this phone, and
+the reason is structural rather than an extraction gap: there is nothing to
+extract. The alternatives in the Mu-Silicium checkout are `Binaries/bitra/` and
+`Binaries/generic/`, and bitra is the SM7225 layer this platform is already
+built on — the generated `gauguin.dsc` includes `BitraPkg/BitraPkg.dsc.inc`
+(line 71 of the file as it stands now), with `SOC_TYPE = 0` for SM7225 — whereas
+`Binaries/generic/` is one directory shared across SM6150, SM8250 and SDM845
+boards and is the least likely of the two to match a register map. The three
+files, and their sizes:
+
+| file | size | module type (from its own INF) | `[Depex]` |
+|---|---|---|---|
+| `XhciPciEmulationDxe.efi` | 45,056 B | `DXE_DRIVER` | `DXE_DEPEX` section, 234 B |
+| `XhciDxe.efi` | 94,208 B | `UEFI_DRIVER` | none in the INF, none in the FFS |
+| `UsbInitDxe.efi` | 32,768 B | `DXE_DRIVER` | `DXE_DEPEX` section, 18 B |
+
+They are copied verbatim — INF, `.efi` and `.depex` together — and not through
+the `INF_TEMPLATE` that writes the other 55 packages. A templated INF would drop
+the depex and would drop `MODULE_TYPE = UEFI_DRIVER` on `XhciDxe`, which is the
+binding that makes it a bus driver rather than a DXE driver.
+
+### The 234 bytes, decoded, and the PCI reading withdrawn
+
+The prior session recorded that `XhciPciEmulationDxe`'s depex requires a PCI
+stack this firmware does not have, and concluded from that the depex could never
+be satisfied and a host bridge would have to be folded into the platform. That
+reading came from the name and from the `[Depex] TRUE` line in the INF. It was
+withdrawn here, and the bytes are the reason. The file is 234 bytes, which is
+13 × 17 + 12 + 1:
+
+```
+  221 B   thirteen PUSH ops, each a 16-byte GUID
+   12 B   twelve AND ops
+    1 B   one END
+```
+
+Thirteen pushes joined by twelve ands is a flat conjunction. Resolving each
+pushed GUID against the headers, every one of the thirteen lands in exactly one
+file under `Mu_Basecore/MdePkg/Include/Protocol/`, with no ambiguity and no
+second candidate:
+
+| # | GUID | header |
+|---|---|---|
+| 0 | `18A031AB-B443-4D1A-A5C0-0C09261E9F71` | `Protocol/DriverBinding.h` |
+| 1 | `665E3FF6-46CC-11D4-9A38-0090273FC14D` | `Protocol/Bds.h` |
+| 2 | `26BACCB1-6F42-11D4-BCE7-0080C73C8881` | `Protocol/Cpu.h` |
+| 3 | `26BACCB2-6F42-11D4-BCE7-0080C73C8881` | `Protocol/Metronome.h` |
+| 4 | `1DA97072-BDDC-4B30-99F1-72A0B56FFF2A` | `Protocol/MonotonicCounter.h` |
+| 5 | `27CFAC87-46CC-11D4-9A38-0090273FC14D` | `Protocol/RealTimeClock.h` |
+| 6 | `27CFAC88-46CC-11D4-9A38-0090273FC14D` | `Protocol/Reset.h` |
+| 7 | `B7DFB4E1-052F-449F-87BE-9818FC91B733` | `Protocol/Runtime.h` |
+| 8 | `A46423E3-4617-49F1-B9FF-D1BFA9115839` | `Protocol/Security.h` |
+| 9 | `26BACCB3-6F42-11D4-BCE7-0080C73C8881` | `Protocol/Timer.h` |
+| 10 | `6441F818-6362-4E44-B570-7DBA31DD2453` | `Protocol/VariableWrite.h` |
+| 11 | `1E5668E2-8481-11D4-BCF1-0080C73C8881` | `Protocol/Variable.h` |
+| 12 | `665E3FF5-46CC-11D4-9A38-0090273FC14D` | `Protocol/WatchdogTimer.h` |
+
+That is the standard architectural-protocol set plus `EFI_DRIVER_BINDING_PROTOCOL`
+— the same protocols the P2 investigation is already about, and eight of them
+are the eight providers that still fail (step 4.9). There is no PCI requirement
+in it, and nothing named `Pci*` anywhere in the list. No PCI host bridge is
+needed and none was added.
+
+Two smaller corrections from the same decode. The `[Depex] TRUE` in
+`XhciPciEmulationDxe.inf` is not what ships: the `[Binaries.AArch64]` block in
+that same file names `DXE_DEPEX|XhciPciEmulationDxe.depex`, and the built FFS
+carries that section at 234 bytes, byte-identical to the sibling's copy. And the
+earlier count of the conjunction was thirteen ands where twelve is the only
+count that fits 234 bytes — 13 × 17 + 13 + 1 is 235, one byte too many.
+
+`UsbInitDxe`'s depex is the other kind of thing entirely: 18 bytes, one PUSH and
+one END, on `E722B03F-B250-42CE-8EBD-5BD51812D037`. That GUID is in no header
+under `MdePkg/Include` or `MdeModulePkg/Include`, so it is Qualcomm's own — and
+it is not foreign to this device: scanning all 127 `.efi` files under
+`Binaries/gauguin/QcomPkg/Drivers` and `Binaries/bitra/QcomPkg/Drivers` for its
+16 bytes finds nine files carrying it, including **this phone's own**
+`UsbConfigDxe.efi` and `UsbfnDwc3Dxe.efi`. So whatever publishes it is a
+Qualcomm driver already in the payload, and `UsbInitDxe` is waiting on a peer
+rather than on something that does not exist. If that peer never publishes it,
+`UsbInitDxe` stays unstarted and idle, which is the failure mode the next
+section is arranged to prefer.
+
+### Why these do not go into the a-priori list
+
+bitra lists `XhciPciEmulationDxe` and `XhciDxe` in its `DXE.inc` **and** in its
+`APRIORI.inc`, and that half is deliberately not copied. The a-priori promotion
+loop is `Dispatcher.c:2104`; for a match it sets, at `:2111` and `:2112`,
+
+```c
+          DriverEntry->Dependent = FALSE;
+          DriverEntry->Scheduled = TRUE;
+          InsertTailList (&mScheduledQueue, &DriverEntry->ScheduledLink);   // :2113
+```
+
+and eleven lines below that the debug trace prints `RESULT = TRUE (Apriori)`
+(`:2122`). `Dependent = FALSE` is the flag that decides the queue — step 4.9's
+conclusion, and step 4.10 built its experiment on it — so a driver in this batch
+has its depex read and then not consulted at all.
+
+Putting a driver with a thirteen-protocol conjunction into that batch would
+therefore take the one property that makes these three files different from the
+other 55 blobs and switch it off, and start it at the one moment it cannot run:
+before the eight providers among those thirteen exist. So all three go into
+`DXE.inc` only, and are left to the ordinary sweep, whose promotion site is
+`Dispatcher.c:1274-1276` and where a satisfied depex is what promotes a driver.
+
+Two consequences, both measured rather than expected:
+
+* The a-priori array in this payload is **70 entries**, the same as the
+  baseline's. `P2 APRI`, `P2 SEQ` and `P2 STATS apriori=46/70` keep the shape
+  they have on the payload now in `boot`, so a reading taken from either is
+  comparable with a reading taken from the other.
+* While `BdsDxe` still fails, `EFI_BDS_ARCH_PROTOCOL` is one of the thirteen, so
+  the host stack **waits** rather than adding two more `L`s to a batch that is
+  already failing 27 of 46. The wait is this part of the firmware depending on
+  P2, not a second fault, and it is the reason the two candidates were separated
+  here rather than lumped together.
+
+### What the mechanism is made of
+
+`SIBLING_BLOBS` and `stage_sibling_blobs()` in `tools/make_xbl_binaries.py` name
+the three files and copy them, and `XHCI_HOST_DRIVERS` / `XHCI_HOST_GUARD` in
+`tools/make_uefi_platform.py` say where in the lists they go. `--xhci-host` emits
+`!if $(USE_XHCI_HOST_DRIVER) == 1` around them in `DXE.inc`, and the generated
+`gauguin.dsc` gains one value beside `USE_CUSTOM_DISPLAY_DRIVER`:
+
+```
+  USE_XHCI_HOST_DRIVER           = 0
+```
+
+The default cannot acquire the trio by regenerating. The generator's driver set
+is `present_drivers(device/dxe)` — the extraction, nothing else — and a sibling
+is unioned into it only when the flag is passed, so a stale copy of another
+board's driver sitting in `Binaries/gauguin/` cannot leak into a default build.
+`tools/build-apriori-variant.sh xhci-host` is the experiment that turns it on; it
+writes to `work/out/usb-host/` rather than `work/out/p2-variants/`, because the
+payload in that second directory is an experiment on the a-priori order and this
+is not one, and its exit trap deletes the staged blobs from both the repository's
+tree and the Mu-Silicium checkout.
+
+The verbatim INFs are what reached the volume. The three FFS files carry
+`BEB12BEE-F6E1-11E1-9FB8-6C626DE4AEB1`, `B7F50E91-A759-412C-ADE4-DCD03E7F7C28`
+and `0A134F0E-075E-40B3-9C63-3B3906804663` — the siblings' own `FILE_GUID`s —
+where every one of the other 55 blobs carries a GUID synthesised from
+`GUID_NAMESPACE`/`guid_for()` because Mu-Silicium's own `Binaries` INFs name
+vendor GUIDs we cannot reproduce. A file that kept a real GUID is a file that
+came through its own INF.
+
+### What was built, and the four gates
+
+`tools/build-apriori-variant.sh xhci-host`, exit 0, with every gate green:
+
+```
+0048 Images Verified
+the array is exactly the INF order of APRIORI.inc: 70 entries, zero mismatches
+all images structurally check out
+matches FVMAIN.Fv.txt: 126 offsets and GUIDs, zero mismatches
+```
+
+The artifact is `work/out/usb-host/Mu-gauguin-xhci-host-gzip.img`, **1,169,408 B**,
+sha256 `efc8e10d09f0f286011e1aacc638a7edd2ed5fcd86884640b28d14628f58f9f3`, and
+the volume it carries has 126 files against the baseline's 123. Read back out of
+the built FD, the three and their sections:
+
+| FFS file | GUID | sections |
+|---|---|---|
+| `XhciPciEmulation` | `BEB12BEE-…` | `0x13` depex 234 B, `0x10` PE32 45,056 B, `0x15` UI 34 B |
+| `XhciDxe` | `B7F50E91-…` | `0x10` PE32 94,208 B, `0x15` UI 16 B, `0x14` version 10 B |
+| `UsbInitDxe` | `0A134F0E-…` | `0x13` depex 18 B, `0x10` PE32 32,768 B, `0x15` UI 22 B |
+
+The first build of this variant used bitra's a-priori placement as well, and
+produced `b11f8c75a26b6e784d439aa29e64b61bc03f5232db169b5bc69a9bcf5ff355cb` at
+the same 1,169,408 bytes with a 72-entry array. It was superseded by the build
+above and should not be flashed; nothing in the repository names it any more.
+
+This payload does not answer the open P2 question and must not take the place of
+the one in `boot` before that reading has been taken. Nothing in it is known to
+come up on the device — the panel is the only thing that can say, and it has
+nothing to say about a driver whose depex is currently unsatisfiable.
+
+### The patch would not apply, in either direction
+
+Found while checking the sync step, and fixed because it disables the guard that
+exists to notice exactly this. `git apply --check` failed at
+`ArmPkg/Library/ArmGenericTimerPhyCounterLib/ArmGenericTimerPhyCounterLib.c:59`
+and `git apply --reverse --check` failed as well, which is the state
+`sync-uefi-platform.sh` reports as `die "cannot apply $PATCH to $BASECORE - the
+tree has diverged, reconcile it by hand"`. The patch itself was fine. Two of the
+thirteen files it edits — `Dispatcher.c` and `Mem/Page.c` — had been left LF-only
+in the checkout while the rest were CRLF, and the patch's own endings are mixed
+(1,690 CR against 1,892 LF), so neither direction matched.
+
+The repair was to reconstruct the patched state from the patch rather than to
+guess: apply it to a pristine worktree of the submodule, confirm with
+`tr -d '\r'` that the content was identical to the checkout's, and copy those two
+files back with CRLF. Now:
+
+| reading | value |
+|---|---|
+| `git apply --check` | fails at `ArmGenericTimerPhyCounterLib.c:59` (tree is not pristine) |
+| `git apply --reverse --check` | passes |
+| `git diff --stat` | `13 files changed, 1452 insertions(+), 23 deletions(-)` |
+| `Dispatcher.c` | 2,558 CR, 2,558 LF |
+| `Mem/Page.c` | 2,622 CR, 2,622 LF |
+
+and `sync-uefi-platform.sh` reports `already applied`, which it had not been able
+to do. The `git diff --stat` line is part of the check: while the two files were
+LF-only the same tree reported 5,303 insertions and 3,874 deletions, because
+`-text` in `.gitattributes` means git does not normalise and every line of both
+files counted as changed.
+
+### Two comments that were false, and one tool change kept for its own reason
+
+* `tools/sync-uefi-platform.sh` said the 55 extracted drivers ship under an
+  "Integrity Checks" arrangement. The phrase occurs nowhere else in the
+  repository and described nothing; it now says what is true, which is that these
+  are Qualcomm's signed images shipped as they came out of the extraction, that
+  the INF beside each one is generated, and that no PE is rewritten anywhere in
+  this project.
+* The generated `gauguin.dsc` justified the switch with "they join the a-priori
+  batch that P2 is still diagnosing". By the time it was written that was about
+  to stop being true, and it is now the opposite of true.
+* `tools/apriori-order.py` gained `--define NAME=VALUE`, which it needed for the
+  a-priori guard this step first emitted and no longer needs, because the guard
+  is gone from `APRIORI.inc`. It is kept: the tool's behaviour on an `!if` whose
+  variable it was not told about is to exit, and this flag is the only route past
+  that, so it is the difference between a diagnoseable failure and a dead end if
+  the platform ever grows a second conditional. Recorded so that "unused in this
+  tree" is a known state rather than an oversight.
+
+### `UsbConfigDxe`, which is adjacent to this and was not acted on
+
+Measured while looking for where the USB role is decided, and recorded because
+the next person to ask why a host controller does not see a stick will arrive
+here. bitra ships **three** builds of `UsbConfigDxe` — `.efi`, `.dualrole.efi`
+and `.hostmode.efi`, all 94,208 B — and its INF binds `PE32|UsbConfigDxe.hostmode.efi`.
+They differ from each other by 16 to 29 bytes, all of them build-time constants
+folded into AArch64 immediates plus one adjacent pair at `.data+0x358` that reads
+`01 01` in the hostmode build and `03 03` in the other two.
+
+This phone's own `UsbConfigDxe.efi` is 77,824 B — 16,384 B smaller, so it is not
+the same image with a flag flipped — and the offset above does not transfer to
+it. But all of the four carry `UFP (DEVICE Mode)` and `DFP (HOST Mode)` and the
+`Host Client Handle` error string, so the host path is compiled into this
+device's copy as well, and the sibling's pin looks like a role default for a
+board whose UEFI always wants to be a host rather than a feature this phone's
+build lacks. Whether this device's copy can be moved to host mode at runtime is
+not answerable from strings, and is not answered here.
+
+It is not acted on because replacing a driver extracted from this phone with
+another board's is a different kind of change from adding one this phone never
+had: that rule is the whole basis of the port, and breaking it to fix a
+hypothesis would need its own switch and its own step.
+
+### What this step did not change
+
+No behaviour on the device. The USB host stack is built, gated and parked behind
+a switch that is 0 in the tracked platform; nothing was flashed; the payload of
+record is still `cbe5a13114fc4a0465677e480a29a76fa2836cf2ae00fb9e9838c490e0102132`
+and `tools/probe-fingerprint.py --expect P2FreeWhy` still exits 0. The
+`P2BRINGUP` block is untouched, and the two undercounting comments step 4.49
+recorded are still there — this step edited no source under `Mu_Basecore`, so no
+line number in this log moved.
+
+| | |
+|---|---|
+| instrument | the sibling's three INFs and `.depex` files read as bytes; the built FD read back with `tools/fv-inventory.py`; `tools/apriori-order.py` against the payload; a 127-file byte scan of every `.efi` under `Binaries/gauguin/` and `Binaries/bitra/` |
+| adds | `SIBLING_BLOBS`/`stage_sibling_blobs()` and `--sibling` in `tools/make_xbl_binaries.py`; `XHCI_HOST_DRIVERS`/`XHCI_HOST_GUARD`/`--xhci-host` in `tools/make_uefi_platform.py`; `USE_XHCI_HOST_DRIVER` in the generated DSC; the `xhci-host` experiment in `tools/build-apriori-variant.sh` |
+| withdraws | "its depex needs a PCI stack the firmware does not have, so it can never be satisfied" — the 234 bytes are thirteen pushes of the standard architectural protocols plus `EFI_DRIVER_BINDING_PROTOCOL`, joined by twelve ands; no PCI in it, and no host bridge added |
+| corrects | thirteen ands → twelve, on the byte count; `[Depex] TRUE` in `XhciPciEmulationDxe.inf` is not what ships; the phantom "Integrity Checks" comment in `sync-uefi-platform.sh`; the DSC's claim that the trio joins the a-priori batch |
+| confirms | step 4.9's reading of the promotion loop at `Dispatcher.c:2111-2113` and `:2122`, and step 4.10's use of it — which is why the trio is in `DXE.inc` only, and why the a-priori array is still 70 entries |
+| leaves | `UsbConfigDxe` where it was: this phone's own build, 77,824 B, with the host-mode path compiled in and its default role unresolved |
+| does not close | the 27 `CoreLoadImage` failures, and therefore the eight arch providers the new depex names — the host stack now waits on them instead of failing beside them; `P2 STATS discovered=` is still the field that decides where the 23 went |

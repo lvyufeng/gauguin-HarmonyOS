@@ -75,9 +75,18 @@ echo "   Silicon/Qualcomm/BitraPkg"
 say "installing device binaries"
 # ---------------------------------------------------------------------------
 # 55 signed Qualcomm DXE drivers + 32 config/panel files, all extracted from
-# this phone's own XBL. These are Qualcomm's signed images; they are used
-# verbatim, which is the only way they will load - see the note about Integrity
-# Checks in the DSC.
+# this phone's own XBL. These are Qualcomm's signed images and they ship as they
+# came out of the extraction: the INF beside each one is written by
+# tools/make_xbl_binaries.py, but nothing in this project rewrites a PE. The
+# GUID_NAMESPACE note in that file says why even the INF's own GUID is generated
+# rather than reproduced from Qualcomm's.
+#
+# Plus, only when tools/make_uefi_platform.py ran with --xhci-host, three more
+# that this phone's XBL does not carry at all: XhciPciEmulationDxe, XhciDxe and
+# UsbInitDxe, staged from the SM7225 sibling's Binaries/bitra/ because there is
+# no host-controller driver in this device to extract. They sit behind
+# USE_XHCI_HOST_DRIVER in the generated driver lists, so copying them in does
+# nothing on its own. See SIBLING_BLOBS in tools/make_xbl_binaries.py.
 install -d "$MU/Binaries/gauguin"
 cp -a "$GEN/Binaries/gauguin/." "$MU/Binaries/gauguin/"
 echo "   Binaries/gauguin  ($(find "$GEN/Binaries/gauguin" -type f | wc -l) files)"

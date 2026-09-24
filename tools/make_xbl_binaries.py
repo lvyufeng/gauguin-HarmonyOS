@@ -111,6 +111,37 @@ INF_TEMPLATE = """##
   PE32|{name}.efi|{mtype}
 """
 
+# Drivers this device's XBL does not carry, taken from the SM7225 sibling.
+#
+# Every other package under Binaries/gauguin/ is an image extracted from this
+# phone's own XBL, and that is the rule the whole port runs on. These three
+# cannot be, and the reason is structural rather than an extraction gap: XHCI is
+# the UEFI-side USB *host* controller driver, and this phone's bootloader ships
+# no host driver at all. `grep -i xhci` over xbl.img returns nothing, while the
+# sanity check `usbfn` - the device-mode driver, which is a different job -
+# returns one hit. There is nothing to extract, so the blob has to come from
+# somewhere else or the firmware can never see a USB stick.
+#
+# Mu-Silicium's Binaries/bitra/ is the right somewhere else, because Bitra *is*
+# this SoC: gauguin.dsc already includes BitraPkg/BitraPkg.dsc.inc, the SM7225
+# layer, and Platforms/Realme/bitraPkg is the same part built for a sibling
+# board. The alternative in the checkout, Binaries/generic/, is shared across
+# SM6150, SM8250 and SDM845 platforms and is the least likely of the two to
+# match a register map.
+#
+# Copied verbatim - INF, .efi and .depex together - rather than through
+# INF_TEMPLATE below. XhciPciEmulationDxe's real depex is a thirteen-protocol
+# conjunction that its INF supplies as `DXE_DEPEX|XhciPciEmulationDxe.depex`;
+# the `[Depex] TRUE` also in that INF is not what ships, and a templated INF
+# would drop both the depex and the UEFI_DRIVER binding XhciDxe needs.
+SIBLING_SOURCE = "bitra"
+
+SIBLING_BLOBS = {
+    "XhciPciEmulationDxe": "QcomPkg/Drivers/XhciPciEmulationDxe",
+    "XhciDxe":             "QcomPkg/Drivers/XhciDxe",
+    "UsbInitDxe":          "QcomPkg/Drivers/UsbInitDxe",
+}
+
 # Driver names whose .efi carries a different base name than the .inf (a single
 # package can ship two images).
 EFI_OVERRIDE = {
@@ -149,6 +180,37 @@ def present_drivers(dxe_dir):
     return {f"QcomPkg/Drivers/{d}/{i}"
             for src, (d, i, _) in DRIVERS.items()
             if os.path.isfile(os.path.join(dxe_dir, src + ".efi"))}
+
+
+def stage_sibling_blobs(mu_root, out, names):
+    """Copy the non-XBL blobs into Binaries/gauguin/ and return their INF paths.
+
+    `names` are keys of SIBLING_BLOBS; the returned set is keyed the way
+    present_drivers() keys its own, so a caller can union the two and hand the
+    result to the platform generator as the drivers it may reference.
+
+    Additive and idempotent: it overwrites the three directories it owns and
+    touches nothing else, so re-running it is how a checkout picks the blobs up
+    after a fresh clone of Mu-Silicium took them away.
+    """
+    src_root = os.path.join(mu_root, "Binaries", SIBLING_SOURCE, "QcomPkg", "Drivers")
+    staged = set()
+    for name in names:
+        rel = SIBLING_BLOBS[name]
+        src = os.path.join(src_root, name)
+        inf = os.path.join(src, f"{name}.inf")
+        if not os.path.isfile(inf):
+            sys.exit(f"missing {inf} - Mu-Silicium's Binaries/{SIBLING_SOURCE} is "
+                     f"the only source for {name}, and this checkout has no copy")
+        dest = os.path.join(out, rel)
+        os.makedirs(dest, exist_ok=True)
+        copied = []
+        for f in sorted(os.listdir(src)):
+            shutil.copyfile(os.path.join(src, f), os.path.join(dest, f))
+            copied.append(f)
+        staged.add(f"{rel}/{name}.inf")
+        print(f"   {SIBLING_SOURCE} -> gauguin: {rel}  ({', '.join(copied)})")
+    return staged
 
 
 def fix_bmp_offset(data):
@@ -218,13 +280,21 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("dxe_dir")
     ap.add_argument("--out", default=None)
+    ap.add_argument("--mu", default=None,
+                    help="Mu-Silicium checkout to read sibling blobs from "
+                         "(default: <repo>/work/uefi/Mu-Silicium)")
+    ap.add_argument("--sibling", action="append", default=[],
+                    choices=sorted(SIBLING_BLOBS), metavar="NAME",
+                    help="also stage a driver this device's XBL does not carry "
+                         "(see SIBLING_BLOBS); repeatable")
     ap.add_argument("--copy-raw", action="store_true",
                     help="also copy the config/panel files into RawFiles/")
     args = ap.parse_args()
 
-    out = args.out or os.path.join(os.path.dirname(os.path.abspath(args.dxe_dir)),
-                                   "..", "uefi", "Binaries", "gauguin")
+    repo = os.path.dirname(os.path.dirname(os.path.abspath(args.dxe_dir)))
+    out = args.out or os.path.join(repo, "uefi", "Binaries", "gauguin")
     out = os.path.normpath(out)
+    mu_root = args.mu or os.path.join(repo, "work", "uefi", "Mu-Silicium")
 
     available = {f[:-4] for f in os.listdir(args.dxe_dir) if f.endswith(".efi")}
     print(f"{len(available)} extracted drivers; {len(DRIVERS)} mapped")
@@ -257,6 +327,11 @@ def main():
         written += 1
 
     print(f"wrote {written} driver packages to {out}/QcomPkg/Drivers")
+    if args.sibling:
+        names = sorted(set(args.sibling))
+        print(f"staging {len(names)} driver(s) this XBL does not carry, "
+              f"from Binaries/{SIBLING_SOURCE}:")
+        stage_sibling_blobs(mu_root, out, names)
     if args.copy_raw:
         n, fixed = copy_raw_files(args.dxe_dir, os.path.join(out, "RawFiles"))
         print(f"copied {n} raw files to {out}/RawFiles"

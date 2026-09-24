@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 #
-# Build one payload with the a-priori batch reordered, and prove the order that
-# came out is the order that was asked for.
+# Build one variant payload and prove that what came out is what was asked for.
+# Two experiments are defined below: `arch-first` reorders the a-priori batch,
+# `xhci-host` adds the USB host stack.
 #
-# Why this exists. The eight architectural protocols DXE never installs
+# Why arch-first exists. The eight architectural protocols DXE never installs
 # (Security, Bds, Watchdog, Variable, Capsule, Monotonic, Reset, RTC - docs/08
 # step 4.9) are all providers that sit late in APRIORI.inc, and the batch runs in
 # APRIORI.inc order, not in firmware-volume order. So there are two readings of
@@ -20,11 +21,40 @@
 # and which driver in the block they were moved ahead of is the first to fail
 # (`P2 SEQ`, one character per entry, in the order they ran).
 #
+# Why xhci-host exists. The firmware has no USB host controller driver, so it
+# cannot see a USB stick, and a Windows installer has to arrive on one (P3). The
+# blob cannot be extracted from this phone - its XBL carries no host driver, only
+# the device-mode one - so the three files come from the SM7225 sibling instead
+# and the platform gains a build switch, USE_XHCI_HOST_DRIVER, that is off until
+# this script turns it on. What is being checked here is that EDK2 accepts the
+# three INFs at all: bitra's copies are used verbatim, which means a DXE_DEPEX
+# section, a module type per file and QC's own binding, none of which the other
+# 55 blobs in this image carry. A payload that builds, packs and passes the
+# gates is the whole result - nothing here says the controller comes up on the
+# device, and only the panel can say that.
+#
+# Unlike `arch-first` this one does *not* reorder anything. bitra lists
+# XhciPciEmulationDxe and XhciDxe in its own APRIORI.inc as well as its DXE.inc,
+# and that half is deliberately not copied: a driver in the a-priori batch is
+# promoted by `Dispatcher.c:2111` setting `DriverEntry->Dependent = FALSE`, so
+# its depex - here a conjunction of thirteen architectural protocols - is read
+# and then ignored, and it would start before the protocols it names exist. See
+# XHCI_HOST_DRIVERS in tools/make_uefi_platform.py. The consequence for this
+# experiment is a useful one: APRIORI.inc is byte-identical to the default
+# generation's, the a-priori array stays at 70 entries, and the P2 instrument
+# keeps reading the same shape it reads on the payload now in `boot`.
+#
 # Usage:  tools/build-apriori-variant.sh [EXPERIMENT]
 #
 #   arch-first   the eight arch providers run before the Qualcomm block.
 #                The default, and the definition of the experiment is the
-#                MOVE table below rather than this script's argument handling.
+#                ARCH_FIRST_NAMES list below rather than this script's argument
+#                handling.
+#   xhci-host    the USB host stack is added, and nothing is reordered. The
+#                blobs are staged from Binaries/bitra/ into
+#                uefi/Binaries/gauguin/, which is a directory this repository
+#                ignores, so the tracked tree only ever differs by the DSC
+#                switch - and restore() puts even that back.
 #
 # Environment:
 #   DISPLAY=simple|qcom   which display driver the platform is regenerated with.
@@ -70,34 +100,83 @@ ARCH_FIRST_NAMES=(
 )
 
 EXP=${1:-arch-first}
+# The experiment, as arguments: GEN_ARGS goes to the platform generator and
+# ORDER_ARGS goes to apriori-order.py, which has to be told the same thing about
+# every conditional it will find in the regenerated APRIORI.inc - it refuses to
+# guess one, so a flag added here and not there is a failed gate, not a wrong
+# answer. Both start from a non-empty list so that `"${a[@]}"` is never the
+# empty-array expansion, which older bash treats as an unbound variable under -u.
+GEN_ARGS=()
+ORDER_ARGS=(--display "$DISPLAY")
+OUTDIR="$P2"
+STAGED_BLOBS=""
+REORDERS=0
 case "$EXP" in
     arch-first)
-        MOVE="$ANCHOR:$(IFS=,; echo "${ARCH_FIRST_NAMES[*]}")"
+        GEN_ARGS=(--apriori-move "$ANCHOR:$(IFS=,; echo "${ARCH_FIRST_NAMES[*]}")")
+        REORDERS=1
         ;;
-    *) die "unknown experiment '$EXP' (known: arch-first)" ;;
+    xhci-host)
+        GEN_ARGS=(--xhci-host)
+        # ORDER_ARGS is left alone: this experiment adds no `!if` to APRIORI.inc,
+        # because nothing it adds goes into that file. If that ever changes, the
+        # gate below refuses to run rather than guessing the branch.
+        # Its own output directory, because the payload in p2-variants/ is a P2
+        # experiment on the a-priori order and this is not one. Both are read by
+        # the same gates; only the directory they land in differs, so a reader
+        # listing p2-variants/ still sees exactly the a-priori runs.
+        OUTDIR="$OUT/usb-host"
+        # The blob paths come from the generator's own table rather than being
+        # spelled out again here, so a fourth one added there cannot leave this
+        # cleanup quietly behind.
+        STAGED_BLOBS=$(python3 -c "
+import sys; sys.path.insert(0, '$ROOT/tools')
+from make_xbl_binaries import SIBLING_BLOBS
+print(' '.join(SIBLING_BLOBS.values()))")
+        [ -n "$STAGED_BLOBS" ] || die "SIBLING_BLOBS is empty - nothing would be staged"
+        ;;
+    *) die "unknown experiment '$EXP' (known: arch-first, xhci-host)" ;;
 esac
 
 # The tree has to be left the way it was found, including after a failure: this
 # script regenerates the tracked platform package, and a checkout that quietly
 # keeps the experimental order is a checkout that builds a firmware nobody chose.
 restore() {
-    log "restoring the default a-priori order"
+    log "restoring the default platform"
     python3 "$GEN" --display "$DISPLAY" >/dev/null
     "$ROOT/tools/sync-uefi-platform.sh" >/dev/null
-    note "uefi/Platforms/Xiaomi/gauguinPkg is back to the reference order"
+    note "uefi/Platforms/Xiaomi/gauguinPkg is back to the reference contents"
+    if [ -n "$STAGED_BLOBS" ]; then
+        # The sibling blobs are the one thing this run puts under uefi/ that the
+        # default generation does not. They land in a directory this repository
+        # ignores, so git would never show them - but "left the way it was
+        # found" is what this trap promises, and a stale copy of another
+        # device's driver is exactly what a later run must not silently reuse.
+        #
+        # Both trees, because sync-uefi-platform.sh copies rather than mirrors
+        # and would otherwise leave the trio in the checkout as well. Neither
+        # copy can reach a default build on its own - the generator reads its
+        # driver set from device/dxe and stages a sibling only when asked, and
+        # the DSC line that names them is 0 unless this script wrote a 1 - so
+        # this is housekeeping rather than a correctness fix.
+        for rel in $STAGED_BLOBS; do
+            rm -rf "$ROOT/uefi/Binaries/gauguin/$rel" "$MU/Binaries/gauguin/$rel"
+        done
+        note "the $(echo "$STAGED_BLOBS" | wc -w) staged USB host blobs are gone from uefi/Binaries/gauguin and from $MU/Binaries/gauguin"
+    fi
 }
 trap restore EXIT
 
 # ---------------------------------------------------------------------------
-log "generating the platform with the a-priori batch reordered"
+log "generating the platform: $EXP"
 # ---------------------------------------------------------------------------
-python3 "$GEN" --display "$DISPLAY" --apriori-move "$MOVE"
+python3 "$GEN" --display "$DISPLAY" "${GEN_ARGS[@]}"
 "$ROOT/tools/sync-uefi-platform.sh"
 
 INC="$ROOT/uefi/Platforms/Xiaomi/gauguinPkg/Include/APRIORI.inc"
-mkdir -p "$P2"
-cp "$INC" "$P2/APRIORI.$EXP.inc"
-note "kept a copy at $P2/APRIORI.$EXP.inc"
+mkdir -p "$OUTDIR"
+cp "$INC" "$OUTDIR/APRIORI.$EXP.inc"
+note "kept a copy at $OUTDIR/APRIORI.$EXP.inc"
 
 # ---------------------------------------------------------------------------
 log "building the firmware"
@@ -149,7 +228,7 @@ fi
 # ---------------------------------------------------------------------------
 log "building the payload"
 # ---------------------------------------------------------------------------
-IMG="$P2/Mu-gauguin-$EXP-gzip.img"
+IMG="$OUTDIR/Mu-gauguin-$EXP-gzip.img"
 # The same shape as the payload of record - silicon header, gzip - so that the
 # only difference from the baseline image is the ordering inside the volume.
 #
@@ -183,7 +262,7 @@ gate() {                       # gate <log> <name> <command...>
 }
 
 gate "$OUT/apriori-order-$EXP.log" "apriori-order.py" \
-    python3 "$ROOT/tools/apriori-order.py" "$IMG" --display "$DISPLAY"
+    python3 "$ROOT/tools/apriori-order.py" "$IMG" "${ORDER_ARGS[@]}"
 tail -n 1 "$OUT/apriori-order-$EXP.log" | sed 's/^/   /' >&2
 
 log "structure and ABL's checks"
@@ -205,5 +284,12 @@ fi
 
 # ---------------------------------------------------------------------------
 log "ready: $IMG"
-note "flash it with tools/flash-boot.sh --twrp   (boot partition only)"
-note "and read the P2 SEQ line off the panel before anything else"
+if [ "$REORDERS" = 1 ]; then
+    note "flash it with tools/flash-boot.sh --twrp   (boot partition only)"
+    note "and read the P2 SEQ line off the panel before anything else"
+else
+    note "built with USE_XHCI_HOST_DRIVER=1. Nothing in it is known to come up on"
+    note "the device, and the panel has nothing to say about it, so it is not the"
+    note "payload that answers the open P2 question and must not take the place of"
+    note "the one in boot until that reading has been taken."
+fi

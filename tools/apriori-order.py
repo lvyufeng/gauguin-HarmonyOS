@@ -17,12 +17,14 @@ distinction matters here, because a firmware volume in this project has twice
 been read back with a parser that was wrong in a way that still produced a
 plausible list (see `_walk_from` and `fv_files` in tools/fv-inventory.py).
 
-`--expect` compares the order against an APRIORI.inc, with the one `!if` in that
-file evaluated rather than guessed, and exits nonzero on any difference.
+`--expect` compares the order against an APRIORI.inc, with each `!if` in that
+file evaluated from a value the caller supplies rather than guessed, and exits
+nonzero on any difference.
 
 Usage:
     tools/apriori-order.py work/out/p2-variants/Mu-gauguin-silicon-gzip.img
     tools/apriori-order.py <fd> --expect uefi/Platforms/Xiaomi/gauguinPkg/Include/APRIORI.inc
+    tools/apriori-order.py <img> --define USE_SOME_SWITCH=1
     tools/apriori-order.py <img> --xref Build/gauguinPkg/DEBUG_CLANGPDB/FV/Guid.xref
 """
 
@@ -85,24 +87,28 @@ def apriori_array(fvi, path):
     return [fvi.guid_str(blob[i:i + 16]) for i in range(0, len(blob), 16)], len(files)
 
 
-def inf_order(path, display):
-    """The INF list of an APRIORI.inc, with its `!if` evaluated.
+def inf_order(path, macros):
+    """The INF list of an APRIORI.inc, with its `!if`s evaluated.
 
-    The file has exactly one conditional, on USE_CUSTOM_DISPLAY_DRIVER: two
-    `Display*` lines or one `SimpleFbDxe` line. Reading the file as text would
-    count both branches; the build counts one. Instead of re-implementing the
-    preprocessor, only the variable that appears in this file is honoured, and
-    an `!if` on anything else is an error rather than a silent guess.
+    Reading the file as text would count every branch of every conditional; the
+    build counts one branch of each. Rather than re-implement the preprocessor,
+    the caller supplies the value of each variable the file tests - `--display`
+    fills in USE_CUSTOM_DISPLAY_DRIVER and `--define` any other - and this looks
+    them up. A variable that was not supplied is an error rather than a silent
+    guess, because guessing a branch the wrong way produces a shorter list that
+    still reads plausible, and the whole point of this tool is to be trusted
+    against the artifact.
     """
-    macro = 1 if display == "qcom" else 0
     out, stack = [], []
     for line in open(path, encoding="utf-8", errors="replace"):
         s = line.strip()
         m = re.match(r'^!if\s+\$\((\w+)\)\s*==\s*(\d+)$', s)
         if m:
-            if m.group(1) != "USE_CUSTOM_DISPLAY_DRIVER":
-                sys.exit(f"{path}: unhandled conditional on $({m.group(1)})")
-            stack.append(macro == int(m.group(2)))
+            name, value = m.group(1), int(m.group(2))
+            if name not in macros:
+                sys.exit(f"{path}: !if on $({name}), whose value was not "
+                         f"supplied - pass --define {name}=0 or --define {name}=1")
+            stack.append(macros[name] == value)
             continue
         if s == "!else":
             if not stack:
@@ -201,6 +207,12 @@ def main():
                     help="which branch of the file's USE_CUSTOM_DISPLAY_DRIVER "
                          "conditional is the built one (default: simple, which is "
                          "what the current payloads are built with)")
+    ap.add_argument("--define", action="append", default=[], metavar="NAME=VALUE",
+                    help="the built value of an `!if $(NAME) == VALUE` the file "
+                         "tests and that --display does not cover, e.g. "
+                         "--define USE_XHCI_HOST_DRIVER=1 if APRIORI.inc has grown "
+                         "one; repeatable. Without it an `!if` on a name that was "
+                         "not supplied is an error, by design - see inf_order")
     ap.add_argument("--xref", metavar="Guid.xref",
                     help="resolve GUIDs to module names through the build's own "
                          f"cross reference (default: {os.path.relpath(DEFAULT_FV, ROOT)}/Guid.xref)")
@@ -227,7 +239,13 @@ def main():
         print(f"  {i:3d}  {g}  {by_guid.get(g, '?')}")
 
     expect_path = args.expect or DEFAULT_EXPECT
-    want_paths = inf_order(expect_path, args.display)
+    macros = {"USE_CUSTOM_DISPLAY_DRIVER": 1 if args.display == "qcom" else 0}
+    for d in args.define:
+        name, sep, value = d.partition("=")
+        if not sep or not name.strip() or not value.strip().lstrip("-").isdigit():
+            ap.error(f"--define wants NAME=VALUE with an integer value, got '{d}'")
+        macros[name.strip()] = int(value)
+    want_paths = inf_order(expect_path, macros)
     roots = args.inf_root or [args.mu, os.path.join(args.mu, "Mu_Basecore"),
                               os.path.join(ROOT, "uefi")]
     idx = inf_index(roots)

@@ -145,6 +145,29 @@ Mu-Silicium uses EDK2's standard `BdsDxe` instead of Qualcomm's boot menu. All
 eleven are named in `DXE.inc`'s header comment, because a driver that is built
 and then silently omitted is exactly the kind of thing that costs a day later.
 
+### The two build switches
+
+Both live in `gauguin.dsc` and both wrap their INF lines in
+`!if $(NAME) == N` inside `DXE.inc`, so one value switches a whole block and the
+generated lists show where the block is.
+
+`USE_CUSTOM_DISPLAY_DRIVER` is the display choice (`0` = `SimpleFbDxe`, `1` =
+Qualcomm `DisplayDxe`) and is documented above and in `docs/08`.
+
+`USE_XHCI_HOST_DRIVER` is `0` by default and brings up the USB **host**
+controller, which is what P3 needs — a Windows installer has to arrive on a USB
+stick. It is the one switch that changes not only what is in the volume but
+where a driver came from: this phone's XBL has no host-controller driver at all
+(no occurrence of the string `xhci` anywhere in `xbl.img`, while `usbfn`, the
+device-mode driver, is there once), so `XhciPciEmulationDxe`, `XhciDxe` and
+`UsbInitDxe` come from `Binaries/bitra/` — the SM7225 sibling, the same SoC this
+platform's `BitraPkg` is built on. All three go into `DXE.inc` and none into
+`APRIORI.inc`, which is a deliberate departure from bitra: a driver in the
+a-priori batch has its dependency expression bypassed, and
+`XhciPciEmulationDxe`'s is a conjunction of thirteen architectural protocols.
+`docs/08` step 4.50 has the depex read out of the binary and the rest of the
+reasoning.
+
 ### MemoryMapLib and ConfigurationMapLib
 
 These two libraries are the entire board description UEFI is given: the DDR and

@@ -38,6 +38,32 @@
   USE_CUSTOM_DISPLAY_DRIVER      = 0
 
   #
+  # USB host stack.
+  #
+  #   1 = XhciPciEmulationDxe + XhciDxe + UsbInitDxe, so the firmware can see a
+  #       USB stick. Required for P3: a Windows installer has to arrive on one.
+  #       All three go into DXE.inc and none into APRIORI.inc, so the a-priori
+  #       batch is the same 70 entries either way and P2's reading stays
+  #       comparable between the two builds. XhciPciEmulationDxe is left to its
+  #       own depex on purpose - see XHCI_HOST_DRIVERS in
+  #       tools/make_uefi_platform.py for why bitra's a-priori placement of it
+  #       is not copied.
+  #
+  #   0 = the USB host controller is not brought up. Device mode
+  #       (UsbfnDwc3Dxe/UsbConfigDxe/UsbMsdDxe) still works, which is what
+  #       fastboot and the device's own USB gadget use.
+  #
+  # The blobs are the one thing under Binaries/gauguin/ that did NOT come from
+  # this phone: its XBL carries no host driver, so there is nothing to extract,
+  # and the SM7225 sibling's copies are used instead. That makes this switch
+  # different in kind from the display one - it is the only one that changes
+  # where a driver came from. See SIBLING_BLOBS in tools/make_xbl_binaries.py.
+  #
+  # Off by default: nobody has seen these three run on this phone.
+  #
+  USE_XHCI_HOST_DRIVER           = 0
+
+  #
   # 0 = SM7225 (Snapdragon 750G)
   #
   SOC_TYPE                       = 0

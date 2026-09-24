@@ -26,7 +26,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
 
 sys.path.insert(0, HERE)
-from make_xbl_binaries import guid_for, present_drivers   # noqa: E402  (same directory)
+from make_xbl_binaries import (guid_for, present_drivers, stage_sibling_blobs,   # noqa: E402
+                               SIBLING_SOURCE, SIBLING_BLOBS)
 
 LICENSE = """/**
   Copyright (c) 2011-2012, ARM Limited. All rights reserved.
@@ -288,6 +289,32 @@ GAUGUIN_DSC = """##
   # whole thing. See docs/07 for why the first flash test used 0.
   #
   USE_CUSTOM_DISPLAY_DRIVER      = {display}
+
+  #
+  # USB host stack.
+  #
+  #   1 = XhciPciEmulationDxe + XhciDxe + UsbInitDxe, so the firmware can see a
+  #       USB stick. Required for P3: a Windows installer has to arrive on one.
+  #       All three go into DXE.inc and none into APRIORI.inc, so the a-priori
+  #       batch is the same 70 entries either way and P2's reading stays
+  #       comparable between the two builds. XhciPciEmulationDxe is left to its
+  #       own depex on purpose - see XHCI_HOST_DRIVERS in
+  #       tools/make_uefi_platform.py for why bitra's a-priori placement of it
+  #       is not copied.
+  #
+  #   0 = the USB host controller is not brought up. Device mode
+  #       (UsbfnDwc3Dxe/UsbConfigDxe/UsbMsdDxe) still works, which is what
+  #       fastboot and the device's own USB gadget use.
+  #
+  # The blobs are the one thing under Binaries/gauguin/ that did NOT come from
+  # this phone: its XBL carries no host driver, so there is nothing to extract,
+  # and the SM7225 sibling's copies are used instead. That makes this switch
+  # different in kind from the display one - it is the only one that changes
+  # where a driver came from. See SIBLING_BLOBS in tools/make_xbl_binaries.py.
+  #
+  # Off by default: nobody has seen these three run on this phone.
+  #
+  USE_XHCI_HOST_DRIVER           = {xhci_host}
 
   #
   # 0 = SM7225 (Snapdragon 750G)
@@ -617,6 +644,60 @@ EXTRA_PATHS = {
     "MacDxe":           "QcomPkg/Drivers/MacDxe/MacDxe.inf",
 }
 
+# The USB *host* stack, which this phone's XBL does not carry at all and the
+# surya reference therefore does not list either. See SIBLING_BLOBS in
+# tools/make_xbl_binaries.py for where the three blobs come from and why - the
+# short version is that Bitra is this SoC, so the SM7225 sibling's copies are
+# the ones built for this hardware.
+#
+# Off unless `--xhci-host` is given, for the same reason the Qualcomm display
+# driver is behind a switch: it is a driver nobody has yet seen run on this
+# phone.
+#
+# DXE.inc only, and that is a deliberate departure from the sibling. bitra lists
+# XhciPciEmulationDxe and XhciDxe in APRIORI.inc as well, and copying that would
+# throw away the one thing that makes these files different from the other 55
+# blobs: their depex. `Dispatcher.c:2111` promotes an a-priori member by setting
+# `DriverEntry->Dependent = FALSE` and queueing it outright - the DEBUG line
+# eleven lines below it prints `RESULT = TRUE (Apriori)` for that reason - so a
+# driver in that list has its depex read and then ignored. XhciPciEmulationDxe's
+# depex is a conjunction of thirteen architectural protocols, and placing it in
+# the batch that runs *before* those protocols exist would ask it to start at
+# the one moment it cannot. Left in DXE.inc the ordinary dependency sweep starts
+# it when its protocols appear, which is also when a USB stick is worth looking
+# for - the point at which BDS would go looking for a boot device anyway.
+# UsbInitDxe is in DXE.inc only in bitra too, and for the same reason it is here.
+#
+# The consequence to keep in mind: while the eight arch providers still fail
+# (docs/08 step 4.9), `EFI_BDS_ARCH_PROTOCOL` is one of them and the USB host
+# stack therefore stays unstarted rather than failing. That is this file waiting
+# on P2, not a second fault, and P2 SEQ will show it as absent from the batch
+# rather than as a new 'L' - the array stays at 70 entries, which keeps the
+# instrument comparable with the payload now in `boot`.
+#
+# The placement inside DXE.inc is bitra's and it does matter there.
+# XhciPciEmulationDxe publishes the controller's window, XhciDxe is a
+# UEFI_DRIVER that binds to the device that appears in it, and UsbBusDxe -
+# already in the list, a few lines below - sits on top of both. So the pair goes
+# immediately after UsbfnDwc3Dxe and immediately before the blank line that
+# precedes UsbBusDxe, which is where Platforms/Realme/bitraPkg puts it.
+#
+# Each entry is (anchor line, paths to insert after it), wrapped in the guard
+# below so one DSC value switches the whole block.
+XHCI_HOST_DRIVERS = {
+    "DXE.inc": [
+        ("Drivers/UsbfnDwc3Dxe/UsbfnDwc3Dxe.inf", [
+            "QcomPkg/Drivers/XhciPciEmulationDxe/XhciPciEmulationDxe.inf",
+            "QcomPkg/Drivers/XhciDxe/XhciDxe.inf",
+        ]),
+        ("Drivers/UsbConfigDxe/UsbConfigDxe.inf", [
+            "QcomPkg/Drivers/UsbInitDxe/UsbInitDxe.inf",
+        ]),
+    ],
+}
+
+XHCI_HOST_GUARD = "USE_XHCI_HOST_DRIVER"
+
 
 def load_guid_table(mu_root):
     """Map RAW file name -> FILE FREEFORM GUID, from the whole Mu-Silicium tree.
@@ -687,7 +768,7 @@ def apply_apriori_moves(lines, moves):
     return report
 
 
-def rewrite_incs(ref_dir, have, device, apriori_moves=()):
+def rewrite_incs(ref_dir, have, device, apriori_moves=(), xhci_host=False):
     """Produce (dxe_inc, apriori_inc) for `device` from the reference package.
 
     `have` is the set of `QcomPkg/Drivers/.../*.inf` paths present under
@@ -696,6 +777,9 @@ def rewrite_incs(ref_dir, have, device, apriori_moves=()):
 
     `apriori_moves` reorders APRIORI.inc only, and only when asked for; the
     default output is byte-for-byte the reference order.
+
+    `xhci_host` adds the USB host stack (see XHCI_HOST_DRIVERS). Off by default,
+    which is also what keeps a regeneration of an existing tree byte-identical.
     """
     out = {}
     referenced = set()
@@ -731,6 +815,31 @@ def rewrite_incs(ref_dir, have, device, apriori_moves=()):
             lines.insert(idx + 1, f"  INF Binaries/{device}/{path}")
             referenced.add(path)
 
+        # The USB host stack, in a conditional rather than inserted outright, so
+        # the switch lives in the DSC next to USE_CUSTOM_DISPLAY_DRIVER and the
+        # default build cannot acquire it by regenerating.
+        uhci, xhci_dropped = [], []
+        if xhci_host:
+            for anchor, paths in XHCI_HOST_DRIVERS.get(name, []):
+                present = [p for p in paths if p in have]
+                if not present:
+                    missing = f"{paths[0]}  (no blob staged for it)"
+                    dropped.append(missing)
+                    xhci_dropped.append(missing)
+                    continue
+                idx = next((i for i, l in enumerate(lines) if anchor in l), None)
+                if idx is None:
+                    anchorless = f"{present[0]}  (no anchor line for {anchor})"
+                    dropped.append(anchorless)
+                    xhci_dropped.append(anchorless)
+                    continue
+                lines[idx + 1:idx + 1] = (
+                    [f"!if $({XHCI_HOST_GUARD}) == 1"]
+                    + [f"  INF Binaries/{device}/{p}" for p in present]
+                    + ["!endif"])
+                referenced.update(present)
+                uhci += present
+
         # Reordering is APRIORI.inc's alone. DXE.inc decides which FFS files the
         # volume carries and where they land, and reordering it would move every
         # offset in the map that tools/fv-inventory.py checks against.
@@ -758,6 +867,15 @@ def rewrite_incs(ref_dir, have, device, apriori_moves=()):
             header += ("#  Regenerate without --apriori-move to restore the reference\n"
                        "#  order. Which one the device ran is recorded by\n"
                        "#  tools/build-apriori-variant.sh.\n")
+        if uhci:
+            header += ("#\n"
+                       "#  --xhci-host: this file also carries the USB host stack, in\n"
+                       f"#  `!if $({XHCI_HOST_GUARD}) == 1` above. Those blobs are the\n"
+                       f"#  ONE exception to the sentence above - they came from\n"
+                       f"#  Binaries/{SIBLING_SOURCE}/, not from this device, because this\n"
+                       "#  device's XBL has no host-controller driver to extract. See\n"
+                       "#  SIBLING_BLOBS in tools/make_xbl_binaries.py.\n")
+            header += "".join(f"#    {p}\n" for p in uhci)
         if dropped:
             header += "#\n#  Not available (commented out below):\n"
             header += "".join(f"#    {d}\n" for d in sorted(set(dropped)))
@@ -773,6 +891,10 @@ def rewrite_incs(ref_dir, have, device, apriori_moves=()):
         out["orphans_seen"] = set(skipped)
         if moved:
             out["apriori_moved"] = moved
+        if uhci:
+            out.setdefault("xhci_host", []).extend(uhci)
+        if xhci_dropped:
+            out.setdefault("xhci_dropped", []).extend(xhci_dropped)
     out.pop("orphans_seen", None)
     out["referenced"] = referenced
     return out
@@ -1160,6 +1282,13 @@ def main():
                          "panel); simple = SiliciumPkg SimpleFbDxe (draws on the "
                          "bootloader's framebuffer, no panel bring-up). "
                          "Default: simple")
+    ap.add_argument("--xhci-host", action="store_true",
+                    help="add the USB host stack (XhciPciEmulationDxe, XhciDxe, "
+                         "UsbInitDxe) behind USE_XHCI_HOST_DRIVER=1. Needed for a "
+                         "USB stick to be visible; the blobs come from "
+                         "Binaries/bitra/, the SM7225 sibling, because this "
+                         "device's XBL has no host driver to extract. "
+                         "Default: off")
     ap.add_argument("--apriori-move", action="append", default=[],
                     metavar="ANCHOR:NAME[,NAME...]",
                     help="move the named APRIORI.inc INF lines to just after "
@@ -1234,18 +1363,35 @@ def main():
         sys.exit(f"missing {dxe_dir} - run tools/xbl_extract.py first")
     have = present_drivers(dxe_dir)
 
+    # The USB host stack is the one part of the firmware whose blobs cannot come
+    # from this device, so it is staged from the SM7225 sibling and only then
+    # becomes something the generated lists are allowed to reference.
+    if args.xhci_host:
+        print(f"USB host stack: staging from Binaries/{SIBLING_SOURCE}")
+        have |= stage_sibling_blobs(
+            mu_root, os.path.join(out_root, "Binaries", "gauguin"),
+            sorted(SIBLING_BLOBS))
+
     ref_dir = os.path.join(mu_root, "Platforms/Xiaomi", f"{REF_PLATFORM}Pkg")
     if not os.path.isdir(ref_dir):
         sys.exit(f"missing reference package {ref_dir}\n"
                  f"clone Mu-Silicium into {mu_root} first")
-    model = rewrite_incs(ref_dir, have, "gauguin", apriori_moves)
+    model = rewrite_incs(ref_dir, have, "gauguin", apriori_moves,
+                         xhci_host=args.xhci_host)
     for anchor, path in model.pop("apriori_moved", []):
         print(f"  a-priori move: {path}")
         print(f"                 -> after {anchor}")
+    for note in model.pop("xhci_dropped", []):
+        print(f"  USB host stack, NOT inserted: {note}")
+    xhci = model.pop("xhci_host", [])
+    if xhci:
+        print(f"USB host stack: {len(xhci)} INF line(s) in "
+              f"!if $({XHCI_HOST_GUARD}) == 1")
 
     guid_table = load_guid_table(mu_root)
     model["raw_inc"] = emit_raw_inc(dxe_dir, guid_table, "gauguin")
-    model["dsc"] = GAUGUIN_DSC.format(display=1 if args.display == "qcom" else 0)
+    model["dsc"] = GAUGUIN_DSC.format(display=1 if args.display == "qcom" else 0,
+                                      xhci_host=1 if args.xhci_host else 0)
     print(f"display driver: "
           f"{'Qualcomm DisplayDxe' if args.display == 'qcom' else 'SimpleFbDxe'}")
     model["devicebuild"], ndev = emit_devicebuild(ref_dir, "gauguin", "gauguinPkg")
