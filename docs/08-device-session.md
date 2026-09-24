@@ -8945,3 +8945,252 @@ in the payload currently describes the touch bus at all.
 | bounds | the tree proves which touch node this unit's overlay installs and that Novatek is unique to entry 13 among nineteen. It does not prove at runtime which part answered, because the vendor tree declares both and the driver probes; confirming that is one command on the device (`ls /sys/bus/spi/drivers`, `getevent -pl`) |
 | instrument | `~/backup/gauguin/dt/` read directly as big-endian cells; `~/backup/gauguin/images/part-dtbo.img` decompiled to 19 `.dts` for the marker scan. Nothing rebuilt, nothing flashed, no source edited |
 | does not close | the P2 gate, and touch itself — this is P5's target, not its driver |
+
+
+## Step 4.55 — nothing in the payload of record is gated by its depex, and "no depex" is the most constrained case
+
+The panel can name an a-priori driver that failed to load: that is what `P2 SEQ`
+is for. It cannot name a **non**-a-priori driver held off by its dependency
+expression, because a driver that never runs prints nothing at all — no load
+line, no error, no position in the SEQ band. Both failures leave the same trace
+on the panel, and only one of them is readable there. So the second question has
+to be asked of the image, and `tools/depex-census.py` is that question written
+down as a program.
+
+The answer for the payload of record is **zero**. No driver in it is held off by
+its dependency expression, and none is unjudgeable either. The rest of this step
+is why that is the right answer and not a comfortable one, because the first two
+attempts at it both came back wrong — and wrong in the direction that reads as a
+finding.
+
+### The mechanism: an a-priori driver's depex is read and never evaluated
+
+This is the fact the whole census turns on. `CoreIsSchedulable` is only consulted
+for a driver still marked `Dependent`:
+
+```c
+// MdeModulePkg/Core/Dxe/Dispatcher/Dispatcher.c:1203-1207
+  if (DriverEntry->Dependent) {
+    if (CoreIsSchedulable (DriverEntry)) {
+      CoreInsertOnScheduledQueueWhileProcessingBeforeAndAfter (DriverEntry);
+      ReadyToRun = TRUE;
+    }
+  } else { ... }
+```
+
+and the a-priori sweep marks every file in the a-priori array otherwise, before
+anything runs:
+
+```c
+// Dispatcher.c:2104-2120
+  for (Index = 0; Index < AprioriEntryCount; Index++) {
+    ... if (CompareGuid (&DriverEntry->FileName, &AprioriFile[Index]) && ...) {
+          DriverEntry->Dependent = FALSE;
+          DriverEntry->Scheduled = TRUE;
+          InsertTailList (&mScheduledQueue, &DriverEntry->ScheduledLink);   // :2113
+          ...
+          DEBUG ((DEBUG_DISPATCH, "  RESULT = TRUE (Apriori)\n"));          // :2122
+```
+
+`Dependent = FALSE` is the flag that decides the queue — step 4.9's conclusion,
+and step 4.10 built its experiment on it. So for a driver in this batch the
+dependency expression is still *read* (`CorePreProcessDepex`, which is where
+`BEFORE`/`AFTER` ordering is taken from) and then *not consulted at all*. The axis
+that decides whether a depex can block anything is therefore not "does it name a
+missing protocol" but "is this driver in the a-priori file" — and on this platform
+that file names 70 GUIDs, so it is most of the volume.
+
+### The two wrong answers, and the guard that now catches the third
+
+Both were produced by this tool and both are kept in its docstring, because both
+read as results.
+
+* The first version compared **names**: the uninstalled-list held bare macro names
+  while Mu's headers spell them `..._PROTOCOL_GUID`, so no comparison ever hit and
+  the census reported **0** — which is precisely the answer that says there is
+  nothing here to look at. A name-keyed match that fails silently fails
+  reassuringly. It is keyed on GUIDs now.
+* The second version fixed that and reported **2**: `CapsuleRuntimeDxe` needing
+  Variable Write and `RealTimeClock` needing Variable. Both are in the a-priori
+  array (entries 43 and 40), so both are promoted and neither depex is evaluated.
+  The answer was not merely incomplete, it was wrong in the direction of a
+  discovery. Hence this version reads the a-priori file **out of the volume it is
+  analysing** rather than off `APRIORI.inc`, which may not be the file that
+  produced the image.
+
+That produced a third failure mode, which is why the tool now refuses to run
+rather than reporting a number: `UNINSTALLED` decides what counts as a protocol
+this platform is missing, so a GUID in it that no header defines would silently
+drop a protocol out of the comparison and let a held-off driver report as fine.
+Injecting one bogus GUID is a negative test that passes: the tool names it on
+stderr and exits 1 with *"the census would silently ignore them"*. Two details in
+that name map were themselves wrong first — `Protocol/Variable.h` writes
+`{ 0x1e5668e2, 0x8481, 0x11d4, {0xbc, 0xf1, 0x0, ...} }`, and a one-digit byte
+field dropped the Variable protocol; and every definition in MdePkg is continued
+with a backslash, so a pattern without the continuation lost all of them.
+
+### The second mechanism, which is the opposite of what "no depex" sounds like
+
+A driver with no depex section is not unconstrained. `Dispatcher.c:893-895` sets
+
+```c
+    Depex = NULL;
+    Dependent = TRUE;
+```
+
+and `CoreIsSchedulable` sends a NULL depex down the UEFI 2.0 branch
+(`Dependency.c:222-228`) to `CoreAllEfiServicesAvailable`
+(`DxeMain/DxeProtocolNotify.c:81-93`), which walks `mArchProtocols` and returns
+`EFI_NOT_FOUND` on the first entry that is not present. That table names thirteen
+protocols — Security, Cpu, Metronome, Timer, Bds, Watchdog Timer, Runtime,
+Variable, Variable Write, Capsule, Monotonic Counter, Reset, Real Time Clock — and
+the test is on **all** of them. With eight missing, no non-a-priori driver without
+a depex can run either.
+
+In the payload of record that is five drivers, and one of them is a driver whose
+name would never suggest it:
+
+| payload | no depex, not a-priori |
+|---|---|
+| record (`p2-freewhy-g`) | `BootGraphicsResourceTableDxe`, `FeatureEnablerDxe`, `MacDxe`, `PwrUtilsDxe`, `VcsDxe` |
+| `usb-host` | the same five plus **`XhciDxe`** |
+
+So "carries no depex" reads like the least constrained thing in the volume and is
+in fact the most constrained. Step 4.50 recorded that `XhciDxe` has no depex
+section anywhere; what that means had not been followed through, and it means the
+host controller sits under the strictest condition in the file, not the loosest.
+
+### The filter that makes the count checkable against the panel
+
+The dispatcher is only ever shown five file types (`mDxeFileTypes`,
+`Dispatcher.c:697-703`: `DRIVER` 0x07, `COMBINED_SMM_DXE` 0x08,
+`COMBINED_PEIM_DRIVER` 0x0A, `DXE_CORE` 0x03, `FV_IMAGE` 0x0B). The census applies
+the same filter, and the filter is not cosmetic: without it the record payload
+reports 123 files, and the 43 that are bmp images, panel XMLs, `.cfg` files and
+the Apriori file itself all read as drivers with no depex and no constraints.
+With it, **80** remain — which is exactly the `P2 WALK seen=80` the device
+printed. That agreement is what makes the rest of these numbers comparable to the
+device's at all, and it is why the tool prints the number with the panel's own
+field name beside it.
+
+### The answer for the payload of record
+
+`tools/depex-census.py work/out/p2-freewhy-g/Mu-gauguin-silicon-gzip.img`:
+
+```
+inner FV 0x703000, 123 FFS files, a-priori file names 70 GUIDs
+  dispatcher-visible files (DRIVER=80): 80  <-- `P2 WALK seen=` is this same number
+
+DEPEX section sizes seen: 18 B x18, 36 B x7, 72 B x1, 90 B x1
+27 of them carry a depex, 53 do not
+  of the 27 with a depex: 21 are promoted by the a-priori file (depex inert), 6 are gated
+  of the 53 without one: 48 are a-priori, 5 are not
+```
+
+27 of the 80 carry a depex. **21 of those 27 are a-priori, so their depex is
+inert.** The remaining six (`RamManagerDxe`, `SmbiosDxe`, `SmBiosTableDxe`,
+`AcpiTableDxe`, `AcpiPlatform`, `SetupBrowser`) depend on nothing worse than
+`EFI_PCD_PROTOCOL_GUID`, `EFI_ACPI_TABLE_PROTOCOL_GUID` and the HII protocols,
+and `PcdDxe` is a-priori entry 2, so PCD exists before any of them is considered.
+None waits on one of the eight missing architectural protocols.
+
+The conclusion step 4.9's eight missing protocols were about therefore changes
+shape. They are **not** a dependency deadlock: every one of them has a producer
+sitting in the volume's own a-priori array — `VariableRuntimeDxe` at entry 32,
+`ResetSystemRuntimeDxe` at 35, `WatchdogTimer` at 37, `SecurityStubDxe` at 38,
+`EmbeddedMonotonicCounter` at 39, `RealTimeClock` at 40, `BdsDxe` at 45. Their
+absence is a **load** failure, which is the failure `P2 SEQ` already points at,
+and not a second fault hiding behind it. The depex reading and the panel reading
+agree about which one this is.
+
+There is a bound on that, and it is stated in the tool rather than left to the
+reader. Producer-to-protocol is not recoverable from a volume in general: above
+the nine mapped GUIDs the tool knows the *name* of a protocol a depex names but
+not who installs it, so a driver gated on some other uninstalled protocol would
+land in the healthy-looking bucket. The nine are the ones the device actually
+reported missing, which is why the map is worth having for exactly those — and it
+is not a general ability to tell a wait from a dead end.
+
+### The `xhci-host` payload: one waiting, one unjudgeable, and no change to the other two
+
+Run against `work/out/usb-host/Mu-gauguin-xhci-host-gzip.img` (83
+dispatcher-visible, 29 with a depex, the extra 234-byte section showing up in the
+histogram):
+
+```
+== non-a-priori, gated on a protocol that is not installed (1) — satisfiable, and waiting on its producer to load
+  XhciPciEmulation
+      needs Bds arch protocol  (665E3FF6-46CC-11D4-9A38-0090273FC14D), installed by BdsDxe at a-priori 45
+      needs Monotonic Counter arch protocol  (1DA97072-…), installed by EmbeddedMonotonicCounter at a-priori 39
+      needs Real Time Clock arch protocol  (27CFAC87-…), installed by RealTimeClock at a-priori 40
+      needs Reset arch protocol  (27CFAC88-…), installed by ResetSystemRuntimeDxe at a-priori 35
+      needs Security arch protocol  (A46423E3-…), installed by SecurityStubDxe at a-priori 38
+      needs Variable Write arch protocol  (6441F818-…), installed by VariableRuntimeDxe at a-priori 32
+      needs Variable arch protocol  (1E5668E2-…), installed by VariableRuntimeDxe at a-priori 32
+      needs Watchdog Timer arch protocol  (665E3FF5-…), installed by WatchdogTimer at a-priori 37
+
+== gated, and the depex names a protocol no header defines (1) — cannot be ruled in or out from the image
+  UsbInitDxe
+      needs E722B03F-B250-42CE-8EBD-5BD51812D037   (defined by no header under work/uefi/Mu-Silicium)
+```
+
+Eight of the thirteen terms of `XhciPciEmulationDxe`'s conjunction are among the
+protocols that are not installed, and each of the eight has an a-priori producer.
+That is a **wait**, and it is step 4.50's own reading of this file — "the host
+stack waits rather than adding two more `L`s to a batch that is already failing 27
+of 46". What this step adds is that the wait is not an interpretation: the
+producers are named and indexed out of the same volume the consumer is in.
+
+`UsbInitDxe` is reported as a separate bucket and not folded into either of the
+other two. Step 4.50 established that `E722B03F-…` is Qualcomm's own GUID and is
+carried by nine blobs in the tree including this phone's `UsbConfigDxe.efi`, so a
+publisher may well exist; what the image says is only that no header defines it,
+which makes it neither a nameable missing protocol nor a known-good one. **The two
+readings are compatible and neither is withdrawn** — step 4.50 says the producer
+is a peer already in the payload, this step says the image cannot confirm it
+because there is no header to confirm it against. Calling it "gated, nothing
+known-missing" would print an unknown as reassurance, which is the failure mode
+this whole step is about.
+
+`XhciDxe`, the third blob, is in the no-depex bucket above.
+
+### The label that was wrong, and was changed rather than explained away
+
+The first version of this census printed its findings under **`CAN NEVER BE
+SCHEDULED`**. That was wrong, and it was wrong for the same reason as the other
+two errors: it took "names a protocol that is not installed" for "names a
+protocol the platform never installs". Every protocol in that list has a producer
+in the volume. A driver gated on one of them is held off *while P2 is unsolved*
+and becomes schedulable when its producer loads — which is a diagnosis of P2, not
+a finding about the driver.
+
+The bucket is now **"non-a-priori, gated on a protocol that is not installed"**,
+and the heading says "satisfiable, and waiting on its producer to load". The
+distinction the tool now states it *can* prove — that no depex in either payload
+names a protocol with no producer in the volume, for the nine mapped GUIDs — is
+the one that would justify the old heading, and it holds only because the answer
+is zero. Had any producer been absent from the volume, that would have been the
+finding, and the tool would have had a bucket for it.
+
+### What this step did not change
+
+Nothing was built, nothing was flashed, no source under `Mu_Basecore` was edited,
+and no line number in this log moved. The payload of record is still
+`cbe5a13114fc4a0465677e480a29a76fa2836cf2ae00fb9e9838c490e0102132` and
+`tools/probe-fingerprint.py --expect P2FreeWhy` still exits 0. This is host-side
+groundwork that makes the P2 reading sharper when it comes; it does not advance
+P2, and it cannot: the panel is the only thing that can say *which* of the 27
+a-priori drivers failed to load, and that reading still has not been taken.
+
+| | |
+|---|---|
+| finds | **0** of the 80 dispatcher-visible files in the payload of record are held off by their dependency expression, and 0 are unjudgeable. **5** are held off by the other rule — no depex at all, which requires all thirteen architectural protocols. Every one of the nine missing architectural protocols has a producer in the volume's a-priori array, so their absence is a **load** failure, not a dependency deadlock |
+| mechanism 1 | the a-priori sweep sets `Dependent = FALSE` before anything runs (`Dispatcher.c:2104-2120`), and `CoreIsSchedulable` is only called under `if (DriverEntry->Dependent)` (`:1203-1207`) — so for the 21 a-priori depex-bearing drivers the expression is read and never evaluated |
+| mechanism 2 | a NULL depex is not a free pass: `Dispatcher.c:893-895` marks it `Dependent`, and the UEFI 2.0 branch (`Dependency.c:222-228`) reaches `CoreAllEfiServicesAvailable` (`DxeProtocolNotify.c:81-93`), an AND over all thirteen `mArchProtocols` entries |
+| checkable | the `mDxeFileTypes` filter (`Dispatcher.c:697-703`) takes 123 files to 80, and 80 is the `P2 WALK seen=80` the device printed — the offline and on-panel counts are the same measurement. `P2 APRI`'s `entries=70` agrees too |
+| xhci-host | `XhciPciEmulation` waits on eight protocols, each with a named a-priori producer (step 4.50's "waits rather than adding two more `L`s", now measured); `UsbInitDxe` is unjudgeable from the image because no header defines `E722B03F-…` — compatible with step 4.50's finding that a Qualcomm peer may publish it; `XhciDxe` is in the no-depex bucket |
+| withdraws | the heading `CAN NEVER BE SCHEDULED` for a driver gated on a protocol whose producer is in the volume — that state is *waiting*, and naming it "never" turns a P2 diagnosis into a false finding about the driver. Also the two earlier counts, **0** (name-keyed, never matched) and **2** (`CapsuleRuntimeDxe`, `RealTimeClock`, both a-priori and therefore inert) |
+| guard | a GUID in `UNINSTALLED` that no header defines is a hard error and exit 1, so the tool cannot under-report by silently skipping a protocol. Verified by injecting one |
+| instrument | `tools/depex-census.py` — FFS walk via `tools/fv-inventory.py`, a-priori array read out of the image via `tools/apriori-order.py`, depex GUIDs resolved against `MdePkg`/`MdeModulePkg`/`EmbeddedPkg`/`ArmPkg`/`SiliciumPkg`/`QcomPkg` headers and `.dec` files; `Dispatcher.c` and `Dependency.c` read at the lines cited |
+| bounds | producer-to-protocol is not recoverable from a volume in general, so above the nine mapped GUIDs a driver gated on some other uninstalled protocol would read as healthy. The reverse direction is also open: a driver whose depex names only installed protocols is not proved schedulable, only not proved blocked |
+| does not close | the P2 gate. `P2 SEQ`, `P2 STATS discovered=` and the 27 `CoreLoadImage` failures are where the eight missing protocols actually live, and none of it is readable without the device |
