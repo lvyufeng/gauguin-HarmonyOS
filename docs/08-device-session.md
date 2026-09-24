@@ -3534,18 +3534,18 @@ the state this step has now proved the failures must be in.
 | closes | the "a region is injected mid-run" family, which was the last alternative to heap state in step 4.18 |
 | does not close | the 27. `P2 ERR` remains the only route to the reason |
 
-## Step 4.21 — The SEQ's letters aligned to the Apriori order, and they redraw the 27
+## Step 4.21 — What the SEQ's letters index, and the assumption the join rests on
 
-Step 4.17 read the SEQ's letters as a *stop* test: `ShmBridgeDxe` is at Apriori
-index 22 and physical index 74, so no stop below 74 can produce a promotion for
-it, and the two stops the length allowed were both refuted. That argument is
-sound and it still stands. What did not stand up is the second thing the same
-step did — naming *which* nineteen drivers started.
+Step 4.17 read the SEQ's letters as a *stop* test and that argument is sound: no
+stop on this volume produces the observed string, because slot 21 is
+`ShmBridgeDxe`'s `s` and `ShmBridgeDxe` sits at physical index 74. This step adds
+two things that argument used without stating them, and corrects one claim made
+alongside it.
 
-### The alignment that was assumed rather than checked
+### The alignment rule, from the source rather than from the join
 
-The reading was `SEQ[j]` = "the outcome of Apriori entry `j`", which makes
-`SEQ[21]` the entry at index 21. Read the machinery instead:
+The join at step 4.15 is written `SEQ[k]` → `Apriori[k + 1]`. That is true, but
+here is why, and it is worth having because the reason is not the obvious one:
 
 ```c
 STATIC
@@ -3557,106 +3557,95 @@ P2MarkSeq (IN EFI_GUID *Guid, IN CHAR8 Ch, IN EFI_STATUS Status)
       mP2AprioriRes[Index] = Ch;
 ```
 
-and `mP2AprioriGuid[]` is filled in exactly one place — inside the match branch
-of the promotion loop, on the line before `mP2Apriori++`. So `mP2AprioriRes[j]`
-is the result of the **j-th promotion**, and the promotion loop walks
-`Index` ascending, so the j-th promotion is the j-th entry that *matched*. The
-SEQ line therefore says nothing about Apriori indices directly; it says what
-happened to the matched entries in the order they matched.
+`mP2AprioriGuid[]` is written in exactly one place — inside the match branch of the
+promotion loop, on the line above `mP2Apriori++` — so it holds the *promoted*
+entries in promotion order, and the promotion loop walks `Index` ascending. The
+SEQ therefore indexes **the j-th promotion**, not Apriori index j. Those coincide
+only when the matches are a contiguous run from index 1.
 
-That is only equal to `ap(j+1)` if the matches were contiguous from index 1,
-which is the 47-entry reading. The step-4.17 note assumed it and reported the
-result as though it were independent of the fork. It is not — and the same
-assumption is what put `ScmDxe` in the "started" list and left `PcdDxe` out.
+**And the sentence at step 4.15 that appears to close this — "a contiguous 46-letter
+string is 46 matches and not a short array" — does not close it.** Filling the
+buffer on a match establishes that the string's *length* counts matches; it says
+nothing about the array's length, because a 47-entry array in which indices 1..46
+all match produces the same 46 characters. The length is a count of promotions
+either way. (Step 4.15's *other* argument against the 47-entry reading does hold and
+is untouched: `GetSection` writes `*BufferSize = SectionSize` unconditionally when
+it allocates the buffer, so a successful Apriori read cannot come back short.)
 
-### The alignment the strings actually support
+### The assumption the physical-index argument rests on
 
-Under the contiguous reading, `SEQ[j]` is `ap(j+1)`, and the SEQ is
-`"s"*18 + "L"*3 + "s" + "L"*24` — so the successes are slots `0..17` and `21`,
-i.e. **ap1..ap18 and ap22**, and the failures are slots `18,19,20` and `22..45`,
-i.e. **ap19, ap20, ap21 and ap23..ap46**. Joining that against the host's own
-Apriori order (`tools/apriori-order.py`) and its FFS physical indices gives:
+So the 46 characters fix the outcome of 46 promotions, and the join to `Apriori[k+1]`
+— which is what turns them into the name tables and into the physical-index lists
+`2 3 4 10 11 17 24 25 26 27 28 29 30 31 39 42 43 52 74` and
+`5 6 7 8 9 12 13 15 16 18 19 23 33 34 35 36 37 38 40 44 45 46 47 48 49 54 73` — needs
+the matches to be exactly 1..46. That holds if the entries which failed to match sit
+past the run; it fails if the misses are scattered through the first 46, in which
+case the same 46 letters name a different set of drivers and every table after the
+first miss is wrong.
 
-| | |
-|---|---|
-| started (19) | `PcdDxe, EnvDxe, ReportStatusCodeRouterRuntimeDxe, StatusCodeHandlerRuntimeDxe, RuntimeDxe, ArmCpuDxe, ArmGicDxe, MetronomeDxe, ArmTimerDxe, SmemDxe, DALSys, HWIODxeDriver, ChipInfo, PlatformInfoDxeDriver, HALIOMMU, ULogDxe, CmdDbDxe, NpaDxe, ShmBridgeDxe` |
-| failed (27) | `RpmhDxe, PdcDxe, ClockDxe, ScmDxe, DiskIoDxe, PartitionDxe, EnglishDxe, SdccDxe, UFSDxe, Fat, TzDxe, VariableRuntimeDxe, DALTLMM, SPMI, ResetSystemRuntimeDxe, PmicDxe, WatchdogTimer, SecurityStubDxe, EmbeddedMonotonicCounter, RealTimeClock, PrintDxe, DevicePathDxe, CapsuleRuntimeDxe, HiiDatabase, BdsDxe, GpiDxe, I2C` |
-| started, by physical index | `[2, 3, 4, 10, 11, 17, 24, 25, 26, 27, 28, 29, 30, 31, 39, 42, 43, 52, 74]` |
+Two consequences, stated plainly because an earlier draft of this step overstated
+the first:
 
-Two things are load-bearing here and they are not the same strength of claim.
+- **the physical-index lists are not "re-derived from the volume", whatever step
+  4.15's heading says.** The volume supplies the file *order*; the letters come from
+  the panel. They are one SEQ joined to one host-side file table, and the join has
+  an assumption in it. It is a good check — it is what shows the last success sits at
+  physical 74 while the first failure sits at 5 — but it is a consistency check, not a
+  second measurement.
+- **`P2 APRI miss=` is the number that validates or voids the tables.** Its comment
+  block already says a miss of 47 means "the first 46 non-core entries matched and
+  the 47th did not", which is precisely this assumption, and it is a *prediction*: if
+  the tables above are right, `miss=47`. A lower index means the batch has holes and
+  the name tables are wrong from that index on.
 
-**The alignment to *promotion order* is proven from the source.** `mP2AprioriGuid[]`
-is written only inside the match branch, and the loop walks `Index` ascending, so
-`mP2AprioriRes[j]` is the result of the j-th promotion whatever the array's length
-was. Step 4.17's reading — `SEQ[j]` = "Apriori entry j" — is `ap(j+1)` only by
-assuming a second thing, and it never said which claim it was resting on.
-
-**The identification of the j-th promotion with `ap(j+1)` needs contiguity, and
-that is still an assumption.** It holds if the entries that matched are exactly
-1..46, i.e. if whatever failed to match sits at the tail. If the misses were
-scattered through the first 46 the promotions would still be 46 letters long, and
-they would name a different set. Nothing on the panel so far separates the two,
-and — worth stating plainly, because an earlier draft of this step did not — the
-physical-index list below is *derived from this same SEQ*, so it is not the
-independent cross-check it was described as. The one host-side fact it uses that
-the SEQ does not supply is the file order in the image, which fixes where each
-name sits; it does not fix which names are successes.
-
-`P2 APRI miss=` is what separates them, and it is cheap: `miss=47` with
-`entries=70` is the tail reading and makes the table below exact, an index of 46 or
-less says the batch has holes and the names in the table are wrong for every
-promotion after the first miss.
-
-### What changes, and it is not the count
-
-The count is unchanged — 19 started, 27 failed, 46 promoted — and so is the
-conclusion that `P2 ERR` is the first line to read. Three things do change.
-
-**`PcdDxe` starts.** It is Apriori index 1 and it was previously filed as the
-first failure. PCD is therefore up, and every later driver's `PcdGet*` is not a
-suspect.
-
-**The failure set has a shape.** It is not scattered: ap1..ap18 all start, then
-`ap19, ap20, ap21` fail, `ap22` starts, and `ap23..ap46` all fail. A contiguous
-run from ap19 with exactly one exception.
-
-**That shape refutes the size-threshold reading of step 4.18.** Sizes alongside
-the letters, in promotion order:
-
-| ap | driver | FFS bytes | result |
-|---|---|---|---|
-| 10 | `DALSys` | 307246 | started |
-| 18 | `NpaDxe` | 81966 | started |
-| 19 | `RpmhDxe` | 65584 | failed |
-| 20 | `PdcDxe` | 36910 | failed |
-| 21 | `ClockDxe` | 192562 | failed |
-| 22 | `ShmBridgeDxe` | 36922 | **started** |
-| 23 | `ScmDxe` | 49198 | failed |
-
-The largest request in the whole batch, `DALSys` at 307 KiB, starts. A 65 KiB
-request eighteen positions later fails. And `PdcDxe` at 36910 bytes fails
-immediately before `ShmBridgeDxe` at **36922** bytes succeeds — twelve bytes
-apart, opposite outcomes. No monotone function of size, and no running total,
-produces that. What it does look like is state that something *between* those
-two promotions changed, and `P2 BIN` / `P2 RETRY` were built to read exactly
-that state.
-
-### What it does not change
-
-The 46-entry SEQ still cannot be a run cut short at physical 49/50 (step 4.17
-holds), and it still cannot say whether the Apriori array held 47 entries or 70:
-under both readings the promotions are the same 46, so the two forks differ in
-*why* the last 23 entries did not match and not in *which* drivers were affected.
-That remains a `P2 APRI unhit=` / `P2 APRI miss=` reading, and it is a smaller
-question than it looked — it explains the matching, not the 27.
+That does not change the count — 19 started, 27 failed, 46 promoted — and it does
+not change what to read first. `P2 ERR` is still the line that answers the 27, and
+`P2 APRI miss=` now carries a second job: it is the falsifier for the driver names
+that step 4.15 and step 4.18 both build on.
 
 | | |
 |---|---|
-| instrument | `tools/apriori-order.py` (the Apriori order) and `tools/fv-inventory.py` (the physical file order); the SEQ as read off the panel at step 4.13 |
-| proven | `mP2AprioriRes[j]` is the result of the **j-th promotion**, not of Apriori index j. Step 4.17's reading was promotion order under a contiguity assumption it did not state |
-| conditional | naming promotions `ap(j+1)` needs the matches to be 1..46. `P2 APRI miss=47` confirms it; a lower index refutes the name lists below and leaves only the ordering claim |
-| corrects | its own earlier draft, which called the physical-index list an independent cross-check. It is derived from the same SEQ |
-| does not close | the 27. `P2 ERR` remains first, and `P2 FREE largest=` / `P2 BIN` / `P2 RETRY` now have a specific shape to explain |
+| instrument | `P2MarkSeq` in `Dispatcher.c` (the rule), `tools/apriori-order.py` (the order), `tools/fv-inventory.py` (the physical order) |
+| adds | the alignment is *proven* to index promotions, not Apriori entries; step 4.15's "not a short array" sentence is an over-claim and is dropped; the join carries a contiguity assumption it never named |
+| prediction | `P2 APRI miss=47` if the name tables are right; a lower index voids them from that point |
+| does not close | the 27. `P2 ERR` remains first |
+
+### The consequence for the proposed `logfs` writer, which kills it
+
+The plan this authorization was granted for was a DXE driver that writes the digest
+onto the phone's own `logfs` partition, so that reading a result stops being a race
+against the framebuffer console. Its stated premise was that the storage stack is
+already up — "`UFSDxe` (ap28, physical 48), `DiskIoDxe` (ap24, physical 35),
+`PartitionDxe` (ap25, physical 36) and `Fat` (ap29, physical 37) all start, so no USB
+is needed."
+
+**That premise is false, and the authoritative lists say so.** All four are in the
+27. They are four of the indices in the failing physical list recorded at step 4.15 —
+`35, 36, 37, 48` — and they are `L` in the SEQ at promotion positions 23, 24, 27 and
+28. There is no `BlockIo` producer and no FAT driver in this DXE, so:
+
+- nothing can reach the UFS at all, so `logfs` is not merely hard to *write*, it is
+  unreachable from DXE by any route;
+- an ATA/SCSI-passthrough shortcut is not available either, because the UFS host
+  controller driver is itself one of the failures;
+- the only remaining channel to the partition is TWRP, i.e. the `dd` on
+  `/dev/block/by-name/logfs` that `tools/pull-bootloader-log.sh` already uses — and
+  that reads ABL's log, not ours.
+
+So the `logfs` writer is **blocked on the same 27 drivers**, and it is not a way of
+*avoiding* the panel; it is a second thing waiting on the same fix. The plan is
+withdrawn rather than deferred, and the reason is worth keeping: the premise was
+sound only under the *old* SEQ alignment, which put `ScmDxe` in the loaded set. It is
+the same misalignment this step corrects, surfacing a second time as a work plan
+instead of as a table.
+
+| | |
+|---|---|
+| what it was | a DXE driver writing the digest to `logfs`, to replace photographing the panel |
+| why it cannot work now | `UFSDxe`, `DiskIoDxe`, `PartitionDxe` and `Fat` are all among the 27 load failures — there is no block device and no filesystem in this DXE |
+| what actually reads `logfs` | TWRP's `dd`, which reads *ABL's* log, not ours. `tools/read-logfs.py` |
+| status | withdrawn, not deferred — it returns as a P2 *output* once the 27 are fixed, never as an input to fixing them |
+
 
 ## Step 5 — Leave it bootable
 
