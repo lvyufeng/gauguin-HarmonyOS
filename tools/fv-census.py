@@ -661,8 +661,40 @@ for idx, (tname, tval) in enumerate(TYPES):
     lastg = fvinv.guid_str(of[-1][0]) if of else "0" * 36
     print(f"  P2 WALK t={idx} seen={seen} iter={itr} last={lastg}")
     print(f"      ({tname} = {tval:#04x}, {seen} file(s) in this volume)")
-print("\n  -> t=0 seen=80 iter=81 is the line that matters, and the join above has "
+print(f"\n  -> t=0 seen={_n07} iter={_n07 + 1} is the line that matters, and the join above has "
       "already made it\n     a prediction rather than a fork: it refutes the two stops "
       "on the SEQ's *content*,\n     not merely on its length, so nothing short of a "
       "complete walk fits. The other four\n     lines are the control, and they should "
       "read exactly as above.")
+
+# ---------------------------------------------------------------------------
+# The one number left that separates "the walk never handed them over" from "the
+# promotion loop dropped them". `discovered` is mP2Discovered, which
+# CoreAddToDriverList bumps on every successful insert into mDiscoveredList, so it
+# is |mDiscoveredList| and not a count of anything else. The DRIVER walk is the only
+# branch that adds a file per iteration here (this volume has no FV_IMAGE file and
+# the DXE_CORE branch does not call CoreAddToDriverList at all), and the four
+# non-DRIVER types contribute 0, 0, 0 and 0. So `discovered` should equal
+# `seen` at t=0, and the pair is read together with the SEQ length:
+#
+#   seen=80 discovered=80 seq=69   the walk and the list are whole - the 23 were
+#                                  handed over, and the promotion loop's own
+#                                  CompareGuid/FvHandle test is what let them go
+#   seen=80 discovered<80 seq<69   the walk handed them over and the adds failed,
+#                                  which in a DEBUG build means the ASSERT in
+#                                  CoreAddToDriverList fired first
+#   seen<80  discovered<=seen      the walk stopped, and the stop is the mechanism
+#                                  after all - but then the missing set is a
+#                                  physical suffix, which ap47..ap69 are not
+print()
+print("=== The `P2 STATS` numbers this volume should produce ===")
+print(f"  P2 STATS discovered={_n07} apriori=46/70 started=<s> "
+      "diag=<n> noload=<n>")
+print(f"      discovered {_n07} = one CoreAddToDriverList per DRIVER file, 0 from")
+print("      every other type: the FV_IMAGE walk finds no file in this volume and")
+print("      the DXE_CORE branch never adds. So discovered should equal seen at t=0,")
+print("      and apriori=46/70 with unhit=24 is what a 46-character SEQ implies.")
+print("      `started` is not predicted here - it is the run's own count of the 's'")
+print("      characters, so predicting 19 from the panel would be circular.")
+print("  57 = 80 - 23 would be the other reading made visible: the walk ran, and")
+print("      the 23 never reached mDiscoveredList. Anything else is neither.")

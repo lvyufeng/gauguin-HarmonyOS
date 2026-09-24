@@ -329,7 +329,7 @@ index 39668123..8405bc31 100644
  #define  USB_INTERFACE_SIGNATURE  SIGNATURE_32 ('U', 'S', 'B', 'I')
  #define  USB_BUS_SIGNATURE        SIGNATURE_32 ('U', 'S', 'B', 'B')
 diff --git a/MdeModulePkg/Core/Dxe/Dispatcher/Dispatcher.c b/MdeModulePkg/Core/Dxe/Dispatcher/Dispatcher.c
-index d7c7147e..7f9fb868 100644
+index d7c7147e..713b2740 100644
 --- a/MdeModulePkg/Core/Dxe/Dispatcher/Dispatcher.c
 +++ b/MdeModulePkg/Core/Dxe/Dispatcher/Dispatcher.c
 @@ -60,6 +60,631 @@ EFI_LOCK  mDispatcherLock = EFI_INITIALIZE_LOCK_VARIABLE (TPL_HIGH_LEVEL);
@@ -1058,7 +1058,7 @@ index d7c7147e..7f9fb868 100644
      } else {
        AprioriEntryCount = 0;
      }
-@@ -1433,11 +2112,75 @@ CoreFwVolEventProtocolNotify (
+@@ -1433,11 +2112,87 @@ CoreFwVolEventProtocolNotify (
            DriverEntry->Scheduled = TRUE;
            InsertTailList (&mScheduledQueue, &DriverEntry->ScheduledLink);
            CoreReleaseDispatcherLock ();
@@ -1101,16 +1101,28 @@ index d7c7147e..7f9fb868 100644
 +      // bytes are read on every boot.
 +      //
 +      // The line that names the shape is `miss`, below, and it needs `entries`
-+      // beside it to be read exactly. `miss=47` says the first 46 non-core
-+      // entries matched and the 47th did not; with `entries=70` that is the
-+      // whole array, and the discovered list is the one missing its tail, which
-+      // is what the volume's own layout predicts. An index of 46 or less says an
-+      // entry matched nothing where a later entry matched something, so the
-+      // batch has holes and the array and the volume disagree about individual
-+      // GUIDs rather than about where the list ends - a different fault with a
-+      // different fix. `miss=none` now means something else again: with the
-+      // array always read whole, every entry matched, so the image running is
-+      // not this image.
++      // beside it to be read exactly, because the two answer different halves of
++      // one question. `miss=47` says the first 46 non-core entries matched and the
++      // 47th did not; with `entries=70` the scan reached the end of the array and
++      // the 23 after it matched nothing either, so the discovered list is the one
++      // missing ap47..ap69. An index of 46 or less says an entry matched nothing
++      // where a later entry matched something, so the batch has holes and the
++      // array and the volume disagree about individual GUIDs rather than about
++      // where the list ends - a different fault with a different fix. `miss=none`
++      // now means something else again: with the array always read whole, every
++      // entry matched, so the image running is not this image.
++      //
++      // `miss` is not a stop detector, which is worth saying because it reads like
++      // one. A walk that gives up leaves a physical suffix of the volume
++      // undiscovered, so the Apriori entries it drops are exactly the ones whose
++      // files sit above the stopping point - and on this volume ap47..ap69 sit at
++      // physical 14, 20, 21, 22, 51, 53, 55..70 and 72, interleaved with the 46
++      // that were promoted. There is no stop that drops those 23 and nothing else.
++      // tools/fv-census.py enumerates every stop this volume allows and prints the
++      // `miss` and the SEQ length each one produces; 47 is not among them, and
++      // step 4.12's tail reading has to be given up on its own merits. So a
++      // `miss=47` reading would mean those 23 were never handed to the promotion
++      // loop at all, by a mechanism that is not the walk.
 +      //
 +      // Index 0 is skipped because it matches nothing by construction: it is
 +      // gDxeCoreFileName, and the DXE_CORE branch of the walk fills in
@@ -1134,7 +1146,7 @@ index d7c7147e..7f9fb868 100644
      }
  
      //
-@@ -1470,6 +2213,241 @@ CoreInitializeDispatcher (
+@@ -1470,6 +2225,251 @@ CoreInitializeDispatcher (
    PERF_FUNCTION_END ();
  }
  
@@ -1171,13 +1183,21 @@ index d7c7147e..7f9fb868 100644
 +  }
 +
 +  //
-+  // The Apriori file as the firmware read it. Every line below is a consequence
-+  // of these three numbers, and none of them had been measured on the device:
-+  // `entries` is AprioriEntryCount, and the SEQ line is exactly `entries`
-+  // characters long, so a SEQ of 46 means either 46 entries were scanned and all
-+  // matched, or 70 were scanned and 46 matched. `miss` separates the two, and
-+  // `bytes`/`sum` say whether the buffer ReadSection handed back is the same
-+  // 1120-byte section tools/fv-census.py reads out of the same image.
++  // The Apriori file as the firmware read it. `bytes`, `entries` and `sum` are the
++  // three numbers ReadSection handed back, and they are the only three here that say
++  // anything about the read: `bytes`/`sum` say whether the buffer is the same
++  // 1120-byte section tools/fv-census.py reads out of the same image, and `entries`
++  // says how much of it was scanned.
++  //
++  // The SEQ line is not one of those three. It is `mP2Apriori` characters long, and
++  // mP2Apriori is incremented inside the match branch of the promotion loop, so its
++  // length is the number of entries that matched and went on the scheduled queue -
++  // never the number scanned. A SEQ of 46 is therefore 46 matches out of `entries`,
++  // and the rest are `unhit`; the two together are what localises a batch that came
++  // up short, and neither half localises it alone. `entries=70` with a 46-character
++  // SEQ is a scan that ran to the end of the array, so the 24 it did not match were
++  // absent from mDiscoveredList. A `entries=` well under 70 with a SEQ one shorter
++  // than it would be a short read - a different fault, with a different fix.
 +  //
 +  DEBUG ((
 +    DEBUG_ERROR,
@@ -1225,8 +1245,10 @@ index d7c7147e..7f9fb868 100644
 +  }
 +
 +  //
-+  // The batch, one character per Apriori entry, in the order it was dispatched.
-+  // The first character that is not 's' is where the batch stopped producing
++  // The batch, one character per promoted Apriori entry, in the order the Apriori
++  // file named them - which is the order the promotion loop walks, and not the order
++  // the volume holds them in. The first character that is not 's' is where the batch
++  // stopped producing
 +  // working drivers; `miss` above says whether anything after that was even
 +  // considered. SEQ is the phase, WHY is the status class at the same position,
 +  // and P2 ERR below is the same statuses again in words - three spellings of
@@ -1376,7 +1398,7 @@ index d7c7147e..7f9fb868 100644
  //
  // Function only used in debug builds
  //
-@@ -1486,11 +2464,73 @@ CoreDisplayDiscoveredNotDispatched (
+@@ -1486,11 +2486,73 @@ CoreDisplayDiscoveredNotDispatched (
  {
    LIST_ENTRY             *Link;
    EFI_CORE_DRIVER_ENTRY  *DriverEntry;

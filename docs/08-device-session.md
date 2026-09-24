@@ -789,7 +789,7 @@ Five more candidates died the same way:
   them perfectly evenly and explains nothing on its own. What membership does
   give is the mechanism: `CorePreProcessDepex` marks a-priori members
   `Dependent = TRUE`, the promotion loop clears it, and the sweep at
-  `Dispatcher.c:556` only evaluates `CoreIsSchedulable` for entries still
+  `Dispatcher.c:1204` only evaluates `CoreIsSchedulable` for entries still
   `Dependent` — so **a-priori entries are scheduled once and never retried**,
   whereas depex-driven drivers are re-evaluated on every pass of the
   `do { … } while (ReadyToRun)` loop. All thirteen providers therefore had their
@@ -5675,7 +5675,7 @@ does — it imports that walk rather than repeating the padding rules — and re
 which instruments are present. The markers are **read out of `Dispatcher.c`**, per
 named function, rather than typed into the tool; that is not tidiness. The first
 draft of this tool carried a hand-typed `err=%a at=%d` for `P2Key`, the real
-format is `err=%r at=%d` (`Dispatcher.c:271`), and the tool cheerfully reported
+format is `err=%r at=%d` (`Dispatcher.c:286`), and the tool cheerfully reported
 `P2Key` absent from an image that has it. A tool whose job is to say which
 instrument is in an image cannot invent its own fingerprints.
 
@@ -5693,10 +5693,10 @@ legible.
 
 ### `P2Key` is in exactly one build, and that makes the bottom row categorical
 
-`P2Digest` ends `P2Bins ();` then `P2Key ();` (`Dispatcher.c:2376`, `:2382`, with
-the comment at `:2378` saying "Last, so that it is the last populated row of the
+`P2Digest` ends `P2Bins ();` then `P2Key ();` (`Dispatcher.c:2464`, `:2470`, with
+the comment at `:2466` saying "Last, so that it is the last populated row of the
 panel"). `P2Key` is a `for` and an `if/else` that prints one of two lines
-(`:263`, `:271`) — it cannot print nothing. So on the `p2-variants` build the last
+(`:264`, `:275`) — it cannot print nothing. So on the `p2-variants` build the last
 populated row of the panel is the `KEY` line in *every* state where
 `CoreDispatcher` returned, including after a wipe.
 
@@ -7070,7 +7070,7 @@ prints the row. **47 runs, and every rung all of them failed is in `g`.**
 
 Every `K` line carries a `free=`, so the row set looks like a 46-sample fragmentation trace of the
 whole run. It is unreadable, and not because of the photography: `P2Digest` prints once and then 40
-more times (`Dispatcher.c:2524-2529`), a copy costs about 49 rows against a 99-row panel
+more times (`Dispatcher.c:2552-2557`), a copy costs about 49 rows against a 99-row panel
 (`tools/console-budget.py`), and `AdvanceNewLine` wipes rather than scrolls — so after the first wipe
 the panel holds nothing but copies of the digest, and every `K` line is printed inside the dispatch
 loop, before the first copy. `:2507-2515`'s conclusion is right and stronger than it is written
@@ -7874,3 +7874,214 @@ it was.
 | adds | `entries=70` is forced by the volume, so the 47-entry reading is dead and `sum=` becomes a build identity check; the absent 23 are named and are the whole of USB plus the whole console; `miss` is the one open number |
 | prediction | `P2 APRI bytes=1120 entries=70 sum=a998b263 last=CCCB0C28-…`, `P2 STATS apriori=46/70`, `unhit=24` |
 | does not close | the 27, and `miss` — 47 or lower is still what decides whether step 4.12's name tables stand |
+
+## Step 4.48 — The SEQ length is the match count, and the instrument's own comment said it was the scan count
+
+### What was read, and why it is the origin of the fork
+
+`P2Digest` opens with this:
+
+```c
+  // The Apriori file as the firmware read it. Every line below is a consequence
+  // of these three numbers, and none of them had been measured on the device:
+  // `entries` is AprioriEntryCount, and the SEQ line is exactly `entries`
+  // characters long, so a SEQ of 46 means either 46 entries were scanned and all
+  // matched, or 70 were scanned and 46 matched.
+```
+
+The second clause is false, and the third is the arithmetic that makes it false. The
+SEQ line is built out of `mP2AprioriRes[0..SeqLen)` and `SeqLen` is `mP2Apriori`
+(`Dispatcher.c:2333-2336`):
+
+```c
+  SeqLen = mP2Apriori;
+  if (SeqLen > P2BRINGUP_APRIORI_MAX) {
+    SeqLen = P2BRINGUP_APRIORI_MAX;
+  }
+```
+
+and `mP2Apriori` is incremented inside the **match** branch of the promotion loop,
+after the entry has gone on the scheduled queue (`Dispatcher.c:2115-2123`):
+
+```c
+          if (mP2Apriori < P2BRINGUP_APRIORI_MAX) {
+            CopyGuid (&mP2AprioriGuid[mP2Apriori], &DriverEntry->FileName);
+            mP2AprioriRes[mP2Apriori] = '?';
+          }
+
+          mP2Apriori++;
+          ...
+          break;
+```
+
+So the length of the SEQ line is the number of entries that **matched**, never the
+number scanned. "A SEQ of 46 means 46 entries were scanned and all matched" describes
+a string that cannot exist: `mP2Apriori` cannot exceed `AprioriEntryCount`, and it
+equals it only when every entry matched — which no boot of this volume can do, because
+index 0 is DxeCore and the DXE_CORE branch of the walk fills in
+`gDxeCoreLoadedImage->FilePath` instead of calling `CoreAddToDriverList`.
+
+This is worth a step because **the fork that steps 4.13 through 4.47 spend their length
+closing was generated by this comment.** It declares `entries` and the SEQ length to be
+two spellings of one quantity, so a 46-character line looked like it needed either a
+46-entry array or a 70-entry array with a 24-entry tail, and the question "which of the
+two readings is it?" followed from that. Separated, they are measurements of different
+things — `bytes`/`entries`/`sum` of what `ReadSection` handed back, the SEQ length of
+what `mDiscoveredList` let through — and neither constrains the other. Which is the
+conclusion step 4.47 reached from the section header, without noticing that the
+premise it was arguing against was written into the instrument.
+
+Two more claims in the same block were wrong for the same reason and went with it:
+
+- `// The batch, one character per Apriori entry, in the order it was dispatched.` The
+  characters are one per **promoted** entry, and their order is the order the Apriori
+  file names them — the order `for (Index = 0; Index < AprioriEntryCount; Index++)`
+  walks — not the order the volume holds them in, and not the order they dispatch in.
+- `// ... and the discovered list is the one missing its tail, which is what the
+  volume's own layout predicts.` The volume's layout predicts the opposite.
+  `ap47..ap69` sit at physical 14, 20, 21, 22, 51, 53, 55..70 and 72, interleaved with
+  the 46 that were promoted, and a walk that gives up drops a *physical suffix*. No
+  stop drops those 23 and nothing else. `tools/fv-census.py` enumerates every stop this
+  volume allows and prints the `miss` each one produces; `47` is not among them.
+
+### What was checked and is not a defect
+
+Two things in the same region were re-derived rather than assumed, and both hold:
+
+- **The `miss` decoder's `stop in phys` column is sound.** A `miss` of *k* means entry
+  *k* is the first non-zero index whose GUID matched nothing, and a walk that stops at
+  physical *P* leaves undiscovered exactly the files above *P*, so `miss` is a
+  well-defined function of *P* — the decoder is not claiming that a stop shortens the
+  Apriori array, which it cannot. The two are checked against each other on this
+  volume: stops at 43..51 give `miss=14 PlatformInfoDxeDriver` (physical 52, the lowest
+  Apriori-named file above them), stops at 52..73 give `miss=22 ShmBridgeDxe` (physical
+  74), and the SEQ lengths those stops allow (40..47 and 48..68) contain the observed
+  46 only at stops 49 and 50 — which the slot-content check already refutes.
+- **`Index 0` is skipped deliberately** (`if ((Index > 0) && (mP2ApriMiss == (UINTN)-1))`,
+  `Dispatcher.c:2185`), and the comment beside it says why correctly. So `miss=0` is not
+  a reading the device can produce, and `unhit >= 1` on every boot.
+
+### The one number still open, and it is already on the payload
+
+With the walk refuted as the mechanism on the SEQ's *content* and the stops refuted on
+its *length*, what is left is that `ap47..ap69` were never in `mDiscoveredList` by some
+path that is not `FvGetNextFile`. There is exactly one deployed field that separates
+"the walk never handed them over" from "the promotion loop dropped them", and it is
+`P2 STATS discovered=` — `mP2Discovered`, which `CoreAddToDriverList` bumps once per
+successful `InsertTailList` (`Dispatcher.c:1546`), so it is `|mDiscoveredList|` and
+nothing else.
+
+On this volume `discovered` is forced: one add per DRIVER file, 0 from
+`COMBINED_SMM_DXE`, 0 from `COMBINED_PEIM_DRIVER`, 0 from the DXE_CORE branch, and 0
+from `FIRMWARE_VOLUME_IMAGE` because the t=4 walk finds no file in this volume. So it
+must equal `seen` at t=0. `tools/fv-census.py` now prints that as a prediction beside
+the `P2 WALK` lines, and the three readings are:
+
+| `seen` at t=0 | `discovered` | SEQ length | reading |
+|---|---|---|---|
+| 80 | 80 | 69 | walk and list both whole — the 23 were handed over, so the promotion loop's own `CompareGuid`/`FvHandle` test is what let them go |
+| 80 | < 80 | < 69 | the walk handed them over and the adds failed; in a DEBUG build the `ASSERT` in `CoreAddToDriverList` fires before the add can fail silently |
+| < 80 | ≤ `seen` | < 69 | the walk stopped — but then the missing set is a physical suffix, which `ap47..ap69` are not |
+
+The first row is the one the host analysis implies and the one that would move the
+investigation off the walk entirely. It is also the row that is cheapest to falsify:
+`P2 WALK` and `P2 STATS` are both on the staged payload, and `P2 WALK t=0 seen=80`
+with a 46-character SEQ is a contradiction that no reading of the promotion loop
+survives.
+
+### The line numbers in this log, and the one convention they do not share
+
+Editing `Dispatcher.c` moves every line below the edit, so this step re-checked the
+`Dispatcher.c:` citations in this log against the tree rather than against the
+paragraphs that carry them. Five were wrong and are now right:
+
+| cited | actual | what it names |
+|---|---|---|
+| `:556` | `:1204` | the `CoreIsSchedulable (DriverEntry)` sweep in `CoreDispatcher` |
+| `:2376`, `:2382`, `:2378` | `:2464`, `:2470`, `:2466` | `P2Bins ()`, `P2Key ()`, and the "Last, so that it is the last populated row" comment between them |
+| `:2524-2529` | `:2552-2557` | `P2Digest ()` and its 40-copy repeat |
+| `:263`, `:271` | `:264`, `:275` | `P2Key`'s `for` and its `if (Errors == 0)` |
+| `:271` | `:286` | the `"KEY %d/%d err=%r at=%d free=%d miss=%d\n"` format string |
+
+The first row is the interesting one, because it is not drift — it is a second
+convention. `:556` is where that sweep sits in **upstream Mu**, and `:1204` is where it
+sits once `uefi/patches/mu-basecore-local.patch` is applied. The local patch is
+additive-only in this file, so the two numbering systems are related by a
+piecewise-constant offset, and the patch's own hunk headers give every piece exactly:
+
+| upstream | current | offset |
+|---|---|---|
+| 60 | 60 | 0 |
+| 483 | 1108 | +625 |
+| 519 | 1152 | +633 |
+| 896 | 1543 | +647 |
+| 1309 | 1958 | +649 |
+| 1412 | 2071 | +659 |
+| 1433 | 2112 | +679 |
+| 1470 | 2225 | +755 |
+| 1486 | 2486 | +1000 |
+| 1497 and below | 2559 and below | +1062 |
+
+which is what makes a single stale number possible in the first place: `:556` is the
+right line for that sweep in the unpatched tree and 648 lines away from it in this one.
+The rest of this log's citations are against the patched tree, and the
+ones re-checked here — `:185-204`, `:191`, `:195-219`, `:280`, `:291`, `:683`, `:1546`,
+`:2069` — are correct under that convention. `:486` and `:1062`/`:1107` were not
+re-checked to a verified target in this step and are the remaining debt: both sit in
+`CoreDispatcher`, both are quoted for a property of the scheduled queue rather than
+for a symbol, and neither should be trusted again until it has been read at the line
+it names.
+
+### A tool that could not run at all, on the one path step 4.37 rests on
+
+Re-running the decode against the staged payload — a cheap check, since this step is
+about which numbers in this log are trustworthy — found that
+
+```
+tools/apriori-index.py work/out/p2-freewhy-g/Mu-gauguin-silicon-gzip.img \
+    --seq ssssssssssssssssssLLLsLLLLLLLLLLLLLLLLLLLLLLLL
+```
+
+died with `NameError: name 'entry_at' is not defined` at `tools/apriori-index.py:438`,
+on the line that pairs each character of the SEQ with its file. `entry_at` was
+introduced in step 4.37 (`ebe2bb0`) and never defined; `bed9cc1`, the correction step
+three days later, rewrote the surrounding subsection and did not reach it. So the
+`--seq` path has been broken since 4.37 while 4.37's verdict — *the 27 load failures
+are not the big ones* — has been standing in this log on the strength of what that
+path prints.
+
+It is fixed by defining the function it names: `entry_at (entries, pos, i)` is the
+inverse of `positions`, returning the entry whose promoted position is `i`. That is
+worth a definition of its own rather than an inline `entries[i]`, because `positions`
+drops entries listed in `skips`, so position `i` is `entries[i]` only when nothing was
+skipped before it. With it, the command exits 0 and reproduces the 4.37 split from the
+staged payload's own tables:
+
+```
+    loaded and started: 19 files, 9,338 .. 307,246 bytes, median 36,924
+    CoreLoadImage failed: 27 files, 19,050 .. 385,166 bytes, median 45,098
+    failing files smaller than the largest succeeding one: RpmhDxe, PdcDxe, ...
+```
+
+which is the refutation the step claims — 26 of the 27 are smaller than the largest
+file that loaded — now reproducible with one command instead of resting on a run that
+could not happen.
+
+### What this step did not change
+
+No semantics. Three comments in `Dispatcher.c`, one prediction block in
+`tools/fv-census.py`, one missing function in `tools/apriori-index.py`, and this section. Nothing was rebuilt and nothing was flashed:
+the payload of record is still `cbe5a13114fc4a0465677e480a29a76fa2836cf2ae00fb9e9838c490e0102132`,
+`tools/probe-fingerprint.py --expect P2FreeWhy` still exits 0, and
+`uefi/patches/mu-basecore-local.patch` was regenerated from the tree and verified with
+`--check` (`13 files changed, 1452 insertions(+), 23 deletions(-)`). The 27 `CoreLoadImage`
+failures and the memory findings of 4.43–4.46 are untouched.
+
+| | |
+|---|---|
+| instrument | `P2Digest`'s own comment block (`Dispatcher.c:2260-2275`) against `SeqLen = mP2Apriori` (`:2333`) and `mP2Apriori++` in the match branch (`:2120`) |
+| adds | the SEQ length is the promotion count and never the scan count, so `entries` and the SEQ are independent and the 4.13–4.47 fork does not arise from them; `P2 STATS discovered=` becomes the field that decides where the 23 went, and the census now predicts it |
+| prediction | `P2 STATS discovered=80 apriori=46/70`, `P2 WALK t=0 seen=80 iter=81 last=EBF342FE-B1D3-4EF8-957C-8048606FF671` |
+| does not close | the 27 — `P2 ERR` is still the first line to read — and `discovered`, which needs the panel |
+| citations | the `Dispatcher.c:` line numbers in this log are against the **patched** tree; `:556` was an upstream number and is now `:1204`, and the upstream→current offset for every hunk is in the table above |
+| broken tool | `tools/apriori-index.py --seq` raised `NameError` since step 4.37 and is the path step 4.37's verdict is printed from; `entry_at` is now defined and the command exits 0 |

@@ -295,6 +295,19 @@ def positions(entries, skips):
     return pos
 
 
+def entry_at(entries, pos, i):
+    """promoted position -> entry: the inverse of `positions`, and None if unmapped.
+
+    Named separately because a position is not a file index and the two are easy to
+    confuse once a `skips` set is in play - `positions` skips entries, so position i
+    is `entries[i]` only when nothing was skipped before it.
+    """
+    for e in entries:
+        if pos.get(e["file"]) == i:
+            return e
+    return None
+
+
 def anchors_hold(entries, pos):
     """[] or a list of the anchors this image disagrees with."""
     bad = []
