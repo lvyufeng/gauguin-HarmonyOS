@@ -61,15 +61,16 @@
  * gauguin's device tree states too. No _LPI: gauguin's low-power idle
  * parameters have not been derived, and an unverified _LPI is worse than none.
  *
- * P3 also asks for I2C, SPI, GPIO, buttons and thermal zones, and none of them
- * is here. What is here, as of Step 4.63, is the PMIC family - SPMI, PMIC and
- * PM01 - because unlike those, its names turned out not to be a guess. The note
- * above those three nodes is how each value was settled.
+ * P3 also asks for I2C, SPI, buttons and thermal zones, and none of them is
+ * here. What is here, as of Step 4.64, is the PMIC family - SPMI, PMIC and
+ * PM01, Step 4.63 - and the TLMM pin controller, GIO0, because unlike the
+ * others their names turned out not to be a guess. The note above those nodes
+ * is how each value was settled.
  *
  * The rest stays out for a measured reason. Every one of those nodes needs a
- * `_HID` (and for the GPIO and I2C blocks a `_DSM` whose contract is documented
- * nowhere in this tree), and the device tree carries no ACPI name: it has
- * registers and pins, which are the half that is knowable.
+ * `_HID` (and for the I2C blocks a `_DSM` whose contract is documented nowhere
+ * in this tree), and the device tree carries no ACPI name: it has registers and
+ * pins, which are the half that is knowable.
  *
  * The PM01 census is what changed the picture, and it is worth stating in full.
  * Across the 21 tables in Silicium-ACPI that carry a PMIC-GPIO node at all - one
@@ -842,6 +843,193 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
                         {
                             0x07,
                             0x06
+                        })
+                    }
+                }
+                Else
+                {
+                    Return (Buffer (One)
+                    {
+                         0x00
+                    })
+                }
+            }
+        }
+
+        // The TLMM pin controller - the block Windows binds as "Qualcomm(R)
+        // System Manager GPIO Device". Every value below is measured.
+        //
+        // The id. The census above settles it the same way it settled PM01: the
+        // low pair is the block and the middle byte is the generator family. 0C
+        // is the TLMM block on all five modern families (09 0A 0C 1A 25), 0D on
+        // the older three (05 08 14) and 17 on 02 - which is why gauguin's
+        // window at gauguin's exact length reads QCOM1A0C in Lahaina's
+        // DSDT_MTP. gauguin's family byte is 0A, so the id is QCOM0A0C, and
+        // that is the one id qcgpio7280.inf claims:
+        //
+        //   %GPIO.DeviceDesc%=GPIO_Inst,ACPI\QCOM0A0C
+        //
+        // whose binary is qcgpio.sys, and whose device description is the name
+        // quoted above.
+        //
+        // The window is gauguin's own and not a copy: the device tree's
+        // pinctrl@f100000 states reg = <0x00 0xf100000 0x00 0x300000>. Ten of
+        // the 21 corpus tables carry that same pair; the rest track whatever
+        // their own generation's TLMM window is.
+        //
+        // The interrupts. Nine of them, INTID = 32 + SPI, all Level and
+        // ActiveHigh, because that is what the device tree states -
+        //
+        //   interrupts = <0x00 0xd0 0x04 ... 0x00 0xd8 0x04>   ->  0xF0 ... 0xF8
+        //
+        // - and the corpus agrees on the first one from the other side: all 21
+        // tables put 0xF0 first, and 0xF0 is 32 + 0xD0, gauguin's first line.
+        // What the corpus does with the *later* lines is a generator artefact
+        // rather than a reading: every one of the 21 repeats its first value
+        // instead of incrementing it, three or four times, so no table in the
+        // corpus demonstrates what a second TLMM line looks like. gauguin's
+        // device tree is the only authority for lines two through nine, it
+        // declares nine, and so nine are written.
+        //
+        // What is deliberately not here:
+        //
+        //   - The rest of the corpus _CRS interrupt list. It is not the three
+        //     entries an earlier reading of a truncated dump made it: it runs
+        //     from 8 to 77 entries and it is board data, not SoC data - vili
+        //     and venus are both SM8350 and carry 24 and 77 - with values that
+        //     are INTIDs of direct-connect and PDC-mapped pin lines. gauguin's
+        //     device tree does not carry that list in derivable form: its
+        //     pinctrl nodes name functions and its PDC states ranges of
+        //     possible pin-to-SPI mappings (qcom,pdc-ranges = <0x00 0x1E0 0x5E
+        //     ...>, 153 pins over five ranges), not the pins the board uses. An
+        //     invented catalogue is worse than an absent one, so this node
+        //     declares the controller's own nine lines and stops. The cost is
+        //     the usual one and it is stated: a per-pin line that only the
+        //     catalogue would advertise is not advertised, until the device
+        //     that needs it is added with its own GpioInt.
+        //   - OFNI. 18 of the 21 tables define it and nothing calls it: each of
+        //     those 18 has exactly two occurrences of the name, its definition
+        //     and that definition's own Return. Kailua's GPIV, GPIC, GPIW and
+        //     GPIB pass the same test on a table that has no _CRS either. Dead
+        //     code is not ported.
+        //   - _AEI. Eight of the 21 tables have none at all. Nothing in this
+        //     table declares a GpioInt on GIO0 yet, so there are no event pins
+        //     to list; when a node is added that has one, its pin goes here.
+        //     gauguin's buttons are not candidates - they hang off pm6350 GPIO
+        //     2, which is PM01's block - and no _AEI is better than one that
+        //     names pins nothing asked for.
+        //
+        // _DSM is carried because all 21 tables have it, and because the UUID
+        // is the same string in every one of them: it is Microsoft's GPIO
+        // Controller method, not a Qualcomm convention. Revision 3 is the
+        // corpus majority and what both family-0A tables answer, and function 1
+        // returns the family-0A value - 0x0100 on lisa and a52sxq, against
+        // 0x0140 on venus and vili and 0xFFFF on lemonade, renoir, Cedros and
+        // Lahaina. Kailua's generator answers revision 1 with a second UUID, and
+        // it is the same generator that omits _REG; it is not gauguin's family.
+        // Function 2 and above fall out of the method and return implicit zero,
+        // the same way PM01's does and for the reason its note gives; the
+        // corpus reaches that result through a BreakPoint, which is not carried.
+        //
+        // That the miniport is not what evaluates this is worth recording: the
+        // shipped qcgpio.sys contains no ACPI method name at all, and its only
+        // GPIO-related import is GPIOClx. The _DSM and _AEI are the class
+        // extension's, on the Windows side, which is why the ids and the shapes
+        // below have to match what that extension expects rather than what
+        // qcgpio.sys says.
+        //
+        // _REG and GABL are carried because 19 of the 21 have the pair. Its
+        // reader set is empty here: the only nodes in the corpus that read it
+        // are GIO0's own methods and RP1 on caymanslm, gating on the
+        // functional-fixed-hardware region handler's arrival. Nothing on gauguin
+        // reads it, so it is written and never read, which is inert.
+        Device (GIO0)
+        {
+            Method (_STA, 0, NotSerialized)  // _STA: Status
+            {
+                Return (0x0F)
+            }
+
+            Name (_HID, "QCOM0A0C")  // _HID: Hardware ID
+            Alias (^PSUB, _SUB)
+            Name (_UID, Zero)  // _UID: Unique ID
+            Method (_CRS, 0, NotSerialized)  // _CRS: Current Resource Settings
+            {
+                Name (RBUF, ResourceTemplate ()
+                {
+                    Memory32Fixed (ReadWrite,
+                        0x0F100000,         // Address Base
+                        0x00300000,         // Address Length
+                        )
+                    Interrupt (ResourceConsumer, Level, ActiveHigh, Shared, ,, )
+                    {
+                        0x000000F0,
+                    }
+                    Interrupt (ResourceConsumer, Level, ActiveHigh, Shared, ,, )
+                    {
+                        0x000000F1,
+                    }
+                    Interrupt (ResourceConsumer, Level, ActiveHigh, Shared, ,, )
+                    {
+                        0x000000F2,
+                    }
+                    Interrupt (ResourceConsumer, Level, ActiveHigh, Shared, ,, )
+                    {
+                        0x000000F3,
+                    }
+                    Interrupt (ResourceConsumer, Level, ActiveHigh, Shared, ,, )
+                    {
+                        0x000000F4,
+                    }
+                    Interrupt (ResourceConsumer, Level, ActiveHigh, Shared, ,, )
+                    {
+                        0x000000F5,
+                    }
+                    Interrupt (ResourceConsumer, Level, ActiveHigh, Shared, ,, )
+                    {
+                        0x000000F6,
+                    }
+                    Interrupt (ResourceConsumer, Level, ActiveHigh, Shared, ,, )
+                    {
+                        0x000000F7,
+                    }
+                    Interrupt (ResourceConsumer, Level, ActiveHigh, Shared, ,, )
+                    {
+                        0x000000F8,
+                    }
+                    // dts SPIs 0xD0 to 0xD8, in order, all <... 0x04> = level
+                    // high. The rest of the corpus list is board data and is
+                    // not reproducible from gauguin's device tree - see above.
+                })
+                Return (RBUF) /* \_SB_.GIO0._CRS.RBUF */
+            }
+
+            Name (GABL, Zero)
+            Method (_REG, 2, NotSerialized)  // _REG: Region Availability
+            {
+                If ((Arg0 == 0x08))
+                {
+                    GABL = Arg1
+                }
+            }
+
+            Method (_DSM, 4, NotSerialized)  // _DSM: Device-Specific Method
+            {
+                If ((ToBuffer (Arg0) == ToUUID ("4f248f40-d5e2-499f-834c-27758ea1cd3f") /* GPIO Controller */))
+                {
+                    If ((ToInteger (Arg2) == Zero))
+                    {
+                        Return (Buffer (One)
+                        {
+                             0x03
+                        })
+                    }
+
+                    If ((ToInteger (Arg2) == One))
+                    {
+                        Return (Package (0x01)
+                        {
+                            0x0100
                         })
                     }
                 }

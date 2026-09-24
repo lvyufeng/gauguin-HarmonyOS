@@ -10588,3 +10588,221 @@ every one of them, and the tree after the last restore rebuilds to the `FVMAIN`
 `7352064 used, 256 free` and `FVMAIN.Fv` `85f6f9fc…542b30` that the readback table above
 was taken from — which is the only reason those measurements are of *this* build rather
 than of a build that used to exist.
+
+## Step 4.64 — the TLMM node, and three members the corpus had but must not have given
+
+Step 4.63 ended by saying the remaining P3 nodes have no SM7225 reference to copy from,
+that gauguin's device tree plus the driver set's own id claims are the only authorities,
+and that four nodes had been researched and deliberately left out. This step is the first
+node built under that rule instead of copied: `GIO0`, the TLMM pin controller.
+
+It went in because all three of its unknowns turned out to be answerable. It also turned
+out to be the first node where the honest answer to *"what does the corpus have for this
+member?"* was, three separate times, *"something that must not be ported"* — and the cost
+of each omission is stated below rather than left for a later step to notice.
+
+### The id, which was the part that was already settled
+
+`tools/acpi-hid-census.py --functions` joins every reference table's node to the block it
+describes **by name**, which is what makes the low pair readable at all. gauguin's row is
+
+```
+GIO0     10  0C <- 09 0A 0C 1A 25   0D <- 05 08 14   (+2 more)
+```
+
+so the TLMM index is `0C` for the `{09, 0A, 0C, 1A, 25}` generation — the same group Step
+4.63 established gauguin is in — and `QCOM0A0C` is the id. The driver set agrees:
+`--bind QCOM0A0C` against `~/work/woa-ref/inf-7280` returns rc=0 with
+
+```
+QCOM0A0C     claimed by qcgpio7280.inf
+```
+
+and the `inf` line it comes from is `%GPIO.DeviceDesc%=GPIO_Inst,ACPI\QCOM0A0C`, service
+`qcgpio.sys`, description `"Qualcomm(R) System Manager GPIO Device"`. Two independent
+readings of the same byte, which is the same bar Step 4.63 set for `SPMI`/`PMIC`/`PM01`.
+
+`_UID` is `Zero`, and that one *is* a consensus rather than a derivation: all 21 corpus
+tables that carry a TLMM node use `_UID Zero`. `Alias (^PSUB, _SUB)` carries the platform
+sub-id like every other node in this file.
+
+### `_CRS`, and the first thing not to copy
+
+The window is not in doubt. gauguin's own `pinctrl@f100000` declares
+
+```
+reg = <0x00 0xf100000 0x00 0x300000>;
+interrupts = <0x00 0xd0 0x04 0x00 0xd1 0x04 0x00 0xd2 0x04 0x00 0xd3 0x04 0x00 0xd4 0x04
+              0x00 0xd5 0x04 0x00 0xd6 0x04 0x00 0xd7 0x04 0x00 0xd8 0x04>;
+```
+
+— `0x0F100000 + 0x00300000`, which is lisa's TLMM window and Lahaina's exactly, and nine
+SPIs all `<... 0x04>` (level, active-high). `INTID = 32 + SPI` gives `0xF0` through `0xF8`,
+and both are written. So the node carries a window and nine `Interrupt
+(ResourceConsumer, Level, ActiveHigh, Shared)` entries.
+
+What it does **not** carry is the corpus's interrupt list. lisa's TLMM node has **54**
+interrupt entries and a52sxq's has **55** — and the count is not a property of the SoC,
+because two SM8350 tables disagree by a factor of three: **vili has 24 and venus has 77**.
+It is board data: it is the set of pins *that board* routes to a wake-capable interrupt.
+gauguin's device tree cannot reproduce it either. Its `pinctrl` nodes name functions and
+pins but only for the peripherals this port has declared, and the `wakeup-parent` it points
+at (`interrupt-controller@b220000`, `compatible = "qcom,sm6350-pdc"`) declares
+`qcom,pdc-ranges` — *ranges* of possible pin→SPI mappings, 153 pins over five ranges — not
+the pins the board actually uses. There is no property anywhere in the tree that says
+"these 54 pins".
+
+So the node declares its own nine lines and nothing else. **The cost is specific and worth
+naming:** a per-pin `GpioInt` line is how a table advertises which pins can wake the
+system, and this one does not advertise any. A driver that binds will get the controller
+and its register window; it will not get a per-pin interrupt catalogue. An invented
+catalogue would have been worse than an absent one — 54 numbers copied from a different
+board would bind, would look right, and would be wrong pin by pin. Step 4.57's rule that
+an id may be copied only when a generation match is measurable applies to `_CRS` too, and
+here the match is not measurable.
+
+### `OFNI`, and the second thing not to copy
+
+Nineteen of the 21 corpus TLMM nodes carry a `Name (GABL, Zero)` / `Method (_REG, 2)`
+pair that writes `GABL` when `Arg0 == 0x08`. Both are carried, and the reason is honest
+rather than functional: **gauguin has no `_REG` reader for it**, so the pair is inert here.
+It is carried because 19 of 21 agree and the mechanism is a Windows GPIO class-extension
+handshake — the same "evidence, not understanding" standard Step 4.63 applied to `PMCF`.
+
+The Kailua generator's other five members — `OFNI`, `GPIV`, `GPIC`, `GPIW`, `GPIB` — are
+**not** carried, and this is the sharper finding. `OFNI` looks load-bearing: 18 of the 21
+tables define it. Every occurrence of `OFNI` outside its own definition, in every one of
+those 18, is the method's own `Return`. **Nothing calls it.** The same holds for the other
+four. That reading changes the shape of the whole corpus: the generator that produced
+these tables emits a fixed preamble, and some of that preamble was never wired up on the
+devices it shipped to. A member's frequency across a corpus is not evidence that it is
+used; only its callers are. Dead code is not ported.
+
+### `_AEI`, and the third
+
+`_AEI` is the Windows mechanism for a controller to hand the class extension a set of
+pre-wired GPIO interrupts. It is not carried. Eight of the 21 corpus tables have none at
+all, so its absence is not disqualifying, and — the deciding fact — **nothing in this table
+declares a `GpioInt` on `GIO0`**, so there is nothing for `_AEI` to describe. gauguin's
+buttons are the obvious candidate and they are not candidates: they hang off **pm6350 GPIO
+2**, which is `PM01`'s block, not the TLMM's.
+
+### What the shipped driver turned out to be, which is why the shapes had to come from the corpus
+
+`qcgpio.sys` — 56,448 bytes, PE32+ AArch64 — **contains no ACPI method name at all**. Its
+only ASCII `_XXX` tokens are `_201`, `_BIN`, `_END`, `_STA`, `__KM`, and its imports are
+`GPIOClx`, `KmdfLibrary`, `PsGetVersion`, `WmiTraceMessage`, `WmiQueryTraceInformation`,
+`EtwRegisterClassicProvider`, `EtwUnregister`. The `_UIDAeiBQGPI` literal a string scan
+finds lives in **`qcgpi7280.sys`**, a different device entirely (`qcgpi7280.inf`,
+`ACPI\QCOM0A88`, "Qualcomm(R) GPI Bus Device").
+
+That matters because it relocates the contract. The `_DSM`/`_AEI` handshake is not
+`qcgpio.sys`'s; it belongs to the **Windows GPIO class extension** the miniport plugs into
+via `GPIOClx`. So the id had to come from the `inf` and the membership shapes had to come
+from tables the class extension accepts — which is exactly the split this node was built
+on, and it is why the corpus is evidence for *shape* even where it is not evidence for
+*this board*.
+
+The `_DSM` itself is Microsoft's GPIO Controller method, UUID `4f248f40-d5e2-499f-834c-27758ea1cd3f`
+— the same string in all 21 tables. Revision `0x03` for function 0 and, for function 1,
+`Package (0x01) { 0x0100 }`. The family-0A value is `0x0100` on lisa and a52sxq (venus and
+vili use `0x0140`; lemonade, renoir, Cedros and Lahaina use `0xFFFF`), so gauguin's is the
+one its family uses. A note this step had to make for itself: **a52sxq's `Package (0x02)
+{ 0x07, 0x06 }` is `PM01`'s `_DSM`, not the TLMM's** — the two sit next to each other, and
+the pair was carried into an earlier draft of this node as if it were the GPIO one.
+
+### The stale intermediate, which is a tool finding rather than a hardware one
+
+After writing the node, `tools/sync-uefi-platform.sh` exited 0 and printed
+`(DSDT.aml 2017 bytes, from gauguin.asl)` — the *pre-`GIO0`* size — while the source it
+was supposed to have installed had grown by 9 KB. The cause is a three-stage chain with a
+silent middle:
+
+```
+tools/acpi/gauguin.asl  ->  tools/make_uefi_platform.py  ->  uefi/Silicium-ACPI/…
+                        ->  tools/sync-uefi-platform.sh  ->  work/uefi/Mu-Silicium/…
+```
+
+The generator was not re-run, so the generated tree held the previous `gauguin.asl`,
+complete with a plausible `AcpiTables.inf` beside it. The sync script checks *for* the
+`.inf` and dies with "re-run `tools/make_uefi_platform.py`" when it is missing — the case
+it did not cover is the one where the file is present and *old*, which produces a
+successful-looking sync of the wrong content.
+
+It now catches that too, by comparing `tools/acpi/gauguin.asl` against the generated copy
+before installing it and dying with the same instruction. This is a guard against a class
+of mistake rather than against this instance: the failure mode was a build that would have
+been read as "the `GIO0` node changed nothing", which is indistinguishable from a real
+negative result.
+
+### Read back out of the payload, not out of the source
+
+```
+tools/acpi/gauguin.asl     38,318 -> 47,545 bytes   (+195 / -7 lines)
+DSDT.aml                    2,017 ->  2,275 bytes   (+258)
+AcpiTables FFS file         3,378 ->  3,634 bytes   (+256, after alignment)
+FVMAIN              content 0x702F00 -> 0x703000, free 256 -> 0
+FVMAIN_COMPACT               1,092,784 of 3,145,728 used, 2,052,944 free
+```
+
+and `tools/fv-inventory.py work/out/p2-gio0/Mu-gauguin-stock-gzip.img --acpi` reports the
+six tables at `SSDT 0x54d484`, **`DSDT 0x54d4c8` (2,275)**, `APIC 0x54ddb0`, `FACP
+0x54e088`, `FACS 0x54e1a0`, `GTDT 0x54e1e4` — `FACP` and `FACS` not checksumming, which is
+the expected pair before `AcpiTableDxe` runs. `DSDT` is still at `0x54d4c8` (the
+`AcpiTables` FFS file is padded and the `SSDT` precedes it) and the tables after it shift
+by 256.
+
+The DSDT was then sliced out of the volume and decompiled, and the node reads back exactly
+as written — `Device (GIO0)`, `_HID "QCOM0A0C"`, `_UID Zero`, the `0x0F100000+0x00300000`
+window, nine `Level/ActiveHigh/Shared` interrupts `0x000000F0` … `0x000000F8`, `GABL`,
+`_REG`, and the `_DSM` returning `Buffer (One) { 0x03 }` and `Package (0x01) { 0x0100 }`.
+Reading it back out of the artifact rather than out of the source is the only version of
+this check that can fail for the reason it exists.
+
+The `FVMAIN` line deserves one correction to how it has been described. `[FV.FvMain]` is
+declared `NumBlocks = 0`, and the total is *not* fixed: across the recorded builds it has
+been `0x702000`, `0x703000` and `0x72d000`, so the volume does size itself in 4 KiB pages.
+What is fixed is the *rounding* — `total = align_up(content, 0x1000)`, `free = total -
+content` — so the percentage has always been near 100 by construction. The free count is
+still a real number, and the difference this step made to it is real: **it was 256 and it
+is now 0.** The next byte added to `FVMAIN` costs a 4 KiB page on this volume. That is not
+a gate — `FVMAIN_COMPACT` is the volume with a limit, it is pinned at `0x300000` by
+`[FD.SILICIUM_UEFI]`'s `FD_SIZE` rather than by auto-sizing, and it has 2 MB free — but
+"the volume is full" and "the volume will grow" are two different statements and only the
+first one is visible in the log.
+
+### The honest limits
+
+- **Nothing in this step has been exercised on hardware, and `qcgpio7280` has not run.**
+  The node is correct with respect to gauguin's device tree and to the driver set's own id
+  claim; whether the class extension accepts a nine-line `_CRS` and binds is a question
+  only the device can answer, and the device is not connected.
+- **The nine-line `_CRS` is a deliberate under-declaration, and its failure mode is a
+  quiet one** — no per-pin wake interrupt, which a bound GPIO driver would express as an
+  inability to arm some pin's wake rather than as a bind failure. If something that should
+  wake the system does not, this is the first place to look.
+- **The family-1 `_DSM` value `0x0100` is copied, not derived.** It is the value gauguin's
+  family uses on the two tables that carry it, and what the class extension does with it is
+  not established here.
+- **The `GABL`/`_REG` pair is inert on this platform** because nothing reads `GABL`. It is
+  carried on 19-of-21 evidence. If the GPIO stack misbehaves, whether the pair should have
+  a reader is an open question.
+- **What the corpus's 54-to-77 per-pin entries would have been used for is still
+  unestablished.** It cannot be reconstructed from gauguin's tree; the only way to learn
+  what belongs in it is to read a *shipping* Windows table for a 0A-family device, which is
+  the same route Step 4.63 named for `PMCF`'s unexplained byte.
+- **The device was not touched.** Nothing was written to `boot`, nothing was flashed, and
+  the restore net is unchanged. `p2-variants` is still the payload of record on the phone,
+  and the gate before any new payload goes on is the same one: **read the panel first, then
+  flash.**
+
+### What this step was, and what it was not
+
+It was one node added to `tools/acpi/gauguin.asl`, one guard added to
+`tools/sync-uefi-platform.sh`, and a rebuild. **No firmware source was edited**, no `.c` or
+`.inf` outside the ACPI table changed, and no device storage was written. The build is
+`work/out/p2-gio0/`, the reproducible fingerprint is `FVMAIN.Fv`
+`80f30e19…6a845a65` (against Step 4.63's `85f6f9fc…542b30`, measured the same way on the
+same payload), and the payload hashes themselves are per-build because `Sec.efi` carries
+`__TIME__` — which is why the fingerprint recorded here is the volume's and not the
+image's.

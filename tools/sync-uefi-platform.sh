@@ -109,6 +109,15 @@ ACPI_SRC=$GEN/Silicium-ACPI/Platforms/Xiaomi/gauguin
 ACPI_DST=$MU/Silicium-ACPI/Platforms/Xiaomi/gauguin
 [ -f "$ACPI_SRC/AcpiTables.inf" ] || die "missing $ACPI_SRC/AcpiTables.inf - re-run tools/make_uefi_platform.py"
 [ -f "$ACPI_SRC/gauguin.asl" ] || die "missing $ACPI_SRC/gauguin.asl"
+# The generated tree is an intermediate, and an edit to tools/acpi/gauguin.asl
+# does not reach it on its own. A stale one still has a plausible AcpiTables.inf
+# beside it, so the checks below would pass and this script would install the
+# previous DSDT while printing a new-looking line - which is exactly what it did
+# once, silently costing a build. Catch it here, the same way a missing .inf is
+# caught, rather than trusting the size in the line below.
+if ! cmp -s "$REPO/tools/acpi/gauguin.asl" "$ACPI_SRC/gauguin.asl"; then
+    die "$ACPI_SRC/gauguin.asl is stale (differs from tools/acpi/gauguin.asl) - re-run tools/make_uefi_platform.py"
+fi
 command -v iasl >/dev/null 2>&1 || die "iasl not found - install acpica-tools"
 
 install -d "$ACPI_DST"

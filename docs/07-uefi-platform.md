@@ -2663,6 +2663,14 @@ for the CPU skeleton at `Silicon/Qualcomm/Moorea/DSDT_Minimal.asl`, and 20 platf
 >   rather than fixed: propagating it means re-running `make_uefi_platform.py`
 >   over the whole generated tree, which is not worth doing while a payload hash
 >   is what P2 is waiting on.
+>
+>   **That call was wrong, and Step 4.64 is where it was paid for.** The same
+>   staleness recurred with a change that *was* load-bearing — the `GIO0` node —
+>   and `sync-uefi-platform.sh` installed the previous table while exiting 0 and
+>   printing a plausible size, which reads exactly like "the change did nothing".
+>   The script now compares its source against `$GEN` before installing and dies
+>   with "re-run `tools/make_uefi_platform.py`" if they differ, so the cost of
+>   propagating is no longer optional and no longer silent.
 > - **2.** `gauguin.fdf:73` is **live**, not commented out.
 > - **3.** `gauguin.dsc` has a `[Components]` section (line 91) whose only member
 >   is `gauguin/AcpiTables.inf`.
@@ -2727,8 +2735,9 @@ for the CPU skeleton at `Silicon/Qualcomm/Moorea/DSDT_Minimal.asl`, and 20 platf
 > standard for an ASL change in this port: a length check says a table is there, a
 > round trip says it is the right table.
 >
-> **`FVMAIN` after this step is `7352064 used, 256 (0x100) free` of 7,352,320 — and
-> that is a rounding artefact, not a full volume.** It reads as 99% full and was
+> **`FVMAIN` after this step is `7352064 used, 256 (0x100) free` of 7,352,320.** The
+> percentage is a rounding artefact — and so is the total, but the *free count is not*,
+> which is the half of this that Step 4.64 later spent. It reads as 99% full and was
 > briefly recorded as the next node's budget; `[FV.FvMain]` declares `NumBlocks = 0`,
 > so GenFv sizes the volume from its content, and a valid **11,536,368-byte `DSDT`**
 > (`tools/acpi-pad.py`, which regenerates that exact table) builds with
@@ -2741,6 +2750,36 @@ for the CPU skeleton at `Silicon/Qualcomm/Moorea/DSDT_Minimal.asl`, and 20 platf
 > compression. `docs/08-device-session.md`, Step 4.63, has the measurements; the
 > constraint on the node itself is still the driver set's id claims and this board's
 > device tree.
+>
+> **A fifth build, on 2026-09-25, adds the TLMM controller `GIO0` and spends the last of
+> that `FVMAIN` free space.** Step 4.64 puts `GIO0` in at `QCOM0A0C` — the family byte
+> Step 4.63 established, plus the TLMM index `0C` that the name-join census gives, claimed
+> by `qcgpio7280.inf` — and the DSDT goes **2,017 → 2,275 bytes**, so the `AcpiTables`
+> FFS file goes 3,378 → 3,634 and the tables after the `DSDT` shift by 256: `APIC`
+> `0x54ddb0`, `FACP` `0x54e088`, `FACS` `0x54e1a0`, `GTDT` `0x54e1e4`, read back out of
+> `work/out/p2-gio0/Mu-gauguin-stock-gzip.img`. `DSDT` is again at `0x54d4c8`.
+>
+> **On `FVMAIN`, this build reads `100%Full 7352320 (0x703000) total, 7352320 used, 0
+> free` — and that zero is real.** The total is not fixed (`NumBlocks = 0` does size the
+> volume: recorded builds have totalled `0x702000`, `0x703000` and `0x72d000`), but it is
+> always `align_up(content, 0x1000)`, so the *percentage* is a footline and the free count
+> is not: it was `2,808`, then `760`, then `256`, and it is now `0`. The next byte added to
+> `FVMAIN` costs one 4 KiB page. That is still not a gate — the volume with a limit is the
+> outer `FVMAIN_COMPACT`, it is pinned at `0x300000` by `[FD.SILICIUM_UEFI]`'s `FD_SIZE`
+> rather than by auto-sizing, and this build uses 1,092,784 of it with **2,052,944 free**
+> — but "reads as full" and "is full" have stopped being the same statement, and this is
+> the build where they parted.
+>
+> **This build's `FVMAIN.Fv` fingerprint is `80f30e19…6a845a65`**, against Step 4.63's
+> `85f6f9fc…542b30`, both measured from the payload with `--dump-fvmain`. The `DSDT` was
+> again disassembled out of the volume, and `GIO0` reads back with `_HID "QCOM0A0C"`,
+> `_UID Zero`, the `0x0F100000+0x00300000` window, nine `Level/ActiveHigh/Shared`
+> interrupts `0xF0`–`0xF8` and the `_DSM` values `0x03` and `Package (0x01) { 0x0100 }`.
+> The node declares **none** of the corpus's per-pin interrupt catalogue — lisa has 54
+> entries and a52sxq 55, but vili (24) and venus (77) are both SM8350, so the list is
+> board data, and gauguin's device tree carries no property describing it. That omission
+> is deliberate and its cost is stated in Step 4.64. `docs/08-device-session.md` carries
+> the measurements and the three members the corpus supplied that were not ported.
 >
 > **And a payload hash from here on is a fingerprint of a build, not of the source.**
 > `Silicon/Silicium/SiliciumPkg/Sec/Sec.c:48` compiles `__TIME__` and `__DATE__` into
@@ -2794,4 +2833,4 @@ table above is the corrected one.
 | set `Platforms/Realme/bitra` uses | Kona — matches nothing |
 | DSDT | authored for gauguin, but its UFS and USB values are verified equal to bitra's |
 | next step | **done as of 2026-09-25** — `gauguin/AcpiTables.inf` and the DSDT exist, are wired into `gauguin.fdf`/`gauguin.dsc`, and are in the built payload with every GICC field read back correct (see the superseded note above). What remains for P3 is USB host and input, not ACPI |
-| where ACPI got to | the DSDT now carries UFS, USB (with the PHY wake lines), the eight CPUs **and the PMIC family** — `SPMI`, `PMIC` and `PM01`, Step 4.63 — and the AML is **2,017 bytes** in the `work/out/p2-pmic/` payload. The `FVMAIN` "99% full" reading is a rounding artefact (`NumBlocks = 0`); the volume with a limit is the outer `FVMAIN_COMPACT`, `2,053,056` bytes free after compression. Payload hashes are per-build (`__TIME__` in `Sec.efi`); the reproducible fingerprint is `FVMAIN.Fv` `85f6f9fc…542b30` |
+| where ACPI got to | the DSDT now carries UFS, USB (with the PHY wake lines), the eight CPUs, **the PMIC family** — `SPMI`, `PMIC` and `PM01`, Step 4.63 — **and the TLMM pin controller `GIO0` at `QCOM0A0C`**, Step 4.64 — and the AML is **2,275 bytes** in the `work/out/p2-gio0/` payload. `GIO0` declares its own nine level-`0xF0`–`0xF8` interrupts and *not* the corpus's per-pin catalogue, which is board data gauguin's device tree does not carry. The `FVMAIN` "[100%Full], 0 free" reading is a real zero on a volume whose total is `align_up(content, 0x1000)`; the next node costs a 4 KiB page there. The volume with a limit is the outer `FVMAIN_COMPACT`, `2,052,944` bytes free after compression. Payload hashes are per-build (`__TIME__` in `Sec.efi`); the reproducible fingerprint is `FVMAIN.Fv` `80f30e19…6a845a65` |
