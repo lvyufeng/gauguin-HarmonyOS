@@ -32,6 +32,29 @@
  * Moorea's APIC GICC entries carry (0x0, 0x100 ... 0x700), which is what
  * gauguin's device tree states too. No _LPI: gauguin's low-power idle
  * parameters have not been derived, and an unverified _LPI is worse than none.
+ *
+ * P3 also asks for I2C, SPI, GPIO, buttons and thermal zones, and none of them
+ * is here. That is not an omission - it is measured, and the measurement is the
+ * reason. Every one of those nodes needs a `_HID` (and for the GPIO and I2C
+ * blocks a `_DSM` whose contract is documented nowhere in this tree), and the
+ * device tree carries no ACPI name: it has registers and pins, which are the
+ * half that is knowable. Across the 36 reference DSDTs in Silicium-ACPI the
+ * same block at the same address carries a different `_HID` on every SoC - the
+ * TLMM window 0xF100000 is QCOM1A0C on vili and lemonade, QCOM0A0C on lisa and
+ * a52sxq, QCOM250C on alioth and QCOM090C on renoir - and the SPMI and both
+ * TSENS windows are described by none of the 36. No Bitra-family reference
+ * exists: Platforms/Realme/bitra/DSDT.aml, which this file's form comes from,
+ * has the same five devices this one has and nothing more.
+ *
+ * The consequence of copying a name from another SoC is specific and bad. A
+ * node whose `_HID` no driver claims does not fail, warn or fall back; it is
+ * absent from Device Manager and the hardware behind it is simply not there.
+ * That is worse than a missing node, which at least reads as missing. So the
+ * names have to come from the one place they are authoritative - the Windows
+ * driver set, whose .inf files list the `ACPI\...` ids their drivers bind.
+ * tools/acpi-hid-census.py reproduces the measurement above and, given a
+ * driver set, reports which of gauguin's twelve blocks it covers. Run it before
+ * adding any node to this file.
  */
 DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
 {

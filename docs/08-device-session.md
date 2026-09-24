@@ -9420,3 +9420,138 @@ failures: `--selftest` exits 1 and prints 9/11.
 | wrong answer recorded | my own first probe reported that `soft0` loses the pick by 28× and the ladder was therefore in use with the wrong rung. It counted `align`'s bulk scoring as part of the pick. Counting each level's first run of same-sized calls reverses the result |
 | does not close | the P2 gate, and it cannot: no photograph of the panel has been read, and the device has not been attached to this host this session. `bs9=`, `P2 SEQ`, `P2 STATS discovered=` and the 27 `CoreLoadImage` failures all still need the glass |
 
+
+## Step 4.57 — P3's remaining tables need ACPI names a device tree does not carry, and no SM7225 reference has them
+
+Host-side, and it started as an attempt to write the nodes rather than to test
+them. P3 item 1 asks the DSDT to describe UFS, XHCI, **I2C, GPIO, buttons and
+thermal zones**, and the file has the first two. Everything the rest needs is
+addressing — register windows, interrupt numbers, pin numbers — and the device
+tree has all of it: `pinctrl@f100000` at `0xF100000 + 0x300000` with nine GIC
+interrupts; `spmi@c440000` with five windows; `thermal-sensor@c263000` and
+`@c265000` with two each; seven GENI serial engines; the touch bus at
+`spi@880000` on tlmm 22 and 21. So the nodes looked like mechanical work, and
+the plan was to write them, cite every address, and compile.
+
+They cannot be written, and the reason is a property of ACPI rather than of this
+board. **None of that is a name.** A device tree describes how the hardware is
+wired; ACPI describes what the hardware *is*, to a driver that matches on a
+string. The string — `_HID` — is in no device tree, and neither is the `_DSM`
+contract these blocks carry. The only way this port can supply them is to take
+them from a platform that already has them.
+
+### Whether a Qualcomm block's `_HID` travels between SoCs, measured
+
+That is a question with a yes/no answer, so it was measured instead of assumed.
+`tools/acpi-hid-census.py` disassembles every reference DSDT in the Silicium-ACPI
+tree, walks each file's device tree, attributes every `Memory32Fixed` window to
+the innermost enclosing device that has a `_HID`, and tabulates the names seen at
+each of gauguin's own block addresses — the base address being the one key both
+the ACPI and the device-tree worlds carry.
+
+36 reference DSDTs. Result:
+
+| block | window | references | distinct `_HID`s |
+|---|---|---|---|
+| TLMM | `0x0F100000` | 7 | **4** — `QCOM1A0C` ×3 (lemonade, venus, vili), `QCOM0A0C` ×2 (lisa, a52sxq), `QCOM250C` (alioth), `QCOM090C` (renoir) |
+| SE0 | `0x00880000` | 5 | **4** — `QCOM0811` ×2, `QCOM0C10`, `QCOM0511`, `QCOM140F` |
+| SE0 UART | `0x00884000` | 2 | 2 — `QCOM2510`, `QCOM1A10` |
+| SE1 | `0x00888000` | 3 | 3 — `QCOM0C10` (with `_CID QCOMFFEA`), `QCOM2510`, `QCOM1411` |
+| SE2 | `0x00980000` | **0** | — |
+| SE3 | `0x00984000` | 3 | 2 — `QCOM0A10` ×2, `QCOM2510` |
+| SE5 | `0x00988000` | 2 | 2 — `QCOM250E`, `QCOM090E` |
+| SE6 | `0x0098C000` | 4 | 3 — `QCOM0A10` ×2, `QCOM2510`, `QCOM1A16` |
+| SE7 | `0x00990000` | 3 | 3 — `QCOM250E`, `QCOM0A10`, `QCOM1A10` |
+| SPMI | `0x0C440000` | **0** | — |
+| TSENS0 | `0x0C263000` | **0** | — |
+| TSENS1 | `0x0C265000` | **0** | — |
+
+The same window carries a different name on every SoC. That is not noise in the
+corpus: it is the SoC's own numbering, and it is visible as one — the TLMM block
+is `..0C` on all four and the rest of the SoC's blocks take successive ids under
+the same two-hex prefix (`renoir` 09, `lisa` and `a52sxq` 0A, `vili`/`venus`/
+`lemonade` 1A, `alioth` 25, `sur(ya)` 14, `miatoll` and `a52q` 08, `aston` 0C,
+`nabu` 05). There is no SM7225 in that list, and there is nothing to interpolate
+with: `SE2` is `QCOM2510` on lisa and `QCOM0A10` on a52sxq, `SE7` is `QCOM250E`
+on alioth and `QCOM1A10` on venus, so the block id is not a function of the SE
+index either.
+
+Two of the twelve blocks have no reference at all — not a wrong form, no form.
+The `_DSM` contracts are per-SoC in the same way: the GPIO node returns `0x0140`
+on vili, `0x0100` on alioth and `0x0180` on lisa, and nothing in the tree says
+what the number means.
+
+And the same measurement applies to the reference this file's form actually came
+from. `Platforms/Realme/bitra/DSDT.aml`, disassembled, has **exactly the five
+devices gauguin's DSDT has** — `UFS0`, `URS0`/`USB0`/`UFN0`, `DEV0` — and
+nothing else. Moorea and Rennell have no DSDT at all, only the `DSDT_Minimal.asl`
+the eight CPU devices came from. So there is no Bitra-family device with these
+nodes anywhere in the tree, which is consistent with the plan's own note that no
+Bitra-family device has ever had a UEFI port.
+
+### Why a guess here is worse than an omission
+
+A node whose `_HID` no driver claims does not fail. It does not warn, retry or
+fall back. Windows enumerates it, finds nothing that matches, and the device is
+simply absent from Device Manager — no entry, no yellow mark, nothing to read.
+The hardware behind it is not there, and the only evidence is its absence, which
+looks exactly like hardware that was never described.
+
+That is strictly worse than leaving the node out. An absent node is visibly
+absent and the plan can name it. A node with a plausible wrong name closes the
+question and produces no symptom. This file already carries the same rule for a
+smaller case — the three USB PHY wake GSIs are omitted because
+`512 + pin` and `480 + pin` are both consistent with the evidence and putting in
+a wrong number would cost more than leaving it out — and this is that rule
+applied to two orders of magnitude more surface.
+
+So the DSDT gains nothing this step, and the reason is written into its header
+where the next person to open it will read it.
+
+### What does unblock it
+
+The names are authoritative in exactly one place: **the Windows driver set**,
+whose `.inf` files list the `ACPI\...` hardware ids their drivers bind. That is
+the reverse of the direction this started in — not "which name does this block
+have" but "which name does the driver I am going to use answer to" — and it is
+the correct direction, because the driver is the constraint. A block described
+with an `_HID` no available driver claims is hardware that cannot be driven, and
+the goal is that all of it is.
+
+The consequence for sequencing: **obtain the driver set before authoring these
+tables.** Writing them first is not merely wasted — it produces a DSDT whose
+every added node is a silent failure, and silent failures are the expensive kind.
+`tools/acpi-hid-census.py --drivers DIR` takes such a set and reports which of
+gauguin's twelve blocks it covers, so the moment one is in hand the answer to
+"can I write this node, and with what name" is one command.
+
+### The bug in the first draft of the instrument, kept because it agreed with me
+
+The census's first run reported **zero** references for every block, including
+the TLMM window the ad-hoc probe had already found seven of. That reads like a
+strong confirmation — a negative result is easy to believe when it matches the
+argument you were about to make — and it was the parser.
+
+`Memory32Fixed (ReadWrite,` puts its base address on the *next* line in
+disassembled output, so the reader carried a "the address is on the next line"
+sentinel. The sentinel was `True`, and `isinstance(True, int)` is true in Python:
+every resource matched the integer branch, recorded base address `1`, and cleared
+the sentinel before the real address arrived. The tool then faithfully reported
+that no reference DSDT describes any of gauguin's blocks.
+
+The fix is a string sentinel and an explicit `not isinstance(pending, bool)`.
+Both are in the shipped tool, with the reason beside them. The finding above
+survived the fix unchanged, which is the only reason it is worth anything — the
+first version of the measurement agreed with the conclusion for a reason that had
+nothing to do with the conclusion.
+
+| | |
+|---|---|
+| finds | the DSDT nodes P3 still asks for — I2C, SPI, GPIO, buttons, thermal — cannot be authored from anything on this host, because their `_HID`s and `_DSM` contracts are properties of the SoC and no SM7225-family reference exists |
+| evidence | `tools/acpi-hid-census.py` over 36 reference DSDTs: the TLMM window carries 4 distinct `_HID`s, SE0 4, SE1 3, SE6 3, SE7 3, SE0-UART 2, SE3 2, SE5 2, SE2 0, SPMI 0, TSENS0 0, TSENS1 0. `Platforms/Realme/bitra/DSDT.aml` (SM7225) has exactly gauguin's five devices and no more; Moorea and Rennell ship no DSDT |
+| second method | the same negative was confirmed by plain text search over the disassembled corpus: `0x0F100000` in 7 files, `0x0C440000` in **0**, `0x0C263000` in **0**, `0x0C265000` in **0** |
+| why it matters | a device node whose `_HID` no driver claims is absent from Device Manager with no error, no warning and no yellow mark — strictly worse than an omitted node, which is at least visibly missing. The file's own precedent (the three USB PHY wake GSIs) is the same rule at smaller scale |
+| unblocker | the Windows driver set's `.inf` files, which name the `ACPI\...` ids the drivers bind. `--drivers DIR` reports which of gauguin's twelve blocks a set covers. **Obtain the set before authoring these tables** — written first, every added node is a silent failure |
+| instrument bug | the census's first draft used `True` as a "address is on the next line" sentinel; `isinstance(True, int)` is true, so every window recorded base 1 and the tool reported zero references for all twelve blocks. Fixed with a string sentinel; the finding survived unchanged |
+| compiled | `iasl` still reports 0 errors on the edited `gauguin.asl` and the AML is still 1,520 bytes — the step adds a comment to its header and no node, deliberately |
+| does not close | the P2 gate, which is unchanged and still needs the glass, and P3 item 1's remainder, which now has a named precondition instead of an open item |

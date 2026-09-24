@@ -312,8 +312,9 @@ Work:
 
 **Gate:** a Windows 11 ARM64 installer boots off a USB stick and sees the internal UFS.
 
-**Status (2026-09-25): item 1 is done; 2–4 are not started, and none of them can be
-assessed until P2 hands off to BDS.** The tables exist, are wired into `gauguin.fdf`
+**Status (2026-09-25): item 1 is done for UFS and USB and blocked for the rest;
+2–4 are not started, and none of them can be assessed until P2 hands off to BDS.**
+The tables exist, are wired into `gauguin.fdf`
 and `gauguin.dsc`, and are in the firmware volume of the build behind the staged P2
 payload — `DSDT` (1,520 bytes, gauguin's own, `SM7225`, eight `ACPI0007` CPU devices,
 the UFS and USB nodes), `APIC`, `FACP`, `FACS`, `GTDT`, plus the shared `SSDT`. All
@@ -322,6 +323,23 @@ subtable; its two INTIDs and its redistributor base match this board's device tr
 `docs/07`'s P3 groundwork section carries the detail. Note that the DSDT here is
 smaller in scope than the list above — I2C, GPIO, buttons and thermal zones are not
 in it yet — so item 1 is done for UFS and USB and *not* done for the rest.
+
+**And the rest is blocked on an input, not on effort.** Every one of those nodes
+needs an ACPI `_HID`, and a device tree does not carry ACPI names: it has registers
+and pins, which is the half that is knowable. `tools/acpi-hid-census.py` measures what
+the reference DSDTs can supply, and across all 36 of them the same block at the same
+address carries a different `_HID` on every SoC — the TLMM window `0xF100000` is
+`QCOM1A0C` on vili, lemonade and venus, `QCOM0A0C` on lisa and a52sxq, `QCOM250C` on
+alioth, `QCOM090C` on renoir — while the SPMI arbiter and both TSENS blocks are
+described by none of the 36 at all. No Bitra-family reference exists:
+`Platforms/Realme/bitra/DSDT.aml`, the source of this file's form, has the same five
+devices gauguin has and nothing more. Copying a name from another SoC does not fail
+loudly — a device node whose `_HID` no driver claims is absent from Device Manager,
+and the hardware behind it is silently not there, which is worse than a node that is
+visibly missing. **The names must come from the Windows driver set's `.inf` files**,
+which list the `ACPI\...` ids their drivers bind, so obtaining that set is a
+precondition for authoring these tables and not a later step. `--drivers DIR` on the
+tool reports which of gauguin's twelve blocks a given set covers.
 
 Items 2–4 have a shared precondition that is worth stating plainly: **the payload has
 760 bytes of free volume**, and the P2 debugging instrumentation (`P2BRINGUP`) is what
