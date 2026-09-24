@@ -5599,5 +5599,139 @@ probe on the phone is for, and the decode is now bounded rather than open:
   * **Bottom row `KEY <errors>/46 err=<name> at=<i> free=<pages> miss=<i>`** —
     `CoreDispatcher` returned and the digest is printing, so the whole funnel is
     on the panel, `bs9=` included.
-  * **`Loading Driver at ...` still on the panel** — the flash did not take.
-    No build after the one in `work/out/p2-variants/` can print that row at all.
+  * **`Loading Driver at ...` still on the panel** — the flash did not take. The
+    three prints that make that row are silenced in the tree
+    (`Image/Image.c:890-937`), so the payload in `work/out/p2-variants/` and every
+    build after it cannot print it; only the `p2-4.20`-class images can. Step 4.35
+    is what that now buys, and it is more than a yes/no.
+
+## Step 4.35 — Every payload of this phase is 1,142,784 bytes, and only one of them can say where a run stopped
+
+Step 4.34 left a decode that turns on the bottom row of the panel. Before waiting
+on that row it is worth checking something about the payload that produced it,
+because this project has already lost a session to a control image that "stopped
+being the bytes it named without the name changing" (step 4.30) — and the same
+trap is sitting under this phase, larger.
+
+### Three builds, one size, two of them with the same filename
+
+```
+work/out/boot-now-0923.img                        1,142,784  sha256 3547fd0487d33387...
+work/out/p2-4.20/Mu-gauguin-silicon-gzip.img      1,142,784  sha256 dbf131d254374646...
+work/out/p2-variants/Mu-gauguin-silicon-gzip.img  1,142,784  sha256 7c8fdb5a1a272ab6...
+```
+
+Every payload built for this phase is the same size to the byte, and two of the
+three are called `Mu-gauguin-silicon-gzip.img`. They are not near-duplicates
+though: they differ in 17,414 of 17,856 64-byte blocks, from offset 0. What
+separates them is which bring-up instruments they carry, and that is decided
+inside the compressed firmware volume, where a grep of the `.img` finds nothing.
+
+`tools/probe-fingerprint.py` walks the volume the way `tools/fv-inventory.py`
+does — it imports that walk rather than repeating the padding rules — and reports
+which instruments are present. The markers are **read out of `Dispatcher.c`**, per
+named function, rather than typed into the tool; that is not tidiness. The first
+draft of this tool carried a hand-typed `err=%a at=%d` for `P2Key`, the real
+format is `err=%r at=%d` (`Dispatcher.c:271`), and the tool cheerfully reported
+`P2Key` absent from an image that has it. A tool whose job is to say which
+instrument is in an image cannot invent its own fingerprints.
+
+```
+                       P2Digest  P2Apri  P2Bins  P2Retry  P2Key  P2Tick
+boot-now-0923            yes       no      no       no      no      no
+p2-4.20                  yes      yes     yes      yes      no      no
+p2-variants              yes      yes     yes      yes     yes     yes
+```
+
+A ladder: each build added a rung, and the two rows that matter are the last two
+columns. `P2Tick` is the one that makes a stopped run legible — one row per
+attempted dispatch — and `P2Key` is the one that makes the *bottom row*
+legible.
+
+### `P2Key` is in exactly one build, and that makes the bottom row categorical
+
+`P2Digest` ends `P2Bins ();` then `P2Key ();` (`Dispatcher.c:2376`, `:2382`, with
+the comment at `:2378` saying "Last, so that it is the last populated row of the
+panel"). `P2Key` is a `for` and an `if/else` that prints one of two lines
+(`:263`, `:271`) — it cannot print nothing. So on the `p2-variants` build the last
+populated row of the panel is the `KEY` line in *every* state where
+`CoreDispatcher` returned, including after a wipe.
+
+On `p2-4.20` there is no `P2Key`, so the last populated row is `P2 RETRY`. **That
+is step 4.29's reading**, and it is not a contradiction of
+`tools/console-budget.py`, which computes the same thing and gets `KEY` — the two
+are describing two different builds. What it does mean is that the bottom row is
+now a build detector that needs no readback and no host:
+
+> **A `P2 RETRY` row as the last populated row of the panel means the payload on
+> the phone is the `p2-4.20`-class build, i.e. the flash did not take the newest
+> one.** On the newest build `P2Key` follows that row with nothing in between, so
+> it cannot be the last row of a run that got that far.
+
+And the mirror of it, for the row step 4.34 was written around: `Loading Driver
+at ...` on the panel is the same detector pointing the other way, because those
+three prints are commented out in the tree (`Image/Image.c:890-895`, `:933` for
+the PDB name, `:936` for the newline) and no build from `p2-variants` onward can
+emit them.
+
+### The driver's name is gone from the dispatch rows, so the GUID is the reading
+
+The reason those three prints were silenced is in the comment beside them: the
+load address and the driver name printed once per image is the whole of what the
+panel holds during dispatch, and it is what buried the digest across four
+sessions. But silencing them has a cost that this phase now has to pay, and it is
+worth stating plainly because the natural assumption is the opposite:
+
+> **On the current build, a dispatch row identifies a driver by GUID and by
+> nothing else.** There is no row above it naming the same driver in English. The
+> `%g` in `K <n> <phase><why> <i>/<j> free=<pages> <guid>`
+> (`Dispatcher.c:599-628`) is `DriverEntry->FileName`, the FFS file's own GUID,
+> and the mapping from that GUID to a name exists in the firmware volume and not
+> on the screen.
+
+So the volume has to supply it, which is what `fv-inventory.py --roster` and
+`--name` now do. `--roster` prints every FFS file as `GUID type size name`, and
+`--name` resolves a transcribed GUID against that list, case- and
+hyphen-insensitively and *ranked rather than matched*: a wrong digit yields a
+near neighbour rather than a confident miss, and the number of differing digits is
+printed, so a one-digit answer reads as the guess it is. Measured against the
+`p2-variants` roster:
+
+```
+1FA1F39E-FEFF-4AAE-BD7B-38A070A3B608 (one digit changed by hand)
+  1 digit(s) differ  1FA1F39E-FEFF-4AAE-BD7B-38A070A3B609  type 0x07  PartitionDxe
+ 25 digit(s) differ  D6A2CB7F-6A18-4E2F-B43B-9920A733700A  type 0x05  DxeCore
+```
+
+The roster is 123 files and the numbers in it check out against an observation
+made on the glass rather than on the host: the listing's own order puts `Fat` at
+FFS index **37** (the listing prints a one-line header first, so `Fat` is its
+38th line) — which is exactly what the panel said in the step 4.33 session,
+`Fat.efi` as file 37 of 123. The name `Fat` and not `Fat.efi` is the same string
+minus the extension the old print appended from the PDB name.
+
+### The decode, as the panel will now present it
+
+For the newest build, bottom row first: **`K`** means the run stopped inside
+dispatch, **`KEY`** means `CoreDispatcher` returned, and **`P2 RETRY`** means
+neither build is on the phone — it is the older one. Within the `K` case the
+phase letter is the discriminator, from the two call sites
+(`Dispatcher.c:1062`, `:1107`):
+
+  * **`L`** — `CoreLoadImage` failed for that driver, so its entry point never
+    ran and no driver code executed between this row and the previous one. Its
+    `<i>/<j>` is position in the Apriori order, and its `free=` was measured
+    after the dispatcher's lock was dropped (`:1059`), so it is the allocator's
+    state as the next driver will find it.
+  * **`S`** — the entry point ran and returned an error. The GUID names the
+    driver, and any rows between this one and the previous `K` row are that
+    driver's own output.
+  * **`S` with a `Success` spelling** — the driver started cleanly, which is what
+    the nineteen in step 4.9's table are.
+
+A bottom row that is a `K` row therefore fixes both *which* driver and *how far*
+the run got, and `tools/fv-inventory.py IMG --name <guid>` turns the first of
+those into a name. `tools/probe-fingerprint.py --expect P2Key IMG` is the
+pre-flight for the other direction: it is the check that the payload being
+written is one whose screen can be read at all, and it is the check that a size
+comparison passes while being blind to.

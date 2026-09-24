@@ -259,6 +259,69 @@ def unpack(img):
     return fvmain_of_fd(fd)
 
 
+def guid_key(s):
+    """A GUID reduced to what survives being read off a photograph.
+
+    Case and hyphens carry no information, so both are dropped, and what is left
+    is the 32 hex digits. Everything below compares on this and never on the
+    printable form, because the printable form is what a human transcribes.
+    """
+    return re.sub(r"[^0-9a-f]", "", s.lower())
+
+
+def roster(files, offsets, inner):
+    """[(guid string, type, size, name)] - every FFS file, named or not.
+
+    This exists for one line of the panel. `P2Tick` prints
+    `K <n> <phase><why> <i>/<j> free=<pages> %g` (`Dispatcher.c:599-628`), and the
+    `%g` is `DriverEntry->FileName` - the driver's FILE_GUID. Until this session
+    the row above it named the same driver in English, because `CoreLoadPeImage`
+    printed `Loading driver at 0x... EntryPoint=0x... <Name>.efi`; that print is
+    now silenced along with the PDB name beside it (`Image/Image.c:890-937`), so
+    **on the current build a `K` row identifies a driver by GUID and by nothing
+    else**. The GUID is 36 characters of hexadecimal on a 90-column panel, and
+    the mapping from it to a name lives in the firmware volume, not on the screen.
+    So it is read out of the volume, here.
+
+    A UI-section name is the `.inf`'s `BASE_NAME`-ish label the build put in the
+    file, which is the same string the old `Loading driver at` row would have
+    shown minus the `.efi`. Files with no UI section keep an empty name rather
+    than being omitted: "this GUID is in the volume and has no name" is a
+    different answer from "this GUID is not in the volume", and conflating them
+    is how a mistyped digit becomes a wrong conclusion.
+    """
+    out = []
+    for (g, t, s, n, _st), o in zip(files, offsets):
+        nm = n or gui_name(inner[o + 24:o + s]) or ""
+        out.append((g, t, s, nm))
+    return out
+
+
+def resolve_guid(query, rows, limit=5):
+    """[(distance, guid, type, size, name)] best-first for a transcribed GUID.
+
+    Ranked, not matched, and the distance is printed. A reader copying 32 hex
+    digits off a photograph will sometimes get one wrong, and the failure that
+    matters is not "not found" - it is a *near* GUID that resolves confidently to
+    the wrong driver. So an exact match is distance 0 and anything else carries
+    its number of differing digits, which makes a 1-digit answer legible as the
+    guess it is instead of looking like the answer.
+    """
+    want = guid_key(query)
+    scored = []
+    for g, t, s, nm in rows:
+        have = guid_key(g)
+        if len(have) != 32:
+            continue
+        if len(want) == len(have):
+            d = sum(1 for a, b in zip(want, have) if a != b)
+        else:
+            d = 32  # wrong length: cannot be compared digit by digit
+        scored.append((d, g, t, s, nm))
+    scored.sort(key=lambda r: (r[0], r[4]))
+    return scored[:limit]
+
+
 def compare_map(files, offsets, map_path, fv_len=None):
     """Check this image's FVMAIN against GenFv's own map of the volume it built.
 
@@ -313,11 +376,44 @@ def main():
     ap.add_argument("--against", metavar="FVMAIN.Fv.txt",
                     help="compare this image's FVMAIN against GenFv's own map "
                          "of the volume it built")
+    ap.add_argument("--roster", action="store_true",
+                    help="every FFS file as GUID, type, size, name - the table a "
+                         "`K` row's %%g is read against")
+    ap.add_argument("--name", metavar="GUID",
+                    help="resolve a transcribed GUID (case- and hyphen-tolerant, "
+                         "and ranked rather than matched)")
     args = ap.parse_args()
     if not args.image:
         sys.exit(__doc__)
 
-    files, fv_len, offsets, _ = unpack(args.image)
+    files, fv_len, offsets, inner = unpack(args.image)
+
+    if args.roster or args.name:
+        rows = roster(files, offsets, inner)
+        if args.name:
+            hits = resolve_guid(args.name, rows)
+            if not hits:
+                print(f"\nno FFS file in this volume has a GUID near {args.name}")
+                sys.exit(1)
+            print(f"\n{args.name!r} against {len(rows)} FFS files:")
+            for d, g, t, s, nm in hits:
+                verdict = "exact" if d == 0 else f"{d} digit(s) differ"
+                star = "  <- exact" if d == 0 else ""
+                print(f"  {verdict:>16s}  {g}  type {t:#04x} size {s:>8,}  "
+                      f"{nm or '(no UI name)'}{star}")
+            if hits[0][0] != 0:
+                print("  -> none is exact. A 1-digit difference is as likely to be"
+                      " a mistranscription\n     as a real neighbour; re-read the"
+                      " row before trusting the top one.")
+            return
+        print(f"\nFVMAIN roster: {len(rows)} FFS files")
+        unnamed = sum(1 for _g, _t, _s, nm in rows if not nm)
+        for g, t, s, nm in rows:
+            print(f"  {g}  type {t:#04x} size {s:>8,}  {nm or '(no UI name)'}")
+        print(f"\n{len(rows) - unnamed} named, {unnamed} with no UI section - a"
+              f" GUID that appears here with no name is still in the volume")
+        return
+
     print(f"\nFVMAIN: {len(files)} FFS files, "
           f"{sum(s for _, _, s, _, _ in files):#x} bytes of file headers+data")
 
