@@ -137,6 +137,60 @@ else
     ok "   no PCIe link-down in the last 5 min"
 fi
 
+# Which of these buses can hold a link? The port registers above answer whether
+# something is electrically present; this answers whether the port it is present
+# on will still exist a second from now. Both questions have to be answered
+# before a cable gets swapped, because on this machine the second answer has been
+# "no" for every enumeration this project has ever recorded: all 32 are on
+# `usb 3-1`, which resolves to the dock's JHL6340 controller, and that controller
+# is torn down and rebuilt every 6.4 seconds. A device there gets a 6.4-second
+# window to enumerate and then loses its bus. See docs/06-host-usb.md.
+#
+# The bus numbers are not hardcoded. Each /sys/bus/usb/devices/usbN is resolved
+# to the PCI address of the controller that owns it, and a bus counts as unsafe
+# if that controller deregistered a bus inside the same five-minute window used
+# for the flap count above - i.e. the test is "is this bus being rebuilt right
+# now", not "is this bus number in a list someone wrote down".
+say "== which buses can hold a link"
+declare -A BUS_CTRL=() BUS_FLAPS=()
+for u in /sys/bus/usb/devices/usb[0-9]*; do
+    [ -e "$u" ] || continue
+    num=${u##*/usb}
+    ctrl=$(readlink -f "$u" 2>/dev/null |
+           grep -oE '[0-9a-f]{4}:[0-9a-f]{2}:[0-9a-f]{2}\.[0-9]' | tail -1)
+    [ -n "$ctrl" ] || continue
+    BUS_CTRL[$num]=$ctrl
+    n=$(sudo journalctl -k --since "5 min ago" --no-pager 2>/dev/null |
+        grep -c "xhci_hcd $ctrl: USB bus.*deregistered")
+    BUS_FLAPS[$num]=${n:-0}
+done
+for num in $(printf '%s\n' "${!BUS_CTRL[@]}" | sort -n); do
+    ctrl=${BUS_CTRL[$num]}; n=${BUS_FLAPS[$num]}
+    if [ "$n" -gt 0 ]; then
+        bad "   usb $num  ($ctrl)  $n bus deregistrations in 5 min" \
+            "  <- do NOT plug the phone in here"
+    else
+        ok  "   usb $num  ($ctrl)  stable"
+    fi
+done
+
+# A bus missing from the list above is not an omission, it is the finding.
+# /sys/bus/usb/devices holds a `usbN` only while the controller that owns it is
+# registered, so a controller with no bus beside it has no bus to plug anything
+# into at this instant - and that is exactly the state the dock's controller is in
+# most of the time on this machine.
+declare -A CTRL_BUSES=()
+for num in "${!BUS_CTRL[@]}"; do
+    c=${BUS_CTRL[$num]}
+    CTRL_BUSES[$c]="${CTRL_BUSES[$c]:-} $num"
+done
+for d in $(ls /sys/bus/pci/devices/ 2>/dev/null); do
+    [ "$(cat "/sys/bus/pci/devices/$d/class" 2>/dev/null)" = "0x0c0330" ] || continue
+    if [ -z "${CTRL_BUSES[$d]:-}" ]; then
+        bad "   $d  owns NO usb bus right now - mid-teardown, nothing can enumerate"
+    fi
+done
+
 say "== currently attached"
 found=0
 for d in /sys/bus/usb/devices/*/; do
@@ -158,19 +212,34 @@ sudo journalctl -f -n 0 --no-pager 2>/dev/null |
 while IFS= read -r line; do
     t=$(date '+%H:%M:%S')
 
-    if [[ $line =~ New\ USB\ device\ found,\ idVendor=([0-9a-f]{4}),\ idProduct=([0-9a-f]{4}) ]]; then
-        vid=${BASH_REMATCH[1]}; pid=${BASH_REMATCH[2]}
+    if [[ $line =~ usb\ ([0-9]+)-([0-9.]+):\ New\ USB\ device\ found,\ idVendor=([0-9a-f]{4}),\ idProduct=([0-9a-f]{4}) ]]; then
+        busnum=${BASH_REMATCH[1]}; port=${BASH_REMATCH[1]}-${BASH_REMATCH[2]}
+        vid=${BASH_REMATCH[3]}; pid=${BASH_REMATCH[4]}
         name=${VENDOR[$vid]:-unknown vendor}
+        # Name the bus on the line, and say whether it is one that can hold a
+        # link. Without the bus number a person watching this cannot tell a
+        # chipset port from the dock's, which is how three sessions were spent
+        # plugging into 3-1 and reading the disappearance as a phone fault.
+        flaps=${BUS_FLAPS[$busnum]:-?}
         if [ "$vid" = "1d6b" ]; then
             # 1d6b is the Linux Foundation, i.e. the host's own root hub coming
             # back after its controller was reset. Printing this as ENUMERATED
             # would be the worst possible false positive here: it is the failing
             # controller announcing itself, and it reads exactly like a phone
             # arriving.
-            warn "  $t  ROOT HUB BACK  $vid:$pid  <- the host's own hub, not a device"
+            warn "  $t  ROOT HUB BACK  usb $port  $vid:$pid  <- the host's own hub, not a device"
         else
-            ok "  $t  ENUMERATED  $vid:$pid  <- $name"
+            ok "  $t  ENUMERATED  usb $port  $vid:$pid  <- $name"
         fi
+        case "$flaps" in
+            0)   ok  "        usb $busnum is stable (controller ${BUS_CTRL[$busnum]:-?}, no deregistration in 5 min)" ;;
+            '?') warn "        usb $busnum was not in the bus list - check it by hand" ;;
+            *)   bad "        usb $busnum is the FLAPPING port: $flaps bus deregistrations in"
+                 bad "        the last 5 min (controller ${BUS_CTRL[$busnum]:-?}). This device"
+                 bad "        will vanish within about 6 seconds. Unplug and use a bus"
+                 bad "        that the list above marked stable before reading anything"
+                 bad "        as a phone fault." ;;
+        esac
         if [ "$vid" = "05c6" ] && [ "$pid" = "9008" ]; then
             bad "        That is EDL mode. The phone is in Qualcomm's emergency"
             bad "        download mode and will not answer adb or fastboot."
