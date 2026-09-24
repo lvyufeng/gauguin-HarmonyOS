@@ -799,8 +799,11 @@ Five more candidates died the same way:
 **The Apriori order is the first thing in this project that separates the five
 from the eight.** `CoreFwVolEventProtocolNotify` walks `AprioriFile[Index]` in
 list order and appends each match to `mScheduledQueue`, and the drain at
-`Dispatcher.c:486` is a plain FIFO — so the batch runs in the order of this
-repository's `APRIORI.inc` `INF` list, *not* in FV file order:
+`Dispatcher.c:1066` is a plain FIFO — it takes the head each time
+(`mScheduledQueue.ForwardLink`, `:1067-1072`) and every append is an
+`InsertTailList` (`:2113` for the Apriori walk, `:1276` for the depex sweep) — so
+the batch runs in the order of this repository's `APRIORI.inc` `INF` list, *not*
+in FV file order:
 
 | INF # | `P2 SEQ` | driver | protocol it owes | state |
 |---|---|---|---|---|
@@ -1331,14 +1334,23 @@ given image, so `boot` does not have to be written again to re-take it.
   instrument prints while the evidence it describes is still the last thing drawn,
   which is what it was placed there to do rather than something it happens to do.
 - **The dispatch drain has no early exit, so the eight have three fates, not four.**
-  Reading `Dispatcher.c:523-664` end to end: a started entry leaves the queue with
-  `Initialized = TRUE` and `Scheduled = FALSE` and is never re-added, and the only
-  `continue` in the loop (582) skips `CoreStartImage` for that one entry without
-  ending the loop. Nothing breaks out; the `do { … } while (ReadyToRun)` at 664 is
+  Reading the drain end to end (`Dispatcher.c:1062-1216`, the `do { … } while
+  (ReadyToRun)` block): a started entry leaves the queue with `Initialized = TRUE`
+  (`:1134`) and `Scheduled = FALSE` (`:1133`) and is never re-added, and the only
+  `continue` in the loop (`:1127`) skips `CoreStartImage` for that one entry without
+  ending the loop. Nothing breaks out; the `} while (ReadyToRun)` at `:1216` is
   reached. So each of the eight is (a) scheduled and never promoted — a `?` in
-  `P2 SEQ`; (b) promoted and `CoreLoadImage` failed — an `L` at line 572; or
-  (c) promoted, loaded, and `CoreStartImage` returned an error — an `S` at line 611.
+  `P2 SEQ`; (b) promoted and `CoreLoadImage` failed — an `L` at `:1111`; or
+  (c) promoted, loaded, and `CoreStartImage` returned an error — an `S` at `:1156`.
   There is no fourth way, and in particular no silent drop.
+  `Initialized` is not what removes it — the flag is written at `:1134` and `:1108`
+  and read nowhere in the DXE core. What keeps it off the queue for the rest of the
+  boot is `Dependent`, which was already FALSE when the driver was put on the queue:
+  cleared at the promotion itself, at `:1274` in
+  `CoreInsertOnScheduledQueueWhileProcessingBeforeAndAfter` and at `:2111` in the
+  Apriori walk, and the re-evaluation sweep only ever offers `Dependent` entries
+  (`:1203`). So the decision that a dispatched driver is done was made when it was
+  scheduled, and the failure path records a flag that nothing consults.
 
 **Two traps to carry, because between them they have now cost time twice.** Both
 defeat the obvious command and both produce a confident wrong answer:
@@ -3435,8 +3447,9 @@ P2 RETRY rc16=%r rc48=%r rc112=%r rd16=%r
 ```
 
 **The order those five print in is not the order they are useful in.** `P2Bins`
-(`Dispatcher.c:326`) calls `P2Retry` *first* and only then emits the four `P2 BIN`
-lines, so `P2 RETRY` is the **last line of the whole digest** — it lands after the
+calls `P2Retry` at `Dispatcher.c:462` and only then emits the four `P2 BIN` lines
+(`:464-492`); the `P2 RETRY rc16=…` line itself is printed after them, at
+`:493-502`, so `P2 RETRY` is the **last line of the whole digest** — it lands after the
 four `P2 BIN` lines, after `P2 FREE largest=`, after everything. Read it by scrolling
 to the bottom of the screen, not by looking near the `P2 BIN` block. The table below
 is in usefulness order; the count in `P2 BIN rc=… used=…/…` and the statuses in
@@ -4415,7 +4428,7 @@ ten-driver subsystem-12 set includes `EnvDxe` and `SdccDxe`, which are
 `MODULE_TYPE = DXE_DRIVER`, linked at 0x1000, and pay nothing.
 
 **`P2 RETRY` is the last line of the digest, not one near the top.** `P2Bins`
-(`Dispatcher.c:326`) calls `P2Retry` *before* it prints anything, so the five lines
+calls `P2Retry` at `Dispatcher.c:462`, before any of its own prints, so the five lines
 come out as four `P2 BIN` lines and then `P2 RETRY` — and `P2 RETRY` therefore lands
 below `P2 FREE largest=` as well, at the very bottom of the repeating block. The read
 lists in steps 4.19 and 4.23 above have been corrected; the priority order they give
@@ -4434,7 +4447,7 @@ much larger fault than anything step 4.18 or 4.20 considered.
 
 | | |
 |---|---|
-| instrument | `SiliciumPkg.dsc.inc:14`, `:19-23`; `ProcessorBind.h:165-169`; `Page.c:382-460`, `:585`, `:1190-1198`, `:1207`, `:1217-1218`; `Image.c:686-690`; `Dispatcher.c:326`; the 218 build-tree `GNUmakefile`s |
+| instrument | `SiliciumPkg.dsc.inc:14`, `:19-23`; `ProcessorBind.h:165-169`; `Page.c:382-460`, `:585`, `:1190-1198`, `:1207`, `:1217-1218`; `Image.c:686-690`; `Dispatcher.c:462`; the 218 build-tree `GNUmakefile`s |
 | corrects | step 4.23's granularity: `RUNTIME_PAGE_ALLOCATION_GRANULARITY` is 0x1000, not 0x10000. Demand 1562 pages, not 1569 |
 | corrects | step 4.19's and step 4.23's read order: `P2 RETRY` prints last, after the four `P2 BIN` lines |
 | confirms | step 4.20's mechanism. `PromoteMemoryResource` has no route to the bin allocation, so "the gate never passes here" is the whole reason it cannot fire |
@@ -5509,10 +5522,12 @@ line is in this repository.**
 
 ### What `free=` is, and what it can and cannot say
 
-The field the flashed line prints is `P2LargestAlloc` (`Dispatcher/Dispatcher.c:185-204`):
-the ladder `{ 4096, 1024, 256, 64, 16, 4, 1 }` pages of `EfiBootServicesData`
-(`:189`), each tried with `CoreAllocatePages` (`:196`) and freed again on success,
-with the first that succeeds printed by `P2Tick` (`:617`). So the field is one of
+The field the flashed line prints is `P2LargestAlloc` (`Dispatcher/Dispatcher.c:195-219`):
+the ladder `{ 4096, 1024, 256, 64, 16, 4, 1 }` (`:199`), each rung asked for with
+`CoreAllocatePages (AllocateAnyPages, EfiBootServicesData, Ladder[Index], &Memory)`
+(`:208`, which is where the type comes from as well as the size) and freed again on
+success (`:210`), the first that succeeds being printed by `P2Tick` (`:683`). So the
+field is one of
 eight numbers, and it is a statement about the largest *contiguous run* and not
 about a total:
 
@@ -5728,7 +5743,9 @@ worth stating plainly because the natural assumption is the opposite:
 > **On the current build, a dispatch row identifies a driver by GUID and by
 > nothing else.** There is no row above it naming the same driver in English. The
 > `%g` in `K <n> <phase><why> <i>/<j> free=<pages> <guid>`
-> (`Dispatcher.c:599-628`) is `DriverEntry->FileName`, the FFS file's own GUID,
+> (`Dispatcher.c:677`, the format string in `P2Tick`) is `DriverEntry->FileName`,
+> handed in at the two call sites (`:1122` for a failed load, `:1167` for a start),
+> the FFS file's own GUID,
 > and the mapping from that GUID to a name exists in the firmware volume and not
 > on the screen.
 
@@ -5759,13 +5776,13 @@ For the newest build, bottom row first: **`K`** means the run stopped inside
 dispatch, **`KEY`** means `CoreDispatcher` returned, and **`P2 RETRY`** means
 neither build is on the phone — it is the older one. Within the `K` case the
 phase letter is the discriminator, from the two call sites
-(`Dispatcher.c:1062`, `:1107`):
+(`Dispatcher.c:1111`, `:1156`, the two `P2Record` calls that set it):
 
-  * **`L`** — `CoreLoadImage` failed for that driver, so its entry point never
-    ran and no driver code executed between this row and the previous one. Its
-    `<i>/<j>` is position in the Apriori order, and its `free=` was measured
-    after the dispatcher's lock was dropped (`:1059`), so it is the allocator's
-    state as the next driver will find it.
+  * **`L`** — `CoreLoadImage` (`:1081`) failed for that driver, so its entry point
+    never ran and no driver code executed between this row and the previous one. Its
+    `<i>/<j>` is position in the Apriori order, and its `free=` was measured by
+    `P2Tick` at `:1122`, after `CoreReleaseDispatcherLock` at `:1116`, so it is the
+    allocator's state as the next driver will find it.
   * **`S`** — the entry point ran and returned an error. The GUID names the
     driver, and any rows between this one and the previous `K` row are that
     driver's own output.
@@ -6821,7 +6838,7 @@ Three consequences, in ascending order of how much they mattered:
     instrument as one of them.
 
 The fix is a flag set and cleared **inside `P2LargestAlloc`** and not at its call sites,
-because there are three of them and because the ladder's own report walks the same ladder
+because there are four of them and because the ladder's own report walks the same ladder
 before the digest is printed. `mP2FwProbe` (`Dispatcher.c:191`, set at `:204`, cleared at
 `:211` and `:216`) is declared in `DxeMain.h` beside `P2FreeWhyReport` and read at the
 top of `P2FreeWhy` (`Page.c:1167-1170`), which returns before the tally. The count is not
@@ -7051,18 +7068,23 @@ return FindFreePages (MaxAddress, NoPages, NewType, Alignment, NeedGuard);  // :
   every request after it. The snapshot is not a state that has passed; it is the ceiling the rest of
   the run fails under.
 
-### The ladder runs 47 times, and one of the two comments about it says three
+### The ladder runs 47 times, and both comments about it say three
 
-`P2LargestAlloc` has three call *sites* — `Dispatcher.c:280`, `:291`, `:683` — which is what
-`Page.c:1159` means by "there are three of them", and that sentence is correct as written. The
-number of times it *runs* is not three: `P2Tick` is called once per attempted driver, at `:1122` for
-each load that failed and `:1167` for each that started, which this run's 46-character SEQ fixes at
-27 + 19 = 46, and `P2 FREE largest=` (`:2434`) walks the ladder once more before `P2Bins` (`:2436`)
-prints the row. **47 runs, and every rung all of them failed is in `g`.**
+`P2LargestAlloc` has **four** call *sites*, not three — `Dispatcher.c:280`, `:291`, `:683`,
+`:2462` — and `Page.c:1159`'s "there are three of them" is wrong the same way the
+`Dispatcher.c:453-455` comment is; both are recorded in the table below. The two in
+`P2Key` are the arms of an `if`/`else`, so only one of them is ever evaluated; the four textual
+sites are three live paths, and those three paths do not *run* three times. `P2Tick` is called once
+per attempted driver, at `:1122` for each load that failed and `:1167` for each that started, which
+this run's 46-character SEQ fixes at 27 + 19 = 46 walks; `P2 FREE largest=` (`:2462`) walks the
+ladder once more before `P2Bins` (`:2464`) prints the row. **47 walks behind the `g=` this row
+prints, and every rung all of them failed is in `g`.** `P2Key`'s own walk is the 48th, reached
+from the `P2Key ()` call at `:2470` after that row is printed, so it is in no field on the panel.
 
 | where | says | should say |
 | --- | --- | --- |
-| `Dispatcher.c:453-455` | "P2LargestAlloc runs three times before this - once per P2Tick inside the dispatch loop, and once for `P2 FREE largest=` above" (two items, total three) | three call sites, 46 runs inside the dispatch loop plus one for `P2 FREE largest=`, so 47 runs behind the `g=` this row prints |
+| `Dispatcher.c:453-455` | "P2LargestAlloc runs three times before this - once per P2Tick inside the dispatch loop, and once for `P2 FREE largest=` above" (two items, total three) | 46 walks inside the dispatch loop plus one for `P2 FREE largest=`, so 47 walks behind the `g=` this row prints; four call sites, two of them arms of the same `if`/`else` |
+| `Mem/Page.c:1159` | "there are three of them" (call sites of `P2LargestAlloc`) | four: `Dispatcher.c:280`, `:291`, `:683`, `:2462` — three live paths, since `P2Key`'s two are mutually exclusive |
 | `Mem/Page.c:1250-1254` | "CoreLoadPeImage's other EFI_OUT_OF_RESOURCES is a 200-byte AllocateRuntimePool … so `n=0` beside 27 recorded `L`s names the pool" | the pool it means is 48 bytes and its failure path returns `EFI_SUCCESS`; the only `EFI_OUT_OF_RESOURCES` that function can return is multi-page — see the next section but one |
 | `Mem/Page.c:1258` | "the second line … is now guaranteed to be a real request" | true, and weaker than "an image request": nothing filters on type at `:1185`; the type is read at `:1172-1180` only to choose a tally slot, and the ladder is excluded by the flag at `:1167-1170`, not by its arguments |
 
@@ -8025,12 +8047,12 @@ piecewise-constant offset, and the patch's own hunk headers give every piece exa
 which is what makes a single stale number possible in the first place: `:556` is the
 right line for that sweep in the unpatched tree and 648 lines away from it in this one.
 The rest of this log's citations are against the patched tree, and the
-ones re-checked here — `:185-204`, `:191`, `:195-219`, `:280`, `:291`, `:683`, `:1546`,
+ones re-checked here — `:166-170`, `:191`, `:195-219`, `:280`, `:291`, `:683`, `:1546`,
 `:2069` — are correct under that convention. `:486` and `:1062`/`:1107` were not
-re-checked to a verified target in this step and are the remaining debt: both sit in
-`CoreDispatcher`, both are quoted for a property of the scheduled queue rather than
-for a symbol, and neither should be trusted again until it has been read at the line
-it names.
+re-checked to a verified target in this step and were left as its remaining debt, to be
+read at the lines they name before being trusted again. Step 4.49 did that read: they
+are `:1066`, `:1111` and `:1156`, and this paragraph's own `:185-204` was wrong too, as is
+`Mem/Page.c:1159`'s "there are three of them".
 
 ### A tool that could not run at all, on the one path step 4.37 rests on
 
@@ -8085,3 +8107,163 @@ failures and the memory findings of 4.43–4.46 are untouched.
 | does not close | the 27 — `P2 ERR` is still the first line to read — and `discovered`, which needs the panel |
 | citations | the `Dispatcher.c:` line numbers in this log are against the **patched** tree; `:556` was an upstream number and is now `:1204`, and the upstream→current offset for every hunk is in the table above |
 | broken tool | `tools/apriori-index.py --seq` raised `NameError` since step 4.37 and is the path step 4.37's verdict is printed from; `entry_at` is now defined and the command exits 0 |
+
+## Step 4.49 — every stale number was exact when it was written, and two live comments still count the ladder wrong
+
+### The method, because it is the reusable part
+
+Step 4.48 ended with a debt it could not pay from the tree alone. `Dispatcher.c:486` and
+`:1062`/`:1107` were quoted for a property of the scheduled queue rather than for a symbol,
+so checking them meant reading a line the current tree says is something else; and the same
+step found a *second* convention in its own citations, because `:556` is the right number
+for that sweep in **upstream Mu** and 648 lines away from it here. Both facts point at the
+same question — how many other numbers in this log are claims about a tree that no longer
+exists — and neither can be answered by reasoning about drift.
+
+It can be answered by measurement. The local edits reach this repository as a patch against
+a pristine upstream checkout, so **any revision's patched tree is reconstructible exactly**:
+
+```
+git -C work/uefi/Mu-Silicium/Mu_Basecore archive HEAD | tar -x -C /tmp/recon-<rev>
+git -C /home/lvyufeng/Project/gauguin-HarmonyOS show <rev>:uefi/patches/mu-basecore-local.patch \
+    | patch -p1 -d /tmp/recon-<rev>
+```
+
+All sixteen revisions of `uefi/patches/mu-basecore-local.patch` were reconstructed this way.
+The newest reconstructs byte-identically to the working tree apart from line endings, which
+is the check that makes everything below a measurement. Then a citation is checkable as what
+it actually is — *a claim about the revision that was current when it was written*: `git log
+--follow -S '<the number>'` gives the doc commit that introduced it, the patch revision whose
+commit time precedes that one is the tree it was written against, and reading the named line
+in that revision's reconstruction says whether the number was right at the time.
+
+The patch is not quite additive in `Dispatcher.c` — it removes two lines, both in the last
+hunk (`@@ -1486,11 +2486,73 @@`, inside `CoreDisplayDiscoveredNotDispatched`). That
+does not affect the method or the offset table: each row there comes from a hunk header,
+which carries its own net delta.
+
+### Sixteen numbers, fifteen of them exact when written
+
+Every stale `Dispatcher.c:` number this step found was **the right line in the revision that
+was current when it was written**, except one. That is worth stating plainly because the
+opposite — numbers that were never right, invented along the way — is the more natural thing
+to assume about a log this long, and it is not what happened.
+
+| cited | was right in | and named there | is now |
+|---|---|---|---|
+| `:523`, `:664` | `e864a59` | `do {` and `} while (ReadyToRun);` — the drain end to end | `:1062`, `:1216` |
+| `:572` | `e864a59` | `P2Record (…, 'L', Status)` | `:1111` |
+| `:582` | `e864a59` | the loop's only `continue;` | `:1127` |
+| `:611` | `e864a59` | `P2Record (…, 'S', Status)` | `:1156` |
+| `:326` | `755d58c` | `P2Retry ();` | `:462` |
+| `:185-204` | `7f3cee9` | the whole of `P2LargestAlloc`, `(` through `}` | `:195-219` |
+| `:189` | `7f3cee9` | `Ladder[]` | `:199` |
+| `:196` | `7f3cee9` | the `CoreAllocatePages` rung | `:208` |
+| `:599-628` | `7f3cee9` | all but the last line of `P2Tick` — signature at 599, `}` at 626 | `:677` |
+| `:617` | `7f3cee9` | the `P2Tick (…)` calls | `:683` |
+| `:1062` | `7f3cee9` | `P2Tick ('L', …)` | `:1111` |
+| `:1107` | `7f3cee9` | `P2Tick ('S', …)` | `:1156` |
+| `:2434` | `981d738` | `P2 FREE largest=%d pages` | `:2462` |
+| `:2436` | `981d738` | `P2Bins ();` | `:2464` |
+| `:486` | **never** | the FIFO loop is at `:487` in `b5a3e45`, the revision current when this number was written; `:486` is the `//` above it, and in upstream it is `DriverEntry->Scheduled = FALSE;` | `:1066` |
+
+The first column of that table is history and not a citation. A checker that resolves it
+against the working tree lands on unrelated code — `:486` is `));` and `:523` is a comment
+about the busy-wait — which is precisely the defect this step removes from the rest of the
+log. Only the last column is against the tree as it stands.
+
+The exception is `:486`, and it fails in the way the other fifteen do not. It is off by
+**one**: the `while (!IsListEmpty (&mScheduledQueue))` it names sat at 487 in `b5a3e45`, and
+has sat at 487, 527, 563, 650, 699, 711, 712, 838, 875, 1006, 1024 and 1066 since, never at
+486. It is the only number in this set that was wrong on the day it was typed; the other
+fifteen were read where they pointed when they were written. `:556` — step 4.48's finding,
+and not in the table because it is not one of these — is the other failure mode: not off by a
+little, but written in the upstream numbering system, where it is exact.
+
+The offset is not a constant, which is the reason a careful reader still could not have
+caught these by arithmetic: the five `e864a59` numbers moved by +539 (`523`→`1062`) and +552
+(`664`→`1216`) within the same function, because the instrumentation inserted between them is
+not uniformly spaced. A piecewise-constant table is the only thing that reproduces it, and
+step 4.48's table is that.
+
+### `Initialized` is written and never read
+
+This is the one finding here that is not about line numbers. The 4.10-era bullet argued that
+a dispatched driver never returns to `mScheduledQueue` because the drain leaves it with
+`Initialized = TRUE` and `Scheduled = FALSE`. The observation is right and the mechanism is
+not:
+
+```
+$ grep -rn '\->Initialized' work/uefi/Mu-Silicium/Mu_Basecore/MdeModulePkg/Core/Dxe/
+Dispatcher/Dispatcher.c:1108:            DriverEntry->Initialized = TRUE;
+Dispatcher/Dispatcher.c:1134:      DriverEntry->Initialized = TRUE;
+```
+
+Two hits, both writes, both in `CoreDispatcher` — one on the load-failure path (`:1108`) and
+one on the start path (`:1134`). **Nothing in the DXE core reads the flag.** What actually
+keeps a dispatched driver off the queue for the rest of the boot is `Dependent`, which was
+already cleared when the driver was put *on* the queue: at `:1274` in
+`CoreInsertOnScheduledQueueWhileProcessingBeforeAndAfter` and at `:2111` in the Apriori walk.
+The re-evaluation sweep is the only path back onto the queue, and it offers a driver only if
+`DriverEntry->Dependent` is true (`:1203`, reached from `:1193`).
+
+So the decision that a driver is finished is taken at the moment it is scheduled, before
+anything is known about whether it loads, and `Initialized` records the outcome into a
+variable no code consults. The source's own header comment survives this: it says such a
+driver "is marked Initialized and skipped", which is exactly what happens. It is the log's
+inference from the flag to the behaviour that had to go, and it has gone.
+
+This matters past bookkeeping. Every read-order list in this log tells the reader to treat an
+`L` and an `S` as the two distinguishable ends of one mechanism, and that is still true — but
+the reason there are exactly two is that the loop has two ways out, not that a flag makes
+them final. A third way out would not announce itself in `Initialized`.
+
+### The ladder, counted one more time, and the two comments that still say three
+
+Both live comments that describe how often `P2LargestAlloc` runs say three, and the number
+is 47. `P2LargestAlloc` has four call *sites* — `Dispatcher.c:280`, `:291` (the two arms of
+one `if`/`else` in `P2Key`, so only one is ever evaluated), `:683` (inside `P2Tick`), and
+`:2462` (`P2 FREE largest=%d pages`) — which is three live paths, and those three paths do
+not run three times. `P2Tick` is called once per attempted driver, at `:1122` for each load
+that failed and `:1167` for each that started, fixed at 27 + 19 = 46 walks by the
+46-character SEQ; `P2 FREE largest=` walks the ladder once more before `P2Bins` (`:2464`)
+prints the row. **47 walks behind the `g=` that row shows.** `P2Key`'s own walk is the 48th,
+reached from the `P2Key ()` call at `:2470` after that row is already printed, so it is in no
+field on the panel.
+
+The two sentences are:
+
+- `Dispatcher.c:453-455` — "P2LargestAlloc runs three times before this - once per P2Tick
+  inside the dispatch loop, and once for `P2 FREE largest=` above". Its two-item
+  enumeration is right; its total is the count of call sites, not of runs, and it undercounts
+  by 44.
+- `Mem/Page.c:1159` — "…the second reason the flag is set inside P2LargestAlloc rather than
+  at its call sites: there are three of them." The reason is right and the count is four.
+
+Both are recorded in step 4.43's *says / should say* table, and neither is edited here. That
+is a decision, not an oversight: either edit moves every line below it in its file, which
+would invalidate every number this step just verified, and the re-verification is another
+pass like this one. The `P2BRINGUP` block is already scheduled for deletion once DXE reaches
+BDS, which moves those lines anyway; the comments go with it, or with a step that has to
+rebuild for other reasons.
+
+### What this step did not change
+
+No semantics, and no source. Sixteen citation numbers in this log were corrected to lines
+that were read, the paragraphs and table rows around them rewritten to say what the numbers
+mean rather than only where they point, and the two comment defects above recorded rather
+than fixed.
+Nothing was rebuilt and nothing was flashed: the payload of record is still
+`cbe5a13114fc4a0465677e480a29a76fa2836cf2ae00fb9e9838c490e0102132`,
+`tools/probe-fingerprint.py --expect P2FreeWhy` still exits 0, and
+`uefi/patches/mu-basecore-local.patch` was not regenerated because the checkout was not
+touched.
+
+| | |
+|---|---|
+| instrument | all sixteen revisions of `uefi/patches/mu-basecore-local.patch`, each reconstructed by applying it to a pristine upstream checkout and read at the line each citation names |
+| adds | every stale `Dispatcher.c:` number but one was exact in the revision that wrote it, so the failure mode is citations without an expiry and not invented numbers; `:486` is off by one from the loop it names; `DriverEntry->Initialized` is written twice and read nowhere, and `Dependent` is the flag that decides the queue; the ladder runs 47 times behind `g=` and both comments about it say three |
+| corrects | `:486`→`:1066`; `:523-664`→`:1062-1216`; `:572`→`:1111`; `:582`→`:1127`; `:611`→`:1156`; `:326`→`:462`; `:185-204`→`:195-219`; `:189`→`:199`; `:196`→`:208`; `:617`→`:683`; `:599-628`→`:677`; `:1062`/`:1107`→`:1111`/`:1156`; `:2434`/`:2436`→`:2462`/`:2464` |
+| confirms | step 4.47's and 4.48's readings of the promotion loop, and the two-fates-not-four conclusion of 4.10 — for the right reason now rather than by way of a flag nothing reads |
+| does not close | the 27 `CoreLoadImage` failures, the missing XHCI host driver, and `P2 STATS discovered=`, which is still the field that decides where the 23 went |
+| citation rule | a `file.c:N` in this log is a claim about the patched tree at the revision current when it was written; `git log --follow -S` plus a reconstruction resolves it, and any source edit expires every number below it |
