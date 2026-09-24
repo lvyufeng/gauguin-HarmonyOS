@@ -94,8 +94,11 @@ SDM7350 09, SDM7280 0A, SDM8550 0C, SDM7150 14, SDM8350 1A, SDM636 60.
 **What that leaves is one byte, not a name.** The node shapes are all here -
 `GIO0` with its `_CRS`, its interrupts and its pin tables; `SPMI`; `I2C<n>`,
 `SPI<n>` and `UR<n>` for the GENI SE blocks, named by protocol; `BTNS` as a
-standard `ACPI0011` Generic Buttons Device with Microsoft's `_DSD` UUID, which
-needs no vendor INF at all. What cannot be read off the corpus is which family
+standard `ACPI0011` Generic Buttons Device with Microsoft's `_DSD` UUID, whose
+own `_HID` needs no vendor INF - though its `_CRS` names `\\_SB.PM01` as the
+controller its `GpioInt` resources belong to, so it cannot be added on its own
+either: a PMIC node has to exist for it, and a PMIC node carries this same
+family byte. What cannot be read off the corpus is which family
 SM7225 carries, and therefore whether its GPIO controller is `QCOM??0C` or
 `QCOM??0D` - let alone what `??` is. But the search for it is finite and
 mechanical: ten of gauguin's twelve blocks have a known index in each of the
@@ -397,11 +400,6 @@ REF_NAMES = {
     "BTNS": "buttons (ACPI0011)",
 }
 
-# The low pair of `QCOM<family><index>`, per generation of Qualcomm's block
-# index table. Measured off the corpus with `--functions`: the same device
-# carries the same index on every SoC of one generation, and a different one on
-# every SoC of the other. Which generation SM7225 belongs to is not in the
-# corpus, so `--drivers` tries both.
 # The measured index tables. The low pair of `QCOM<family><index>` is fixed per
 # generation of the table generator - `--functions` prints the evidence, which is
 # that the families arrive in groups rather than scattered. There are three of
@@ -409,6 +407,12 @@ REF_NAMES = {
 # 14, and family 02 does not share their indices (`SPMI` is 16 under 02 and 0C
 # under 05 08 14). The SDM850 table is incomplete because the corpus gives no SE
 # indices for it; a `None` there means unmeasured, not absent.
+#
+# The PMIC nodes are deliberately not in here even though their index is measured
+# and splits the same way - `PM01` is `QCOM<family>2D` under 09 0A 0C 1A 25,
+# `QCOM<family>30` under 05 08 14 and `QCOM0269` for 02. The index is a fact; which
+# of gauguin's four SPMI PMICs becomes `PM01` is a choice this port makes, and a
+# count that mixed the two would be reporting the choice as a measurement.
 GENERATIONS = [
     ("modern  (index table read off 09 0A 0C 1A 25)", {
         "SPMI": "0B", "TLMM": "0C", "MMU": "09", "QDSS": "56", "RFS": "15",

@@ -9747,8 +9747,16 @@ Two things it does not and cannot do:
   thermal zones, so the portable nine do not correspond to it one-for-one, and
   mapping them is P3 work this step does not do.
 
-`BTNS` needs none of this: it is a standard `ACPI0011` Generic Buttons Device
-with Microsoft's `_DSD` UUID, so it can be authored now, ahead of the driver set.
+`BTNS` is not the exception it looks like. Its `_HID` is a standard `ACPI0011`
+Generic Buttons Device with Microsoft's `_DSD` UUID, so no vendor INF is needed
+for the button device itself — but its `_CRS` is three `GpioInt` resources whose
+controller string is `"\\_SB.PM01"`, so the node is useless without a PMIC node
+above it, and a PMIC node carries the same family byte: `PM01` is
+`QCOM<family>2D` in the modern tables, `QCOM<family>30` under 05 08 14, and
+`QCOM0269` for 02 — the same split as the blocks. The index is measured; which of
+gauguin's four SPMI PMICs (`pm6150l`, `pm6350`, `pm7250b` in the device tree)
+becomes `PM01` is a choice this port makes, so it is not folded into the
+`--drivers` count, where it would be reporting the choice as a measurement.
 
 | | |
 |---|---|
@@ -9759,6 +9767,6 @@ with Microsoft's `_DSD` UUID, so it can be authored now, ahead of the driver set
 | test corrected | an address was matched for equality. Every reference `SPMI` declares `0x0C400000` for `0x02800000` — forty megabytes — and gauguin's arbiter at `0x0C440000` is inside it, so 22 tables were reported as 0. The census now reports containment as well; `--functions` joins on the device name, which needs no such repair |
 | why it matters | the step's conclusion is unchanged — the DSDT is written to a driver, not to the SoC — but the search for the missing token is now finite and mechanical instead of a lookup that has to succeed |
 | verified on | four synthetic `.inf` sets: complete modern match at byte `2C` (10/10), partial legacy (2/10, reported as partial), unrelated set (no match), empty directory (exit 1) |
-| still open | `TSENS0`/`TSENS1` have no index in the corpus at all, and the thermal zones are a second namespace with 147 ids of their own; `SE2` has no reference at any address, exact or contained, and is disabled in the device tree anyway |
+| still open | `TSENS0`/`TSENS1` have no index in the corpus at all, and the thermal zones are a second namespace with 147 ids of their own; `SE2` has no reference at any address, exact or contained, and is disabled in the device tree anyway; and the button and power-key nodes need a PMIC node (`\_SB.PM01`) that carries the same unknown byte |
 | unchanged | nothing on the device. P2's gate still needs the glass; P4 is untouched; the stock `boot` and the restore path are as they were |
 

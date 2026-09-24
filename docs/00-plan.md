@@ -356,9 +356,12 @@ hardware behind it is silently not there, which is worse than a node that is vis
 missing. **So obtaining the driver set is a precondition for authoring these tables,
 not a later step**, and `--drivers DIR` on the tool reports which of gauguin's twelve
 blocks a given set covers. This is the same mechanism P5 names as "re-bind the WoA
-driver INF"; P3's tables are its first instance. `BTNS` is the exception: it is a
-standard `ACPI0011` Generic Buttons Device with Microsoft's `_DSD` UUID, so it needs
-no vendor INF and can be authored now.
+driver INF"; P3's tables are its first instance. `BTNS` looks like an exception —
+its `_HID` is a standard `ACPI0011` Generic Buttons Device, so no vendor INF is
+needed for it — but its `_CRS` names `\_SB.PM01` as the controller its `GpioInt`
+resources belong to, and a PMIC node carries the same family byte (`PM01` is
+`QCOM<family>2D` in the modern tables and `QCOM<family>30` under 05 08 14). So
+the buttons wait for the same byte the rest of the blocks do.
 
 Items 2–4 have a shared precondition that is worth stating plainly: **the payload has
 760 bytes of free volume**, and the P2 debugging instrumentation (`P2BRINGUP`) is what
