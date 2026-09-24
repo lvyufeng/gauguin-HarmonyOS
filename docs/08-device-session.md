@@ -5021,6 +5021,17 @@ is `0x13E3000` into it: **20.9 MiB of 28.4 MiB allocated**, 7.5 MiB left, at the
 moment `Fat.efi` went in. `Fat` is FV file 37 of 123 (`961578FE-B6B7-44C3-AF35-6BC705CD2B1F`)
 and entry 30 of the Apriori list, so this is mid-batch, not near the end of it.
 
+**This paragraph has since been corrected three times over — see "Step 4.52 — the
+one heap address the panel ever gave was read from the wrong end" below.** The
+allocator carves free memory from the **top** of the run downward
+(`Page.c:1008`, `:1025`, `:1033`), so the address is a distance *down* from the
+ceiling, and the pair belongs the other way round: **≤8.5 MiB used, ≥19.9 MiB
+free**. The sentence above also calls the `0x9B800000 + 0x02360000` **row** 28.4
+MiB, which is 35.4 MiB — 28.4 MiB is what survives PrePi (step 4.28), and
+conflating the two is the specific mistake step 4.28 added `tools/pe-facts.py`
+to prevent. And `0x13E3000` is 19.89 MiB, not 20.9: that figure is the byte count
+read in decimal megabytes and labelled MiB.
+
 **No `P2` line has ever been on that panel, and that is a statement about when
 the digest prints.** Every bring-up line — `P2 NOLOAD`, `P2 APRI`, `P2 SEQ`,
 `P2 WHY`, `P2 ERR`, `P2 DIAG`, `P2 STATS`, `P2 WALK`, `P2 FREE`, `P2 BIN`,
@@ -5102,7 +5113,7 @@ row in either state, and the two readings it is worth flashing for:
 | | |
 | --- | --- |
 | finding | the panel holds DxeCore's load flood and no `P2` line, from a run that did not reach the end of `CoreDispatcher` |
-| the row that says so | `Loading driver at 0x0009CBE3000 ... Fat.efi` — printed only after a successful PE load, at 20.9 MiB into a 28.4 MiB heap |
+| the row that says so | `Loading driver at 0x0009CBE3000 ... Fat.efi` — printed only after a successful PE load, at 20.9 MiB into a 28.4 MiB heap (*the direction and the arithmetic are both wrong — **step 4.52**: ≤8.5 MiB used, ≥19.9 MiB free*) |
 | why no `P2` line | every bring-up line prints from `CoreDisplayDiscoveredNotDispatched`, which `DxeMain.c:576` calls after `CoreDispatcher` returns at `:562` |
 | why the flood cannot be silenced by level | `DebugPrintLevelEnabled` tests `PcdFixedDebugPrintErrorLevel`, which is `0xFFFFFFFF` (MdePkg.dec default, confirmed in the module's `AutoGen.c`), so `PcdDebugPrintErrorLevel|0x8007EE0F` filters nothing |
 | instrument added | `P2Tick`: one `K <n> <phase><status> <s>/<ap> free=<pages> <guid>` row per attempted dispatch, 70 columns, printed last |
@@ -8568,3 +8579,98 @@ line number in this log moved.
 | confirms | step 4.9's reading of the promotion loop at `Dispatcher.c:2111-2113` and `:2122`, and step 4.10's use of it — which is why the trio is in `DXE.inc` only, and why the a-priori array is still 70 entries |
 | leaves | `UsbConfigDxe` where it was: this phone's own build, 77,824 B, with the host-mode path compiled in and its default role unresolved |
 | does not close | the 27 `CoreLoadImage` failures, and therefore the eight arch providers the new depex names — the host stack now waits on them instead of failing beside them; `P2 STATS discovered=` is still the field that decides where the 23 went |
+
+
+## Step 4.52 — the one heap address the panel ever gave was read from the wrong end
+
+The whole of step 4.31 rests on one row, and this step corrects how that row reads:
+
+```
+Loading Driver at 0x0009CBE3000 EntryPoint=0x0009CBE41DC Fat.efi
+```
+
+Step 4.31 glossed the address as *"20.9 MiB of 28.4 MiB allocated, 7.5 MiB left"* —
+a heap two thirds full at the 30th a-priori entry. That is the reading a "the heap
+ran out" explanation for the 27 failures would want, and it is backwards. The
+arithmetic that makes it backwards is in `Page.c`, not on the device, and it turns
+out to give a **hard floor on free memory** that this project has never had before.
+
+**The allocator carves from the top of the free run downward.** `CoreFindFreePagesI`
+walks every `EfiConventionalMemory` descriptor and keeps the one with the highest
+`DescEnd` (`Page.c:1008`, `:1025`), then:
+
+```c
+  //
+  // If this is a grow down, adjust target to be the allocation base
+  //
+  Target -= NumberOfBytes - 1;                            // Page.c:1031-1033
+  ...
+  if ((Target & EFI_PAGE_MASK) != 0) {                    // :1038
+    return 0;
+  }
+  return Target;                                          // :1042
+```
+
+So the base that comes back is `DescEnd - (pages - 1)`: the allocation sits at the
+**top** of the chosen run, and what is left of that run is **below** it. The chain
+is unbroken from there to the panel — `FindFreePages` returns it unchanged
+(`:1371-1374`), `CoreInternalAllocatePages` takes it as `Start` (`:1571`),
+converts (`:1590`) and stores it (`:1615`, `*Memory = Start`), and
+`CoreLoadPeImage` hands that same variable to `Image->ImageContext.ImageAddress`
+(`Image.c:731-740`), which is what the deleted `Image.c:862` print showed. Pool
+pages come through the same `FindFreePages` (`Page.c:2515`), so they descend from
+the top too. Every allocation therefore starts just below the previous one.
+
+**And there is only one run to descend into.** Step 4.28 established that
+`[EfiFreeMemoryBottom, EfiFreeMemoryTop]` = `[0x9B800000, ≈0x9D45E000]`, 7261
+pages above the PrePi allocations, is the entire `EfiConventionalMemory` world
+(`Gcd.c:2393-2394`). One descriptor, always carved at its top, means the descent is
+monotone: **no allocation can ever sit below a base that has already been handed
+out.** That is what makes a single address a measurement rather than an anecdote.
+
+**Two numbers, and which side each belongs on.** `0x9CBE3000` is `0x013E3000` =
+19.89 MiB above the floor of that region, and `0x0087B000` = 8.48 MiB below its
+ceiling. Read in the direction the allocator moves, that is **≤8.5 MiB used and
+≥19.9 MiB still free** when `Fat.efi` went in — the same pair step 4.31 printed,
+with the sides swapped. (`20.9` is not `19.89` rounded: it is the byte count read
+in decimal megabytes and labelled MiB, which is the third arithmetic slip in that
+one sentence along with the direction and the 35.4-vs-28.4 MiB row.)
+
+**The bottom-up reading is not merely off, it is impossible, and the volume's own
+size proves it.** `FVMAIN.Fv` is 7,352,320 B across 123 files. Reading the address
+from the bottom asks for ≈20 MiB of resident images at the 37th file and the 30th
+a-priori entry, out of a volume that holds 7.01 MiB in total — a 2.8× overshoot
+against a bound no unloaded file can relax, since every image page in this system
+comes from one of those files. Read from the top the same address asks for ≤8.5
+MiB, which the volume can supply.
+
+**What this closes, and what it does not.** Every heap field the P2 instruments
+carry — `P2 FREE largest=`, `P2 FREE why=`, `P2Tick`'s `free=`, `bs9=` — asks one
+question: was there room. This row is the only heap number the device has ever
+reported, and it was the one piece of arithmetic that made "the heap was nearly
+full" look supportable. It says the opposite, and it says it from a bound that
+does not depend on the ceiling being exactly right: **at least 19.9 MiB of the
+28.4 MiB region was free.** Step 4.26's fork is unaffected — the next instrument
+still goes on the pool side — but the heap side is now closed from both ends:
+4.6× headroom by capacity (4.28), and a ≥19.9 MiB floor under the one address ever
+read.
+
+What is *not* resolved is the size of the used band. Under 4.28's ceiling it is
+≤8.5 MiB at the 37th file, but the volume cannot have supplied more than ≈7 MiB of
+image pages even with all 123 resident, and fewer than forty were. So either PrePi
+took more from the top than the FVMAIN — 4.28 counts 1795 pages for the volume and
+names "the HOB list's few pages and DxeCore's own image" as uncounted, and this
+step is the first place that slack becomes load-bearing — or a large part of the
+used band is pool and driver allocations rather than images. The host cannot
+separate those two and this step does not try. The field that separates them is a
+single `free=` column taken *during* dispatch, which is precisely the reading the
+panel has never produced.
+
+| | |
+|---|---|
+| finds | the one heap address the device ever reported reads as **≤8.5 MiB used, ≥19.9 MiB free** of a 28.4 MiB region, because `CoreFindFreePagesI` allocates from the top of the run down |
+| mechanism | `Page.c:1008`/`:1025` pick the highest `DescEnd`; `:1033` sets the base to `DescEnd - (pages-1)`; `:1371`→`:1571`→`:1590`→`:1615` carry it to `*Memory`; `Image.c:731-740` puts it in `ImageContext.ImageAddress`; step 4.28's single `EfiConventionalMemory` descriptor makes the descent monotone, so everything below a handed-out base is free |
+| corrects | `docs/08` step 4.31 twice — "20.9 MiB of 28.4 MiB allocated, 7.5 MiB left" (direction, and decimal-vs-binary units) and "28.4 MiB" for the 35.4 MiB `0x02360000` row, which is the conflation step 4.28 added `tools/pe-facts.py` to prevent |
+| bounds | free ≥ 19.9 MiB at `Fat.efi`, from one address plus the direction of the search; and the bottom-up reading is impossible by 2.8× against the volume's own 7,352,320 B |
+| instrument | no new one: `Page.c`, `Image.c` and step 4.28's measured `FVMAIN.Fv` size read against the single panel row. No source under `Mu_Basecore` was edited, so no line number in this log moved |
+| does not close | the 27 `CoreLoadImage` failures, `bs9=`'s value, or whether the used band is PrePi's uncounted pages or pool — the `free=` column during dispatch is still the reading that decides, and the panel has still never shown one |
