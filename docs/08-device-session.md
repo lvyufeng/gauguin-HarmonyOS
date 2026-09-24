@@ -8818,3 +8818,130 @@ cannot be fooled by it, and it is what step 4.53 used.
 | bounds | the six tables are located by walking the `AcpiTables` FFS file, so the offsets, lengths and checksums are exact and not scan-dependent; the four valid stored checksums (SSDT, DSDT, APIC, GTDT) and the one invalid one (FACP) are facts about the bytes, FACS has no checksum field to be either, and the FADT's semantic fields are read rather than inferred |
 | instrument | no new one: `AcpiPlatform.c`, `AcpiTableProtocol.c` and `MdePkg/Include/IndustryStandard/Acpi60.h` on the host side, plus `tools/fv-inventory.py` against `work/out/p2-freewhy-g/Mu-gauguin-silicon-gzip.img`. No source under `Mu_Basecore` was edited, so no line number in this log moved |
 | does not close | the P2 gate — the 27 `CoreLoadImage` failures, `bs9=`, and the census against the step 4.43 predictions are all still unread, because the device has presented nothing on any port since `2026-09-24T14:59:32`. And it does not make the DSDT complete: it still carries no I2C, GPIO, buttons or thermal zones, which is work on the DSDT rather than on the FACP |
+
+## Step 4.54 — this unit's overlay is entry 13, and its touchscreen is Novatek over SE0 SPI
+
+`docs/05` records the touchscreen as a **Goodix** part. The device's own tree says
+**Novatek**. Both readings name the same dump — `~/backup/gauguin/dt/`, the merged
+tree as the running kernel sees it, taken 2026-09-22 17:15 — so one of the two is
+wrong, and which one decides what P5 has to drive.
+
+**The dump names the touch node, and it is not Goodix.** Two nodes answer it:
+
+```
+soc/spi@880000          compatible "qcom,spi-geni"   reg <0x880000 0x4000>
+                        interrupts <0 0x259 4>       spi-max-frequency 0x2faf080 (50 MHz)
+  └── touch_spi@0       compatible "xiaomi,spi-for-tp"   reg 0  10 MHz   status ok
+soc/ts_novatek          compatible "novatek,NVT-ts-spi"                    status ok
+```
+
+and the Novatek node is not a placeholder — it carries a full part configuration:
+
+| property | value | meaning |
+|---|---|---|
+| `novatek,irq-gpio` | `<0xc1 0x16 0x2001>` | tlmm GPIO **22**, rising |
+| `novatek,reset-gpio` | `<0xc1 0x15 0x0>` | tlmm GPIO **21** |
+| `novatek,swrst-n8-addr` | `0x3f0fe` | the register the protocol soft-resets at |
+| `novatek,spi-rd-fast-addr` | `0x3f310` | the fast-read address |
+| `novatek,config-array-size` | `2` | two entries in the driver's config array |
+| `spi-max-frequency` | `0x989680` | 10 MHz |
+| `pinctrl-names` | `pmx_ts_active`, `pmx_ts_suspend` | |
+
+with `soc/xiaomi_touch` (`xiaomi-touch`) beside it. **The only Goodix node in the
+whole tree is the fingerprint reader:**
+
+```
+soc/fingerprint_goodix  compatible "goodix,fingerprint"   status ok
+                        goodix,gpio-irq   <0xc1 0x11 0x0>   tlmm 17
+                        goodix,gpio-reset <0xc1 0x12 0x0>   tlmm 18
+```
+
+Goodix sits on tlmm 17/18 and the touch on tlmm 22/21: different parts on
+different pins. That is the whole of the error in `docs/05` — it read the Goodix
+node, which is the fingerprint, and concluded the touchscreen was Goodix. It also
+explains `uinput-goodix`: a Goodix fingerprint driver's uinput interface for
+gesture and wakeup events, not a touch protocol bridge. `docs/05`'s claim that
+Xiaomi "does not drive it from a normal kernel input driver" goes with it —
+`novatek,NVT-ts-spi` is exactly the vendor input driver `docs/00:249` already
+names, and the Novatek node in this tree carries the registers that driver uses.
+What survives from that section is the part that is about the *bus*: the SPI path
+really is a transport shim, and the panel's own driver is reached through it.
+
+**Which of the nineteen overlays this unit runs is now identified rather than
+inferred.** The stock `dtbo` carries 19 overlays and the live tree is the *merged*
+result of one of them, so the entry can be found by looking for markers that only
+one entry declares. Fourteen candidates, and twelve of them are unique to a single
+entry across all nineteen:
+
+| marker | entries declaring it | in this unit's tree |
+|---|---|---|
+| `novatek,NVT-ts-spi` | **13 only** | `soc/ts_novatek` |
+| `goodix,fingerprint` | **13 only** | `soc/fingerprint_goodix` |
+| `xiaomi,spi-for-tp` | **13 only** | `soc/spi@880000/touch_spi@0` |
+| `cirrus,cs35l41` | **13 only** | `soc/i2c@984000/cs35l41@40`, `@41` |
+| `ir-spi` | **13 only** | `soc/spi@98c000/irled@0` |
+| `qcom,fsa4480-i2c` | **13 only** | `soc/i2c@990000/fsa4480@42` |
+| `awinic,aw8624_haptic` | **13 only** | `soc/i2c@990000/aw8624_haptic@5A` |
+| `ti,bq2597x-standalone` | **13 only** | `soc/i2c@990000/bq25970-standalone@66` |
+| `xiaomi-touch` | **13 only** | `soc/xiaomi_touch` |
+| `maxim,ds28e16` | **13 only** | `soc/maxim_ds28e16` |
+| `xiaomi,testing-mode` | **13 only** | `soc/testing_mode` |
+| `xiaomi,onewire_gpio` | **13 only** | `soc/onewire_gpio` |
+| `qcom,nq-nci` | 02–07, 09–14 | `soc/i2c@988000/nq@28` |
+| `fpc,fpc1020` | 00, 13 | `soc/fingerprint_fpc` |
+
+Twelve markers that exactly one of nineteen overlays declares, all twelve present
+in this unit's tree, and no exclusive marker of any other entry present. **Entry 13
+is this unit's overlay.** (The same method is what `tools/abl-boot-check.py` does
+in reverse: it checks that every symbol the overlay names exists in our tree.)
+
+**And entry 13's own structure is ambiguous in the same way the tree is.**
+`fragment@40` adds `focaltech,fts_ts` at `i2c@988000`/`0x38` *and* `fragment@74`
+adds `novatek,NVT-ts-spi`, so Xiaomi's overlay for this variant declares both touch
+parts. What breaks the tie is the rest of the overlay set: entry 13 is the only one
+of the nineteen that mentions Novatek at all. Eleven entries declare some touch
+part — `focaltech,fts_ts` on 00, 04, 07, 08, 09 and 13, `synaptics,tcm-i2c` on 01,
+08, 16 and 18, `synaptics,dsx-i2c` on 04, 07, 08 and 09, and `novatek,NVT-ts-spi`
+on 13 alone — and the ten that declare none are 02, 03, 05, 06, 10, 11, 12, 14, 15
+and 17. Entry 13 pairs Novatek with `novatek-mp-criteria-nvtpid`, which is in this
+unit's tree as a child of `ts_novatek`.
+
+**The two touch parts are mutually exclusive, and the pins say so.** The Novatek
+and FocalTech nodes claim the *same* IRQ and reset lines:
+
+| | controller | bus | irq | reset | coords |
+|---|---|---|---|---|---|
+| this unit | `novatek,NVT-ts-spi` | SE0 SPI `0x880000`, 10 MHz | tlmm **22** (`0x2001`) | tlmm **21** | (none in tree) |
+| alternate | `focaltech,fts_ts` | I2C `0x988000` (int `0x163`), 400 kHz | tlmm **22** (`0x2008`) | tlmm **21** | `0,0,1080,2340`, 5 fingers |
+
+One IRQ and one reset line cannot serve two populated parts, so these are
+population options for one footprint. Note that `i2c@988000`'s
+`qcom,i2c-touch-active = "focaltech,fts_ts"` marker does **not** disambiguate: it is
+in this unit's tree too, because it comes from the base tree rather than from the
+overlay.
+
+**What this changes.** `docs/05`'s touch section heading and chip identity are
+corrected in place, and `docs/01`'s spec line is annotated with the confirmation.
+For P5 the target is a Novatek NVT part on SE0 SPI, with the six cells above plus
+`swrst-n8-addr 0x3f0fe` and `spi-rd-fast-addr 0x3f310` as the bring-up facts; there
+is no HID-over-I2C shortcut and no mainline driver, so it needs a real one, which is
+what `docs/00:249` already assumed. For P3, when the SPI controller is described,
+the block is SE0 at `0x880000` — the one our generated tree calls `i2c@880000`,
+because mainline only ever described that GENI SE in its I2C strapping. The tracked
+`dts/sm7225-xiaomi-gauguin.dts` inherits mainline's reading unchanged: `&i2c0` at
+that address with commented-out NFC/ToF/amplifier children, and mainline's own
+`/* HX83112A touchscreen @ 48 */` on `&i2c8`, which is neither this unit's part nor
+this unit's bus. And none of it is in our generated tree: `Resources/DTBs/
+gauguin.dts` has no `spi@880000`, no `touch_spi@0` and no `ts_novatek`, because the
+overlay that carries them targets symbols we replaced with empty sinks — so nothing
+in the payload currently describes the touch bus at all.
+
+| | |
+|---|---|
+| finds | this unit's overlay is **entry 13** of the 19 in the stock `dtbo`, and its touchscreen is a **Novatek NVT-ts-spi on SE0 SPI (`0x880000`, 10 MHz)**, not the Goodix that `docs/05` records. The Goodix part on this board is the **fingerprint** reader on tlmm 17/18 |
+| evidence | the merged tree dumped from the running kernel (`~/backup/gauguin/dt/`, 2026-09-22 17:15 — the same dump `docs/05` was written from): `soc/ts_novatek = "novatek,NVT-ts-spi"` with a full part configuration, `soc/spi@880000/touch_spi@0 = "xiaomi,spi-for-tp"`, `soc/fingerprint_goodix = "goodix,fingerprint"` |
+| identification | twelve markers are unique to entry 13 among all nineteen overlays and all twelve are in this unit's tree; the two non-unique markers (`qcom,nq-nci`, `fpc,fpc1020`) are present too, and no other entry's exclusive markers are |
+| corrects | `docs/05`'s "Touch — Goodix over SPI" section: the part is Novatek; the Goodix reading came from the fingerprint node, and `uinput-goodix` is that driver's uinput interface. Also its "not driven by a normal kernel input driver" — `novatek,NVT-ts-spi` is the vendor driver `docs/00:249` names |
+| bounds | the tree proves which touch node this unit's overlay installs and that Novatek is unique to entry 13 among nineteen. It does not prove at runtime which part answered, because the vendor tree declares both and the driver probes; confirming that is one command on the device (`ls /sys/bus/spi/drivers`, `getevent -pl`) |
+| instrument | `~/backup/gauguin/dt/` read directly as big-endian cells; `~/backup/gauguin/images/part-dtbo.img` decompiled to 19 `.dts` for the marker scan. Nothing rebuilt, nothing flashed, no source edited |
+| does not close | the P2 gate, and touch itself — this is P5's target, not its driver |

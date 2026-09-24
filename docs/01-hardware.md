@@ -67,7 +67,7 @@ That upstream work is the hardware map this port will be built from.
 | RAM | 8 GB LPDDR4X |
 | Storage | 128 GB UFS 3.1 |
 | Display | 1080×2400 IPS LCD, DSI, 430 dpi |
-| Touch | Novatek, SPI (`NVT-ts-spi` driver bound in the running kernel) |
+| Touch | Novatek, SPI (`NVT-ts-spi` driver bound in the running kernel) — confirmed against the live tree in docs/08 step 4.54; the Goodix part on this board is the fingerprint reader |
 | Wi-Fi/BT | Qualcomm `wcn3990` (BT soc name `cherokee`) |
 | Kernel (current) | `4.19.113-perf`, LA.UM.9.12.r1-08000-SMxx50.0 |
 | Android | 11 / SDK 30, `ro.build.type=user`, arm64-v8a |

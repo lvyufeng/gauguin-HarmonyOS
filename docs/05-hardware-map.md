@@ -106,24 +106,39 @@ The bootloader's framebuffer lives at **`0xA0000000`**, matching the
 `Display Reserved` region (36 MB) declared in `uefiplat.cfg`. A 1080×2400×4
 frame is 10.4 MB, so it fits comfortably.
 
-## Touch — Goodix over SPI, and a conflict to resolve
+## Touch — Novatek over SPI, and a conflict to resolve
 
 ```
 soc/spi@880000          compatible qcom,spi-geni, reg 0x880000+0x4000, status ok
   └── touch_spi@0       compatible xiaomi,spi-for-tp, spi-max-frequency 10 MHz
+soc/ts_novatek          compatible novatek,NVT-ts-spi, status ok
 ```
 
-The controller itself is a **Goodix** part. Xiaomi does not drive it from a
-normal kernel input driver — the bound SPI driver is `touch_xsfer` (a transport
-shim) and events arrive through **`uinput-goodix`**, i.e. a userspace daemon
-speaking the Goodix protocol over `touch_xsfer` and injecting into `uinput`.
-Consequences:
+**Correction, from the same dump this section was written from: the controller is
+a Novatek part, not a Goodix one.** `soc/ts_novatek` reads
+`novatek,NVT-ts-spi` and carries a full part configuration — `novatek,irq-gpio`
+`<tlmm 22, 0x2001>`, `novatek,reset-gpio` `<tlmm 21, 0>`, `novatek,swrst-n8-addr`
+`0x3f0fe`, `novatek,spi-rd-fast-addr` `0x3f310`, `novatek,config-array-size` 2 —
+with `soc/xiaomi_touch` beside it. **The only Goodix node in this tree is
+`soc/fingerprint_goodix` (`goodix,fingerprint`, `status` ok) on tlmm 17/18**, so
+the Goodix reading here was the fingerprint reader rather than the touchscreen;
+that also explains `uinput-goodix`, which is a fingerprint driver's uinput
+interface for gesture/wakeup events and not a touch protocol bridge. docs/08 step
+4.54 has the full evidence and identifies which of the nineteen overlays this unit
+runs. What survives from the reading below is that the SPI path is a transport
+shim rather than the panel's own input driver, which is still true:
 
-- The chip speaks a proprietary Goodix protocol over SPI, not HID-over-I2C, so
-  P5 will need a real driver rather than a re-bind of an existing one.
+Xiaomi does not drive it from a normal kernel input driver — the bound SPI driver
+is `touch_xsfer` (a transport shim) and the panel's driver is the vendor
+`novatek-nvt-ts` (`docs/00`:249) reached through it. Consequences:
+
+- The chip speaks Novatek's own protocol over SPI, not HID-over-I2C, so P5 will
+  need a real driver rather than a re-bind of an existing one.
 - The DT also declares `focaltech@38` on `i2c@988000`, so Xiaomi supports a
-  second touch vendor on this platform. **This unit has Goodix** (that is what
-  `input1` reports on the running system), which is what the port has to target.
+  second touch vendor on this platform. The two parts **share the same IRQ and
+  reset pins** (tlmm 22 / tlmm 21), so they are population options for one
+  footprint and not two chips. This unit's overlay is the one that names Novatek,
+  and it is the only one of the nineteen that does; see docs/08 step 4.54.
 
 Mainline `sm6350.dtsi` declares **`i2c0` at the very same address `0x880000`**,
 because the GENI serial engine can be strapped as I2C, SPI or UART and upstream
@@ -138,7 +153,7 @@ Read from each node's `status` on the device — only the `ok` ones are real:
 
 | Address | Block | Status | Attached |
 |---|---|---|---|
-| `0x880000` | `spi@880000` | **ok** | `touch_spi@0` (Goodix) — **mainline calls this `i2c0`** |
+| `0x880000` | `spi@880000` | **ok** | `touch_spi@0` (Novatek transport, `xiaomi,spi-for-tp`) — **mainline calls this `i2c0`** |
 | `0x888000` | `spi@888000` / `i2c@888000` | disabled | — |
 | `0x980000` | `spi@980000` / `i2c@980000` | disabled | — |
 | `0x984000` | `i2c@984000` | **ok** | `cs35l41@40`, `cs35l41@41` (Cirrus Logic speaker amps) |
