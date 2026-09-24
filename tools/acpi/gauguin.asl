@@ -49,12 +49,17 @@
  * The consequence of copying a name from another SoC is specific and bad. A
  * node whose `_HID` no driver claims does not fail, warn or fall back; it is
  * absent from Device Manager and the hardware behind it is simply not there.
- * That is worse than a missing node, which at least reads as missing. So the
- * names have to come from the one place they are authoritative - the Windows
- * driver set, whose .inf files list the `ACPI\...` ids their drivers bind.
- * tools/acpi-hid-census.py reproduces the measurement above and, given a
- * driver set, reports which of gauguin's twelve blocks it covers. Run it before
- * adding any node to this file.
+ * That is worse than a missing node, which at least reads as missing.
+ *
+ * But the lesson is not that this board has a hidden name. ACPI's `_HID` is not
+ * a hardware fact - it is a string this port chooses, and the corpus choosing
+ * differently on every SoC is evidence the choice is free. What constrains it is
+ * the driver: a device binds to the name its .inf lists and to nothing else. So
+ * the tables here are written *to a driver*, not *to the SoC*, and the order of
+ * work is to adopt a Windows driver set and then name every block after it.
+ * tools/acpi-hid-census.py reproduces the measurement above and, given a driver
+ * set, reports which of gauguin's twelve blocks it covers - and which SoC's set
+ * it is, read off the names it answers to. Run it before adding any node here.
  */
 DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
 {

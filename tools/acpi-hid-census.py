@@ -48,12 +48,27 @@ contracts are per-SoC in the same way: the GPIO node returns 0x0140 on vili,
 0x0100 on alioth and 0x0180 on lisa, and nothing in the tree says what that
 number means.
 
-**The names are a property of the SoC, and the only authoritative source is the
-Windows driver set**, whose `.inf` files list the `ACPI\\...` hardware IDs their
-drivers bind. Obtaining that set is therefore a precondition for authoring
-these tables, not a later step: write them first and every node names a block no
-driver answers to. `--drivers DIR` takes such a set and reports which of
-gauguin's blocks it covers, which is the check to run the moment one is in hand.
+**What this means is not that the hardware has a hidden name.** ACPI's `_HID` is
+not a hardware fact; it is a string this port gets to choose, and the only thing
+that constrains the choice is that a driver has to claim it. That the same block
+appears under four different names in four reference DSDTs is evidence about the
+choice being free, not about a name being lost - and whichever internal numbering
+Qualcomm's own firmware teams used, the binding rule is the `.inf`, and nothing
+else.
+
+So the direction of the work is: **adopt a driver set first, then name every
+block after it.** The DSDT is written *to a driver*, not *to the SoC*. A block
+described with an `_HID` no available driver claims is hardware that cannot be
+driven, and the goal is that all of it is - so the set is a precondition for
+authoring these tables, not a later step. Write them first, from a corpus of
+other SoCs, and every added node is a silent failure: no error, no warning, just
+a device absent from Device Manager.
+
+`--drivers DIR` takes a set and reports which of gauguin's blocks it covers,
+which is the check to run the moment one is in hand, and it also answers the
+question in the other direction - whose driver set this is, read off which names
+it answers to. The same mechanism is what P5 means by "re-bind the WoA driver
+INF" for the GPU.
 """
 import argparse
 import glob
@@ -242,13 +257,17 @@ def cmd_census(args):
         print(f"  more than one name in the corpus: {', '.join(ambiguous)}")
     if unnamable or ambiguous:
         print()
-        print("  A name that differs between SoCs at the same address is a name of")
-        print("  the SoC, not of the block, and cannot be carried across. A block no")
-        print("  reference describes has no form here to adapt - not a wrong one, no")
-        print("  one. Either way the node cannot be written from this host, and a")
-        print("  guessed `_HID` fails silently: the device simply never appears.")
-        print("  The authoritative source is the Windows driver set's .inf files.")
-        print("  Run --drivers over one when it is in hand.")
+        print("  Read this as: the name is not a hardware fact. ACPI's _HID is a")
+        print("  string this port chooses, and the reference corpus choosing")
+        print("  differently on every SoC is evidence the choice is free - not")
+        print("  evidence that a correct name exists somewhere and is missing.")
+        print("  What constrains it is the driver: a device binds to the name its")
+        print("  .inf lists and to nothing else, and a node whose name no driver")
+        print("  claims is absent from Device Manager with no error at all.")
+        print()
+        print("  So adopt a driver set first and name every block after it. The")
+        print("  DSDT is written to a driver, not to the SoC. Run --drivers over")
+        print("  a set to see which of these blocks it covers, and whose set it is.")
         return 0
     print("  every block has exactly one name in the corpus - safe to carry.")
     return 0

@@ -9508,6 +9508,31 @@ applied to two orders of magnitude more surface.
 So the DSDT gains nothing this step, and the reason is written into its header
 where the next person to open it will read it.
 
+### The name is a choice, which is what makes this workable
+
+The reading above is easy to take one step too far, and the step is worth naming
+because it decides how the work gets done. Four names for one block is not
+evidence that this board has a fifth name somewhere that has not been found.
+**ACPI's `_HID` is not a hardware fact.** It is a string a platform declares, and
+the only thing that constrains the declaration is that some driver claims it: a
+device binds to the name its `.inf` lists and to nothing else. Whatever internal
+numbering Qualcomm's own firmware teams worked to — and the shared two-hex prefix
+per SoC suggests there was one — it does not bind anything at runtime.
+
+Two consequences follow, and both are constructive.
+
+The first is that the work is possible, and only the *order* was wrong. Since the
+name is declared rather than discovered, there is no lookup to fail; there is a
+choice to make, and the constraint on it is a driver set we can obtain. So the
+DSDT is written **to a driver, not to the SoC**: adopt a set, and every block
+takes the name that set answers to.
+
+The second is that this is the same mechanism P5 already names. "Re-bind the WoA
+driver INF" for the Adreno GPU, and the touchscreen's "Windows HID miniport,
+several exist upstream", are both this: the device is described so that a chosen
+driver binds. P3's remaining tables are not a different kind of work from P5's —
+they are the first instance of it, one stage earlier.
+
 ### What does unblock it
 
 The names are authoritative in exactly one place: **the Windows driver set**,
@@ -9547,7 +9572,7 @@ nothing to do with the conclusion.
 
 | | |
 |---|---|
-| finds | the DSDT nodes P3 still asks for — I2C, SPI, GPIO, buttons, thermal — cannot be authored from anything on this host, because their `_HID`s and `_DSM` contracts are properties of the SoC and no SM7225-family reference exists |
+| finds | the DSDT nodes P3 still asks for — I2C, SPI, GPIO, buttons, thermal — cannot be authored from the reference corpus, because `_HID` is a *declared* string and no two SoCs declare the same one: the TLMM window carries 4 distinct names across 7 references and no SM7225-family device declares any of them. The name is free to choose, so the block is a driver set, not a missing fact |
 | evidence | `tools/acpi-hid-census.py` over 36 reference DSDTs: the TLMM window carries 4 distinct `_HID`s, SE0 4, SE1 3, SE6 3, SE7 3, SE0-UART 2, SE3 2, SE5 2, SE2 0, SPMI 0, TSENS0 0, TSENS1 0. `Platforms/Realme/bitra/DSDT.aml` (SM7225) has exactly gauguin's five devices and no more; Moorea and Rennell ship no DSDT |
 | second method | the same negative was confirmed by plain text search over the disassembled corpus: `0x0F100000` in 7 files, `0x0C440000` in **0**, `0x0C263000` in **0**, `0x0C265000` in **0** |
 | why it matters | a device node whose `_HID` no driver claims is absent from Device Manager with no error, no warning and no yellow mark — strictly worse than an omitted node, which is at least visibly missing. The file's own precedent (the three USB PHY wake GSIs) is the same rule at smaller scale |
