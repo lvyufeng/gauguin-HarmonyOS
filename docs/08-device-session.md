@@ -2335,11 +2335,22 @@ step-4.12 name tables are right or shifted:
 Step 4.12's own consistency check — the eight missing arch protocols landing on
 eight `L` positions — does **not** decide this, and it is worth saying why rather
 than letting it carry more weight than it has. The `L` run is continuous from
-`SEQ 22` to `SEQ 45`, and the eight arch entries are `ap30`, `ap33`, `ap35`,
-`ap36`, `ap37`, `ap38`, `ap41`, `ap43`. Any compaction shift of up to eight
-entries still lands all eight inside `22..45`, so the check passes for any
-alignment in that band. It confirms the two sets *overlap*; it does not pin the
-offset.
+`SEQ 22` to `SEQ 45`, and the eight arch-protocol providers are `ap31`
+(`VariableRuntimeDxe`), `ap34` (`ResetSystemRuntimeDxe`), `ap36`
+(`WatchdogTimer`), `ap37` (`SecurityStubDxe`), `ap38`
+(`EmbeddedMonotonicCounter`), `ap39` (`RealTimeClock`), `ap42`
+(`CapsuleRuntimeDxe`) and `ap44` (`BdsDxe`) — i.e. `SEQ 30, 33, 35, 36, 37, 38,
+41, 43`. *(This list read `ap30, ap33, ap35, ap36, ap37, ap38, ap41, ap43` until
+step 4.30: those are the same eight drivers' `SEQ` positions with the `ap` label
+put on them, and the two numberings differ by one because `SEQ[k] = ap(k+1)`
+under the very assumption at issue. The argument is unaffected — the eight are
+inside `22..45` either way — but the indices are not interchangeable, and this is
+the one place in the document where they were treated as if they were.)* Any
+compaction shift of up to eight entries still lands all eight inside `22..45`, so
+the check passes for any alignment in that band. It confirms the two sets
+*overlap*; it does not pin the offset. What it also cannot do is fail: all eight
+are inside the promoted 46 under *both* readings, so no observation of this set
+distinguishes them — `P2 APRI miss=` is the field that does.
 
 ### What the firmware now prints
 
@@ -4779,6 +4790,145 @@ reports columns, rows per copy, and where the RETRY line sits.
 | budget | one digest copy ≈ 45 rows (15 fixed + diag 27 + err 1 + walk 2); two copies fit the 99; the storage caps would make it 115 and overflow — a ceiling, not this run |
 | why `bs9=` was missed | it is not at the bottom of a filled screen: after a wipe the panel refills from the top, so the rows below the cursor are blank and the cursor's row is the reading |
 | instrument | `tools/console-budget.py` |
+
+
+## Step 4.30 — `Out of Resources` can only be the allocator, and the largest request a load makes cannot print it
+
+The line the phase turns on is `P2 ERR`, which prints each distinct failure
+status by its `%r` name. Four sessions have now gone looking for `bs9=` and
+`P2 ERR` on the phone without landing either, so this step goes at the question
+from the side the host can answer: **what can return the status the panel would
+name, and which of those can this platform reach.** The answer is an inventory,
+and one entry in it turns out to bound all the others sharply enough to be worth
+reading on its own.
+
+**The name is not the loader's.** `PeCoffLoaderLoadImage` **cannot** return
+`RETURN_OUT_OF_RESOURCES`: the token occurs *zero* times in
+`BasePeCoffLib/BasePeCoff.c` (`grep -c` = 0), and the function's only failure
+return is `RETURN_LOAD_ERROR`, which `%r` prints as **"Load Error"**. So on this
+panel "Out of Resources" is never "the PE was rejected" — a file the loader would
+not take says a different word. This matters because it is the one reading that
+would have sent the investigation at the file and the relocations instead of at
+the allocator.
+
+**The pool collapses into the page allocator, so a pool failure is a page
+failure.** Three pool-side gates look like independent mechanisms and none of
+them is:
+
+- `LookupPoolHead` (`Pool.c:135-137`) answers `&mPoolHead[Type]` for *any* type
+  below `EfiMaxMemoryType`, and the three types that could make it refuse are
+  rejected by `CoreInternalAllocatePool:212-217` before it is ever called. It
+  cannot return NULL where it is used.
+- `MAX_POOL_SIZE` (`Pool.c:60`) is `MAX_ADDRESS - POOL_OVERHEAD`; no
+  firmware-sized request reaches it.
+- The one *live* `return EFI_OUT_OF_RESOURCES` on the lock path is
+  `CoreAcquireLockOrFail`'s `EFI_ACCESS_DENIED`, which `Library.c:41-45` returns
+  only when `Lock->Lock == EfiLockAcquired` — reentrancy. Every acquisition on
+  every path is paired with a release, and memory protection's
+  `ApplyMemoryProtectionPolicy` call sits at `Pool.c:328`, outside the lock.
+
+What is left is `Pool.c:247`: `return (*Buffer != NULL) ? EFI_SUCCESS :
+EFI_OUT_OF_RESOURCES;`. `CoreAllocatePoolI` returns NULL only when
+`CoreAllocatePoolPagesI` could not get its pages — i.e. only when
+`CoreAllocatePages` refused. **Pool and page failures share one mechanism**, and
+the probe cannot separate them by the name.
+
+**`ProtectUefiImage` cannot contribute on this platform.** Its
+`EFI_OUT_OF_RESOURCES` (`MemoryProtection.c:589`) sits *after* the `return
+EFI_SUCCESS` in `case DO_NOT_PROTECT:` (`:559-567`), and the whole "Enhanced
+Memory Protections" body below `Finish:` is commented out. Every image takes the
+`DO_NOT_PROTECT` branch because `GetUefiImageProtectionPolicy` reads
+`gDxeMps.UefiImageProtectionPolicy` and `gDxeMps` is zero here — the same root
+cause as the `EFI_MEMORY_ATTRIBUTE_PROTOCOL` that is not installed, carried to
+P3. `MemoryProtectionSupport.c`'s seven producers hang off the machinery below
+`Finish:` and one of them, `CreateNonProtectedImagePropertiesRecord`, *is* on the
+live path — but `ProtectUefiImage:576` calls it as a statement and discards the
+status, so it cannot reach the panel either.
+
+**The address-0 rule is real and is not taken.** `CoreInternalAllocatePages:1240-1243`
+refuses `AllocateAddress` at 0 ("reserved for null pointer detection") with
+`EFI_NOT_FOUND`, and all 46 Apriori drivers do have `ImageBase 0x0` — but
+`Image.c:719-720` gates that branch on `ImageAddress >= 0x100000`, which excludes
+0, so every one of them falls through to `AllocateAnyPages`. The rule is a real
+source of "Not Found" in general and is not the source here.
+
+**And the largest request a load makes reports as a different name.** This is the
+finding. `GetFileBufferByFilePath` (`DxeServicesLib.c:810`) allocates
+`AllocatePool (FileInfo->FileSize)` — **the whole image file**, which is the
+biggest single allocation anywhere in a load, larger than the image's own pages
+for any driver in this volume. Every failure inside it sets
+`EFI_OUT_OF_RESOURCES` (`:743, :796, :814, :872, :914`) and then returns
+**NULL**, not the status. The only thing that sees the result is
+`CoreLoadImageCommon:1282-1283`:
+
+```c
+FHand.Source = GetFileBufferByFilePath (BootPolicy, FilePath, &FHand.SourceSize, &AuthenticationStatus);
+if (FHand.Source == NULL) {
+  Status = EFI_NOT_FOUND;
+}
+```
+
+So a load that cannot find room for the file buffer prints **"Not Found"**, not
+"Out of Resources". Read the other way round, that is the useful direction:
+**seeing "Out of Resources" on the panel is already evidence that the file buffer
+succeeded** — the heap held a whole image file — and the refusal came after it,
+in the image's own pages, the private-data pool, or the device-path copy. It also
+puts a floor under `P2 FREE largest=`: whatever that field says, the heap held at
+least one image file at load time.
+
+One caution, because it is the step where this gets over-read: the file buffer and
+the image pages are live *together*. `CoreFreePool (FHand.Source)` is at
+`Image.c:1512`, after `CoreLoadPeImage`'s return at `:1413`. So the peak is the
+file plus the pages, and the buffer fitting does not mean the image fit.
+
+**The whole inventory, and where each verdict comes from.** 23 lines *produce*
+`EFI_OUT_OF_RESOURCES` across the seven files a load can fail out of, 1 only
+tests it, 20 are documentation. The produces resolve to 12 ledger entries: six
+reachable, four dead in this tree, one absent by construction, and one reachable
+only on the arithmetic that `P2 FREE largest=` measures. Two files'
+producers — six in `DxeServicesLib.c` and seven in `MemoryProtectionSupport.c` —
+are accounted for by a checked claim about a *third* file rather than by a verdict
+of their own, which is the form the tool prints when the honest answer is "these
+all report as something else, and here is the line that decides that".
+
+**Instrument:** `tools/load-sites.py`, which takes a status name as it appears in
+`P2 DIAG`'s `%r`, parses the name table out of `PrintLibInternal.c` rather than
+assuming it, and prints the ledger and the raw occurrence list. Every ledger entry
+carries the source text that identifies its mechanism as an **anchor**, and the
+anchor is checked before the verdict is printed: a mechanism spelled differently
+prints `!! anchor gone`, one that moved to another function prints `!! moved`
+(with the same warning that the verdict may be about the right words in the wrong
+code), and the `absent` entry — the loader claim above — is checked by requiring
+the token to be *not* there, so it fails the day the loader gains that return.
+The point is that a verdict cannot outlive the code it was about.
+
+| | |
+|---|---|
+| finds | `PeCoffLoaderLoadImage` **cannot** return `RETURN_OUT_OF_RESOURCES` (0 occurrences in `BasePeCoff.c`); its only failure is `Load Error` |
+| finds | the pool's three gates are inert (`LookupPoolHead`, `MAX_POOL_SIZE`, the lock's `ACCESS_DENIED`) and `Pool.c:247` is the only line that reports exhaustion — so **pool and page failures are one mechanism** |
+| finds | `ProtectUefiImage`'s `EFI_OUT_OF_RESOURCES` is unreachable (`gDxeMps == 0` ⇒ every image takes `case DO_NOT_PROTECT:`'s early return); `MemoryProtectionSupport`'s is on the live path but its status is discarded |
+| **reading** | **`GetFileBufferByFilePath` allocates the whole image file and returns NULL on any failure, which `Image.c:1282-1283` maps to `EFI_NOT_FOUND` — so the largest request in a load prints "Not Found", and "Out of Resources" on the panel already means the file buffer fit** |
+| caution | the file buffer and the image pages are live together (`CoreFreePool (FHand.Source)` is at `Image.c:1512`, after `CoreLoadPeImage`), so the floor is real but it is a floor on the peak, not headroom |
+| budget | 23 produces / 1 test / 20 doc; 12 ledger entries — 6 reachable, 4 dead, 1 absent, 1 arithmetic-only |
+| instrument | `tools/load-sites.py` (`--status NAME`, `--all`) |
+
+**Still unread on the device.** None of this replaces the panel. `P2 ERR` names
+the status; `P2 FREE largest=` says whether `FindFreePages` was the arithmetic;
+`bs9=Success` with 27 `L`s would falsify "the heap is exhausted" outright, because
+the probe's request is 4 KiB-aligned (`Alignment = DEFAULT_PAGE_ALLOCATION_GRANULARITY`,
+so `EFI_SIZE_TO_PAGES (Alignment) - 1` is `+0` and nothing is rounded), of type
+`EfiBootServicesCode` (never binned), and the probe itself frees everything it
+takes. What this step changes is what a reading of that line will *mean*: the name
+picks between the allocator and nothing else, and among the allocator's requests
+the largest one is already excluded by the name alone.
+
+**Checked against the device while it was in TWRP.** `boot` was verified by
+`dd`-ing its first 280 blocks and comparing block-for-block against every image on
+the host: 17856 of 17856 64-byte blocks identical to
+`work/out/p2-4.20/Mu-gauguin-silicon-gzip.img` (the next best candidate matches
+411 and differs from byte 8). So the panel being read is unambiguously that
+build, and the header read back off the partition — v1, 2048-byte pages,
+kernel 1,136,759 bytes at `0x10008000`, tags `0x10000100` — is that image's own.
 
 
 ## Step 5 — Leave it bootable
