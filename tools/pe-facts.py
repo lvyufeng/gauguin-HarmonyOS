@@ -41,21 +41,46 @@ load path.  Both columns are printed, from their own sources, so the two cannot 
 conflated again.
 
 What is left, and what the tail of the output now measures, is the allocator
-side. Every promoted request is `EfiRuntimeServicesCode` - that is the
-`AllocateAnyPages` fallback every one of the 46 takes - and on AArch64 that type
-is rounded up to a 16-page multiple and forced to 64 KiB alignment inside
-`CoreInternalAllocatePages` (`Page.c:1160`, rounding at `:1217`, alignment from
-`RUNTIME_PAGE_ALLOCATION_GRANULARITY` at `ProcessorBind.h:169`). So the 1562
-pages of `SizeOfImage` demand are 1824 pages as the allocator sees them, and the
-cumulative column in that unit is what rules out a running-total boundary:
-`NpaDxe` succeeds at 672 pages, `RpmhDxe` fails at 688, `ClockDxe` fails at 752,
-and `ShmBridgeDxe` then succeeds at 768 with a request the same size as the one
-that failed at 688. The bin that type prefers is 150 pages of
-`RuntimeServicesCode` against 1824 pages of demand, so it is exhausted within the
-first few drivers and the fallthrough to the default bin is load-bearing rather
-than hypothetical - and the default bin spans the heap below the 450-page bin
-block, i.e. most of 35.4 MiB, which is why the failure is a `FindFreePages`
-boundary condition and not exhaustion.
+side. **Ten** of the 46 promoted drivers are runtime drivers, and this tool said
+"every one" until that was checked against its own `subsys` column: the
+memory type a load requests is the image's *subsystem*, not the allocation
+strategy the fallback picks. On AArch64 a runtime type is rounded up to a 16-page
+multiple and forced to 64 KiB alignment inside `CoreInternalAllocatePages`
+(`Page.c:1196`, rounding at `:1217`), and nothing else is. So the rounding column
+is per-driver, and the cumulative column stays what it was for: it is what rules
+out a running-total boundary. `NpaDxe` is the last success, at 567 pages of
+demand as the allocator sees it, and `ShmBridgeDxe` succeeds again at 648 - with
+the *identical* request that `PdcDxe` failed at 592, 36,864 B and 9 pages and the
+same subsystem 11. Identical request, opposite result, 56 pages apart.
+
+Two different sets are easy to conflate here and this paragraph did conflate them
+once, so both are named: **eight** of the 80 DRIVER files carry
+`SectionAlignment` 0x10000 (the set the line above calls `sssLLLLL`), while
+**ten** of the 46 promoted are subsystem 12. `EnvDxe` and `SdccDxe` are in the
+second set and not the first - subsystem 12 with 0x1000 alignment - and they are
+where 7 of the arithmetic's pages come from; the tail follows the *subsystem*,
+because that is what the type, the rounding and the 64 KiB alignment all key off.
+
+The bin a runtime request prefers is 150 pages of `RuntimeServicesCode` against
+880 pages of runtime image demand, of which the four promoted before the failures
+begin (`EnvDxe`, `ReportStatusCodeRouterRuntimeDxe`,
+`StatusCodeHandlerRuntimeDxe`, `RuntimeDxe`) take 336 - so it is exhausted within
+the first four promotions and the fallthrough to the default bin is load-bearing
+rather than hypothetical. The default bin spans the heap below the 450-page bin
+block, i.e. most of 35.4 MiB.
+
+That paragraph is about the *runtime* ten, and it is the whole reason this tool
+prints the subsystem column. The 36 boot-service images are not in any bin:
+`PrePiHobLib/Hob.c:891-905` is the only writer of the memory type HOB and it
+emits five entries, none of them boot-services, so `PcdMemoryTypeEfiBootServicesCode|1000`
+and `PcdMemoryTypeEfiBootServicesData|800` in `SiliciumPkg.dsc.inc` are read by
+nothing. `InitializeBinStatisticsFromRange` (`MemoryBin.c:281-319`) then clamps
+every type without a bin - boot services included - to `*DefaultMaximumAddress`,
+so its rung 1 collapses into rung 2 and its rung 3, which is `AllocateAnyPages`
+over the whole address space, is not gated by a bin at all. A boot-service
+request therefore cannot be refused by a bin boundary; if one is refused, the
+whole memory map had no run of that size, which is a stronger and stranger claim
+than the one this docstring made before.
 
 The PE is located through the FFS file's EFI_SECTION_PE32 (type 0x10) and then
 through `e_lfanew` at 0x3C. Scanning the file body for the literal `PE\\0\\0`
@@ -344,21 +369,32 @@ def main():
     # CoreAllocatePages is asked for, not SizeOfImage.
     #
     # The `r16` column beside it is the number the allocator actually sees, and it
-    # is not decoration. Every one of these requests is made with
-    # MemoryType = EfiRuntimeServicesCode -- that is the `!RelocationsStripped`
-    # branch at Image.c:730-737, and the block above shows all 46 take it -- and
-    # CoreInternalAllocatePages (Page.c:1160) forces
-    # Alignment = RUNTIME_PAGE_ALLOCATION_GRANULARITY for that type. On AArch64
-    # that is 0x10000 (ProcessorBind.h:169, against DEFAULT 0x1000 at :165), so
-    # before the request reaches FindFreePages it is rounded up to a multiple of
-    # EFI_SIZE_TO_PAGES (Alignment) = 16 pages at Page.c:1217 and must land
-    # 64-KiB aligned. A 9-page driver costs 16 pages; a 46-driver run costs 1824
-    # pages rather than 1562, and the 262-page difference is pure rounding.
+    # is not decoration - but it is **not** a property of being promoted, and an
+    # earlier version of this tool had it as one. The memory type passed to
+    # CoreAllocatePages is `Image->ImageContext.ImageCodeMemoryType`, which
+    # `CoreLoadImageCommon` sets from the PE's **subsystem** (`Image.c:630-645`):
+    # `EFI_IMAGE_SUBSYSTEM_EFI_RUNTIME_DRIVER` (12) -> `EfiRuntimeServicesCode`,
+    # `EFI_IMAGE_SUBSYSTEM_EFI_BOOT_SERVICE_DRIVER` (11) -> `EfiBootServicesCode`,
+    # `EFI_IMAGE_SUBSYSTEM_EFI_APPLICATION` (10) -> `EfiLoaderCode`. It is not the
+    # `!RelocationsStripped` fallback: that chooses between AllocateAddress,
+    # AllocateMaxAddress and AllocateAnyPages at `Image.c:713/724/733` and passes
+    # the same `ImageCodeMemoryType` to all three.
+    #
+    # Only then does `CoreInternalAllocatePages` (`Page.c:1196-1220`) force
+    # `Alignment = RUNTIME_PAGE_ALLOCATION_GRANULARITY` - for
+    # EfiReservedMemoryType, EfiACPIMemoryNVS, EfiRuntimeServicesCode and
+    # EfiRuntimeServicesData, and nothing else. On AArch64 that is 0x10000
+    # (`ProcessorBind.h:169`, against DEFAULT 0x1000 at `:165`), so only the
+    # runtime family is rounded up to a multiple of EFI_SIZE_TO_PAGES (Alignment)
+    # = 16 pages and required to land 64-KiB aligned. A 9-page runtime driver costs
+    # 16 pages; a 9-page `EfiBootServicesCode` driver costs exactly 9. So the
+    # subsystem column decides the r16 column, and the two are printed together so
+    # that it is visible rather than assumed.
     print(f"\n{'res':>3} {'name':40} {'SizeOfImage':>11} {'saln':>8} "
-          f"{'req bytes':>10} {'pages':>6} {'r16':>4} {'cum pages':>10} "
-          f"{'cum r16':>8} {'cum bytes':>10}")
+          f"{'subsys':>6} {'type':>3} {'req bytes':>10} {'pages':>6} {'r16':>4} "
+          f"{'cum pages':>10} {'cum r16':>8}")
     cum, cum_s, cum_l, rcum = 0, 0, 0, 0
-    marks = []          # (ch, name, pages, rounded, cumulative-rounded)
+    marks = []          # (ch, name, subsystem, pages, rounded, cumulative-rounded)
     for k, ch in enumerate(args.seq):
         gs = apriori[k + 1] if k + 1 < len(apriori) else None
         if gs not in rows:
@@ -367,7 +403,12 @@ def main():
         req = pe["SizeOfImage"] + (pe["SectionAlignment"]
                                    if pe["SectionAlignment"] > 0x1000 else 0)
         pg = -(-req // 0x1000)
-        r16 = -(-pg // 16) * 16
+        # RUNTIME_PAGE_ALLOCATION_GRANULARITY applies to EfiRuntimeServicesCode
+        # (subsystem 12) and EfiRuntimeServicesData, which is what the runtime
+        # family's code image is. Nothing else in this volume asks for a type on
+        # that list, so subsystem 12 is the whole of the rounded set.
+        rt16 = pe["Subsystem"] == 12
+        r16 = -(-pg // 16) * 16 if rt16 else pg
         cum += pg
         rcum += r16
         if ch == "s":
@@ -376,36 +417,56 @@ def main():
             cum_l += pg
         marks.append((ch, name, pe["Subsystem"], pg, r16, rcum))
         print(f"{ch:>3} {name:40} {pe['SizeOfImage']:>11} "
-              f"{pe['SectionAlignment']:>#8x} {req:>10} {pg:>6} {r16:>4} {cum:>10} "
-              f"{rcum:>8} {cum * 0x1000:>10}")
+              f"{pe['SectionAlignment']:>#8x} {pe['Subsystem']:>6} "
+              f"{'rt' if rt16 else 'bs':>3} {req:>10} {pg:>6} {r16:>4} "
+              f"{cum:>10} {rcum:>8}")
     print(f"\ntotal: {cum} pages = {cum * 0x1000} B "
           f"({cum * 0x1000 / (1024 * 1024):.2f} MiB)")
     print(f"  s: {cum_s} pages = {cum_s * 0x1000} B")
     print(f"  L: {cum_l} pages = {cum_l * 0x1000} B")
-    print(f"as the allocator sees it, at 16-page granularity: {rcum} pages = "
+    print(f"as the allocator sees it, at 16-page granularity for the runtime "
+          f"family only: {rcum} pages = "
           f"{rcum * 0x1000} B ({rcum * 0x1000 / (1024 * 1024):.2f} MiB), "
           f"+{rcum - cum} pages of rounding")
+    rt_all = [m for m in marks if m[2] == 12]
+    if rt_all:
+        print(f"  of which the rounding is entirely the {len(rt_all)} runtime "
+              f"drivers (subsystem 12): "
+              f"{sum(m[4] - m[3] for m in rt_all)} pages")
 
     # The rounded column is what rules out a running-total threshold, and it is the
-    # only thing here that does. The last success before the first failure, the
-    # first failure, and the first success after it are three consecutive runs
-    # whose cumulative demand is strictly increasing -- so if the boundary were a
-    # total, the later success is impossible. Printed as measured rather than
-    # described, because "a later request succeeded" is the whole verdict and a
-    # reader should be able to see the three numbers that make it one.
+    # only thing here that does. The strongest form of that argument is not "a
+    # later request succeeded" but "the *same* request succeeded later": a pair of
+    # promoted drivers, one failed and one succeeded, with the same subsystem and
+    # the same rounded page count, at strictly increasing cumulative demand. On
+    # this volume such a pair exists and is not adjacent (PdcDxe, ShmBridgeDxe),
+    # which is why it is searched for rather than assumed to be the run around the
+    # first failure. Printed as measured, because the two numbers and the order are
+    # the whole verdict.
     if marks:
-        i = next((k for k, m in enumerate(marks) if m[0] == "L"), None)
-        j = next((k for k in range(i + 1, len(marks))
-                  if marks[k][0] == "s"), None) if i is not None else None
-        if i and j is not None:
-            print(f"\nthe boundary is not a running total. {marks[i - 1][1]} is the "
-                  f"last success, at\n{marks[i - 1][5]} pages of demand, and "
-                  f"{marks[j][1]} succeeds again at {marks[j][5]} pages with\n"
-                  f"a {marks[j][4]}-page request, after {marks[j - 1][1]}'s "
-                  f"{marks[j - 1][4]}-page request at {marks[j - 1][5]} and\n"
-                  f"{marks[i][1]}'s {marks[i][4]}-page request at {marks[i][5]} "
-                  f"have both failed. The last of those is\nthe same size as the "
-                  f"one that succeeds, so the deciding factor is not the request.")
+        pair = next(
+            ((k, l) for k in range(len(marks)) if marks[k][0] == "L"
+             for l in range(k + 1, len(marks))
+             if marks[l][0] == "s" and marks[l][2] == marks[k][2]
+             and marks[l][4] == marks[k][4]),
+            None,
+        )
+    else:
+        pair = None
+    if pair is not None:
+        k, l = pair
+        between = [m for m in marks[k + 1:l] if m[0] == "L"]
+        print(f"\nthe boundary is not a running total. {marks[k][1]} fails at "
+              f"{marks[k][5]} pages of\ndemand, and {marks[l][1]} succeeds at "
+              f"{marks[l][5]} pages, on the identical request:\n"
+              f"subsystem {marks[k][2]}, {marks[k][4]} pages. "
+              + (f"{len(between)} more failure"
+                 f"{'' if len(between) == 1 else 's'} in between, so the deciding\n"
+                 f"factor is neither the request nor the total: it is heap state "
+                 f"at the moment\neach one arrives."
+                 if between else
+                 "The two are adjacent, so the deciding factor is the request's\n"
+                 "position or the state under it - not its size."))
 
     # And the bins those requests prefer, which is the other half of the
     # comparison. SiliciumPkg.dsc.inc gives

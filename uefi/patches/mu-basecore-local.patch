@@ -329,10 +329,10 @@ index 39668123..8405bc31 100644
  #define  USB_INTERFACE_SIGNATURE  SIGNATURE_32 ('U', 'S', 'B', 'I')
  #define  USB_BUS_SIGNATURE        SIGNATURE_32 ('U', 'S', 'B', 'B')
 diff --git a/MdeModulePkg/Core/Dxe/Dispatcher/Dispatcher.c b/MdeModulePkg/Core/Dxe/Dispatcher/Dispatcher.c
-index d7c7147e..7139e95c 100644
+index d7c7147e..165a559d 100644
 --- a/MdeModulePkg/Core/Dxe/Dispatcher/Dispatcher.c
 +++ b/MdeModulePkg/Core/Dxe/Dispatcher/Dispatcher.c
-@@ -60,6 +60,403 @@ EFI_LOCK  mDispatcherLock = EFI_INITIALIZE_LOCK_VARIABLE (TPL_HIGH_LEVEL);
+@@ -60,6 +60,440 @@ EFI_LOCK  mDispatcherLock = EFI_INITIALIZE_LOCK_VARIABLE (TPL_HIGH_LEVEL);
  //
  BOOLEAN  gDispatcherRunning = FALSE;
  
@@ -482,10 +482,11 @@ index d7c7147e..7139e95c 100644
 +//
 +// P2BRINGUP: the allocator's own state, printed with the digest. It is the one
 +// reading the host cannot compute and no other line reports, and step 4.18 is
-+// what makes it the next thing to look at: two identical 16-page
-+// EfiRuntimeServicesCode requests came out 's' at slot 22 and 'L' at slots 19
-+// and 20, so the deciding factor is neither the request nor a running total, and
-+// what is left is heap state at the moment each request arrives.
++// what makes it the next thing to look at: two identical requests came out 's' and
++// 'L' -- PdcDxe's 9-page EfiBootServicesCode at slot 20 failing and
++// ShmBridgeDxe's byte-identical one at slot 22 succeeding -- so the deciding
++// factor is neither the request nor a running total, and what is left is heap
++// state at the moment each request arrives.
 +//
 +// Four facts, one per line. The runtime bins' own windows -- 150 pages for
 +// EfiRuntimeServicesCode and 300 for EfiRuntimeServicesData, carved as one
@@ -498,26 +499,43 @@ index d7c7147e..7139e95c 100644
 +// these lines is the all-zero initialiser.
 +//
 +// P2 RETRY is the decisive part and it is the reason this is not just a census.
-+// The four sizes are the requests slots 19, 20 and 21 made after rounding and the
-+// one slot 22 made to succeed: 16 pages for RpmhDxe, PdcDxe and ShmBridgeDxe, 48
-+// for ClockDxe, 112 for BdsDxe, plus a 16 for the runtime-data type. `rc16`
-+// printing Success means a 16-page EfiRuntimeServicesCode request still succeeds
-+// here -- at the assert, after all 46 attempts, with the heap in the state those
-+// attempts left it in -- so the 27 were never about room and the deciding factor
-+// is per-request state. A named error instead means the heap really is empty by
-+// the end, which against 1824 pages of demand and 9056 pages of heap is a
-+// different fault with a different fix. It runs once and the four statuses are
-+// cached: the
-+// probes move the heap themselves, and a line that changed between the 41 copies
-+// would make the copy that got photographed the wrong one. `hob_rc`/`hob_rd`
-+// check the 150 and 300 against the device's own HOB rather than against the DSC
-+// file they were derived from.
++//
++// It was built to re-attempt the requests the failures were made of, and it
++// re-attempted the wrong ones. `EfiRuntimeServicesCode` is what the
++// *runtime*-typed images ask for, and every one of the 27 failures is a
++// boot-service image, which asks for `EfiBootServicesCode`: the memory type comes
++// from the PE subsystem and not from the relocation fallback (Image.c:629-646),
++// and of the 46 promoted only the 10 subsystem-12 images are runtime-typed, and
++// only they are rounded to 16 pages and forced to 64-KiB alignment. So the four
++// sizes below are kept as a control for the runtime bins, and the two that decide
++// the question are the exact requests the failures made:
++//
++//   bs9  -- PdcDxe's request, which failed at slot 20 and is byte for byte what
++//           ShmBridgeDxe asked for at slot 22 and got. That pair is the whole
++//           problem in one call, so this one call answers it: if it succeeds
++//           here, the difference was never the request; if it fails, the region
++//           those two drew on really is exhausted.
++//   bs16 -- RpmhDxe's request, the first failure in the run.
++//
++// `bs9` printing Success means a 9-page EfiBootServicesCode request still succeeds
++// at the assert, after all 46 attempts, with the heap in the state those attempts
++// left it in -- so the 27 were never about room and the deciding factor is
++// per-request state inside FindFreePages' ladder. A named error instead means the
++// heap really is empty by the end, which against the 1562 pages the run asks for
++// and a 9056-page heap is a different fault with a different fix.
++//
++// It runs once and the statuses are cached: the probes move the heap themselves,
++// and a line that changed between the 41 copies would make the copy that got
++// photographed the wrong one. `hob_rc`/`hob_rd` check the 150 and 300 against the
++// device's own HOB rather than against the DSC file they were derived from.
 +//
 +STATIC BOOLEAN  mP2RetryDone = FALSE;
 +STATIC EFI_STATUS  mP2Rc16;
 +STATIC EFI_STATUS  mP2Rc48;
 +STATIC EFI_STATUS  mP2Rc112;
 +STATIC EFI_STATUS  mP2Rd16;
++STATIC EFI_STATUS  mP2Bs9;
++STATIC EFI_STATUS  mP2Bs16;
 +
 +STATIC
 +VOID
@@ -554,6 +572,23 @@ index d7c7147e..7139e95c 100644
 +  Memory = 0;
 +  mP2Rd16 = CoreAllocatePages (AllocateAnyPages, EfiRuntimeServicesData, 16, &Memory);
 +  if (!EFI_ERROR (mP2Rd16)) {
++    CoreFreePages (Memory, 16);
++  }
++
++  //
++  // The two requests the 27 failures were actually made of, and the reason to
++  // read this line first. Last, so that the four control requests above still see
++  // the heap in the state the run left it in.
++  //
++  Memory = 0;
++  mP2Bs9 = CoreAllocatePages (AllocateAnyPages, EfiBootServicesCode, 9, &Memory);
++  if (!EFI_ERROR (mP2Bs9)) {
++    CoreFreePages (Memory, 9);
++  }
++
++  Memory = 0;
++  mP2Bs16 = CoreAllocatePages (AllocateAnyPages, EfiBootServicesCode, 16, &Memory);
++  if (!EFI_ERROR (mP2Bs16)) {
 +    CoreFreePages (Memory, 16);
 +  }
 +}
@@ -597,11 +632,13 @@ index d7c7147e..7139e95c 100644
 +    ));
 +  DEBUG ((
 +    DEBUG_ERROR,
-+    "P2 RETRY rc16=%r rc48=%r rc112=%r rd16=%r\n",
++    "P2 RETRY rc16=%r rc48=%r rc112=%r rd16=%r bs9=%r bs16=%r\n",
 +    mP2Rc16,
 +    mP2Rc48,
 +    mP2Rc112,
-+    mP2Rd16
++    mP2Rd16,
++    mP2Bs9,
++    mP2Bs16
 +    ));
 +}
 +
@@ -736,7 +773,7 @@ index d7c7147e..7139e95c 100644
  //
  // Module globals to manage the FwVol registration notification event
  //
-@@ -483,6 +880,8 @@ CoreDispatcher (
+@@ -483,6 +917,8 @@ CoreDispatcher (
              DriverEntry->Initialized = TRUE;
            }
  
@@ -745,7 +782,7 @@ index d7c7147e..7139e95c 100644
            DriverEntry->Scheduled = FALSE;
            RemoveEntryList (&DriverEntry->ScheduledLink);
  
-@@ -519,6 +918,13 @@ CoreDispatcher (
+@@ -519,6 +955,13 @@ CoreDispatcher (
  
          Status = CoreStartImage (DriverEntry->ImageHandle, NULL, NULL);
  
@@ -759,7 +796,7 @@ index d7c7147e..7139e95c 100644
          REPORT_STATUS_CODE_WITH_EXTENDED_DATA (
            EFI_PROGRESS_CODE,
            (EFI_SOFTWARE_DXE_CORE | EFI_SW_PC_INIT_END),
-@@ -896,6 +1302,8 @@ CoreAddToDriverList (
+@@ -896,6 +1339,8 @@ CoreAddToDriverList (
  
    CoreReleaseDispatcherLock ();
  
@@ -768,7 +805,7 @@ index d7c7147e..7139e95c 100644
    return EFI_SUCCESS;
  }
  
-@@ -1309,6 +1717,16 @@ CoreFwVolEventProtocolNotify (
+@@ -1309,6 +1754,16 @@ CoreFwVolEventProtocolNotify (
                                    &Attributes,
                                    &Size
                                    );
@@ -785,7 +822,7 @@ index d7c7147e..7139e95c 100644
          if (!EFI_ERROR (GetNextFileStatus)) {
            if (Type == EFI_FV_FILETYPE_DXE_CORE) {
              //
-@@ -1412,6 +1830,26 @@ CoreFwVolEventProtocolNotify (
+@@ -1412,6 +1867,26 @@ CoreFwVolEventProtocolNotify (
                          );
      if (!EFI_ERROR (Status)) {
        AprioriEntryCount = SizeOfBuffer / sizeof (EFI_GUID);
@@ -812,7 +849,7 @@ index d7c7147e..7139e95c 100644
      } else {
        AprioriEntryCount = 0;
      }
-@@ -1433,11 +1871,69 @@ CoreFwVolEventProtocolNotify (
+@@ -1433,11 +1908,69 @@ CoreFwVolEventProtocolNotify (
            DriverEntry->Scheduled = TRUE;
            InsertTailList (&mScheduledQueue, &DriverEntry->ScheduledLink);
            CoreReleaseDispatcherLock ();
@@ -882,7 +919,7 @@ index d7c7147e..7139e95c 100644
      }
  
      //
-@@ -1470,6 +1966,235 @@ CoreInitializeDispatcher (
+@@ -1470,6 +2003,235 @@ CoreInitializeDispatcher (
    PERF_FUNCTION_END ();
  }
  
@@ -1118,7 +1155,7 @@ index d7c7147e..7139e95c 100644
  //
  // Function only used in debug builds
  //
-@@ -1486,11 +2211,73 @@ CoreDisplayDiscoveredNotDispatched (
+@@ -1486,11 +2248,73 @@ CoreDisplayDiscoveredNotDispatched (
  {
    LIST_ENTRY             *Link;
    EFI_CORE_DRIVER_ENTRY  *DriverEntry;
