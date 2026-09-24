@@ -2512,7 +2512,68 @@ author is small: the CPU devices (`ACPI0007`, `_UID` 0–7, which
 `Silicon/Qualcomm/Moorea/DSDT_Minimal.asl` already has as source), the PMIC-sourced
 `dp_hs_phy_irq` / `dm_hs_phy_irq` / `ss_phy_irq` GSIs from gauguin's `PM7250B`, and
 the header's `OEM Table ID`. The UFS and USB blocks are copied from bitra with their
-numbers checked against the device tree, not assumed.
+numbers checked against the device tree, not assumed. *(All of those are now in the
+file; the three wake GSIs were the last, and the note directly below is how they
+were settled.)*
+
+### USB PHY wake interrupts
+
+**The last of the PMIC-sourced GSIs above, and the only one this file left out for
+a reason.** `tools/acpi/gauguin.asl` carried only three of bitra's five USB0
+interrupts — `A5`, `A2`, `A3` — and omitted the three PHY wake lines, with a header
+comment saying why: two encodings were both consistent with the evidence, `512 +
+pin` and the INTID the PDC maps the pin to, and they differ. It was the same
+judgement the `_HID` discussion records more loudly: a wrong GSI in a wake resource
+is worse than an absent one, so it stayed out until it could be measured.
+
+**It was measured on 2026-09-25 (Step 4.62) and the answer is `512 + pin`.** The
+device tree states it in one property. `interrupt-controller@b220000` — the PDC, the
+`interrupt-parent` phandle `0x62` the wake lines point at — carries
+
+```
+qcom,pdc-ranges = <0x00 0x1E0 0x5E  0x5E 0x261 0x1F  0x7D 0x3F 0x01
+                   0x7E 0x28F 0x0C  0x8A 0x8B 0x0F>;
+```
+
+which is the kernel binding's `<first pin, GIC SPI, count>` triples, so the first
+entry reads *pins 0–93 map to SPI 480–573*. The three wake lines are on pins 14, 15
+and 17 — all inside that first triple — and `usb@a6f8800` names them:
+
+```
+interrupts-extended = <0x01 0x00 0x82 0x04  0x01 0x00 0x83 0x04
+                       0x62 0x0e 0x03  0x62 0x0f 0x03  0x62 0x11 0x04>;
+interrupt-names     = "pwr_event", "hs_phy_irq", "dp_hs_phy_irq",
+                      "dm_hs_phy_irq", "ss_phy_irq";
+```
+
+so `dp_hs_phy_irq` is PDC pin 14, `dm_hs_phy_irq` pin 15 and `ss_phy_irq` pin 17.
+`INTID = 32 + SPI` gives **526, 527 and 529**. The `480 + pin` reading — 494, 495,
+497 — had stopped one step short: `480 + pin` is a GIC *SPI* number and an ACPI
+`Interrupt ()` resource carries the *INTID*. That is exactly the slip the UFS pair
+above documents, on a different number.
+
+Two more sources agree, and all three are independent of one another:
+
+| source | what it says |
+|---|---|
+| the PDC's own `qcom,pdc-ranges` | the device's pin-to-SPI map, not a transcription — pins 14/15/17 → SPI 494/495/497 |
+| `Platforms/Realme/bitra` USB0 `_CRS` | carries exactly `0x20E`, `0x20F` and `0x211`, in that order, with Edge, Edge and Level triggers — matching the dts type cells 3, 3 and 4 |
+| every `PM0x` node in the 66-table corpus | 21 of the 66 tables have one at all; **all 21** carry `0x201` = 513, which is the same arithmetic on the SPMI arbiter's own PDC pin 1 — and gauguin's `spmi@c440000` says `interrupts-extended = <0x62 0x01 0x04>` |
+
+The three are now in `USB0`'s `_CRS`, in bitra's order and with bitra's trigger
+types. **The DSDT grew from 1,520 to 1,547 bytes**, which is the first ASL change in
+this port that moves the AML: the earlier comment-only drift recorded further down
+did not. Everything after the table in the volume therefore shifted by 28 bytes —
+`APIC` `0x54dabc`→`0x54dad8`, `FACP` `0x54dd94`→`0x54ddb0`, `FACS`
+`0x54deac`→`0x54dec8`, `GTDT` `0x54def0`→`0x54df0c`; the offsets in the table below
+are the ones the previous build had. The payload built from it is
+`work/out/p2-phywake/` (Step 4.62 in `docs/08-device-session.md`).
+
+**One thing this pass turned up that is not a correction.** gauguin's `USB0` carries
+`0xA2` (`pwr_event`) and bitra's does not, and that had gone unmentioned in every
+earlier audit of this file even though the table above lists it. It is right:
+gauguin's own dts gives `pwr_event` as SPI 130 → INTID 162, which is bitra's *other*
+`A2`-shaped hole filled from this device rather than inherited. It stays.
 
 **What exists and what is missing, so the next session starts from the right
 place.** Present: the table sets above, `iasl` at `/usr/bin/iasl`, the ASL source
@@ -2593,6 +2654,24 @@ for the CPU skeleton at `Silicon/Qualcomm/Moorea/DSDT_Minimal.asl`, and 20 platf
 > the raw scan returns six `DSDT` hits and five `FACS` hits, the extras being
 > debug strings inside `AcpiTableDxe.efi` — one of which carries a length field of
 > `0x0000000A`, which passes any plausible sanity bound.
+>
+> **A third build has since moved them again, and this time for a reason that is not
+> cosmetic.** The Step 4.62 PHY-wake GSIs grow the DSDT by 27 bytes, so the
+> `Build/` tree rebuilt on 2026-09-25 05:29 holds the **1,547**-byte table and the
+> tables after it shift by 28 (4-byte alignment): the six now sit at
+> `0x54d484`…`0x54df68`, with `DSDT` still at `0x54d4c8`, `APIC` `0x54dad8`, `FACP`
+> `0x54ddb0`, `FACS` `0x54dec8`, `GTDT` `0x54df0c`. The `SSDT` offset is unchanged
+> because the `SSDT` precedes the `DSDT`. Read back out of the payload itself
+> (`work/out/p2-phywake/Mu-gauguin-silicon-gzip.img`) the `DSDT` is at the same
+> `0x54d4c8` with length 1,547 and a valid checksum, against the control's 1,520 at
+> the same offset — and the control and this build differ in exactly that one place,
+> which is what makes the pair a comparison rather than two builds.
+>
+> `FACP` and `FACS` do not checksum in *any* of these builds, and that is the
+> un-patched state rather than a fault: `AcpiTableDxe` installs them at runtime and
+> writes the `DSDT`/`FACS` addresses into `FACP` on the way (all four pointer fields
+> — `FIRMWARE_CTRL`, `DSDT`, `X_FIRMWARE_CTRL`, `X_DSDT` — read `0x0` in the volume),
+> which is what recomputes its checksum. `FACS` has no checksum field at all.
 >
 > The DSDT is gauguin's own and contains what it was supposed to: `ACPI0007`
 > eight times (the eight CPU devices), `QCOM24A5` once (the UFS `_HID`), and

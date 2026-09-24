@@ -9540,10 +9540,11 @@ looks exactly like hardware that was never described.
 That is strictly worse than leaving the node out. An absent node is visibly
 absent and the plan can name it. A node with a plausible wrong name closes the
 question and produces no symptom. This file already carries the same rule for a
-smaller case — the three USB PHY wake GSIs are omitted because
-`512 + pin` and `480 + pin` are both consistent with the evidence and putting in
-a wrong number would cost more than leaving it out — and this is that rule
-applied to two orders of magnitude more surface.
+smaller case — the three USB PHY wake GSIs were omitted because `512 + pin` and
+`480 + pin` were both consistent with the evidence and putting in a wrong number
+would cost more than leaving it out — and this is that rule applied to two orders
+of magnitude more surface. *(Those three were measured and are now in, at Step
+4.62 below; the rule was not abandoned, the ambiguity was resolved.)*
 
 So the DSDT gains nothing this step, and the reason is written into its header
 where the next person to open it will read it.
@@ -9616,7 +9617,7 @@ nothing to do with the conclusion.
 | evidence | `tools/acpi-hid-census.py` over 36 reference DSDTs: the TLMM window carries 4 distinct `_HID`s, SE0 4, SE1 3, SE6 3, SE7 3, SE0-UART 2, SE3 2, SE5 2, SE2 0, SPMI 0, TSENS0 0, TSENS1 0. `Platforms/Realme/bitra/DSDT.aml` (SM7225) has exactly gauguin's five devices and no more; Moorea and Rennell ship no DSDT — **66 tables and TLMM 5; the SPMI 0 above is the instrument's address join failing, not the corpus, see Step 4.58** |
 | second method | the same negative was confirmed by plain text search over the disassembled corpus: `0x0F100000` in 7 files, `0x0C440000` in **0**, `0x0C263000` in **0**, `0x0C265000` in **0** |
 | third method, and why it was wrong | the text search above is a *third* usage of the same bad test, so it is not independent evidence: all 22 reference `SPMI` nodes contain `0x0C400000`, and gauguin's arbiter is 16 KB higher, inside the region they declare. The corpus does not lack SPMI; the test could not see a block named by containment. Only `0x0C263000` and `0x0C265000` survive as true negatives, and for a stronger reason than the search gives — Step 4.58 |
-| why it matters | a device node whose `_HID` no driver claims is absent from Device Manager with no error, no warning and no yellow mark — strictly worse than an omitted node, which is at least visibly missing. The file's own precedent (the three USB PHY wake GSIs) is the same rule at smaller scale |
+| why it matters | a device node whose `_HID` no driver claims is absent from Device Manager with no error, no warning and no yellow mark — strictly worse than an omitted node, which is at least visibly missing. The file's own precedent (the three USB PHY wake GSIs, as they stood then) is the same rule at smaller scale |
 | unblocker | the Windows driver set's `.inf` files, which name the `ACPI\...` ids the drivers bind. `--drivers DIR` reports which of gauguin's twelve blocks a set covers. **Obtain the set before authoring these tables** — written first, every added node is a silent failure — **obtained and read in Step 4.60: family byte `0A`, 8 of 10 blocks named** |
 | instrument bug | the census's first draft used `True` as a "address is on the next line" sentinel; `isinstance(True, int)` is true, so every window recorded base 1 and the tool reported zero references for all twelve blocks. Fixed with a string sentinel; the finding survived unchanged |
 | compiled | `iasl` still reports 0 errors on the edited `gauguin.asl` and the AML is still 1,520 bytes — the step adds a comment to its header and no node, deliberately |
@@ -9979,4 +9980,193 @@ accounting) and `P2WALK` (the allocation census), and neither needs a driver set
 | not reached | `TSENS0`/`TSENS1` as a sensor device node: the set's thermal driver claims the *zone* ids `QCOM04B4`–`QCOM04CE`, and step 4.58's portable `QCOM04C0`–`QCOM04C8` sit inside that range, so the zones are attested while the sensor block is not |
 | also settled | the thermal zones live in a fixed `QCOM04xx` space rather than the family-byte space, which is why `QCOM04C0`–`QCOM04C8` looked portable across 09, 0A and 1A while every block id moved |
 | not gated | the UEFI phase. `AcpiTableDxe` auto-computes `_CID`, and the build ships `QCOM`-prefixed ids with no driver set at all. The set protects P3/P5 authoring, not P2 |
-| unchanged | nothing on the device. The staged P2 payload, its hash and the restore net are as they were; no ASL was edited, since any edit to it invalidates the staged artifact |
+| unchanged | nothing on the device. The staged P2 payload, its hash and the restore net are as they were at this step; no ASL was edited by *this* step. **Step 4.62 below then edited the ASL and did invalidate the staged artifact — the sentence this row used to end on ("any edit to it invalidates the staged artifact") was right, and the step that proved it is the next one.** |
+
+## Step 4.62 — the three GSIs that were left out for a reason, and the reason was a units error
+
+Step 4.41 recorded three USB interrupts as *deliberately absent* rather than
+forgotten, and that was the right call at the time. `tools/acpi/gauguin.asl`'s
+`USB0` node carried bitra's `A5`, `A2` and `A3` — the core interrupt, `pwr_event` and
+`hs_phy_irq` — and omitted bitra's other three, `0x211`, `0x20F` and `0x20E`. They
+are the `ss`, `dm_hs` and `dp_hs` PHY wake lines. The header said why they were out:
+
+> They are omitted because their GSI encoding is undetermined — 512 + pin and "the
+> INTID the PDC maps the pin to" (480 + pin, here 494/495/497) are both consistent
+> with the evidence and the two readings differ. They are wake interrupts, not the
+> controller's own, so leaving them out does not affect whether the controller
+> starts; putting in a wrong number would.
+
+Two readings, neither falsifiable from what had been read, and the failure mode of
+guessing wrong is a wake resource asserting an interrupt line it does not own. So
+they stayed out. **This step falsified one of the two readings, using only
+properties that were already in the repo.**
+
+### The device tree states the answer in one property
+
+The three lines are reached through the PDC — `interrupt-controller@b220000`, the
+`interrupt-parent` phandle `0x62` that `usb@a6f8800` and `spmi@c440000` both point
+at. The PDC carries its own pin-to-interrupt map:
+
+```
+qcom,pdc-ranges = <0x00 0x1E0 0x5E  0x5E 0x261 0x1F  0x7D 0x3F 0x01
+                   0x7E 0x28F 0x0C  0x8A 0x8B 0x0F>;
+```
+
+The kernel binding for `qcom,pdc` reads this as a list of `<first pin, GIC SPI,
+count>` triples. The first entry is `pins 0–93 → SPI 480–573`; pins 14, 15 and 17
+all fall inside it. The wrapper then names which line is on which pin:
+
+```
+interrupts-extended = <0x01 0x00 0x82 0x04  0x01 0x00 0x83 0x04
+                       0x62 0x0e 0x03  0x62 0x0f 0x03  0x62 0x11 0x04>;
+interrupt-names     = "pwr_event", "hs_phy_irq", "dp_hs_phy_irq",
+                      "dm_hs_phy_irq", "ss_phy_irq";
+```
+
+`dp_hs_phy_irq` is PDC pin `0x0e` = 14, `dm_hs_phy_irq` pin `0x0f` = 15 and
+`ss_phy_irq` pin `0x11` = 17. With `INTID = 32 + SPI` that is **526, 527 and 529**.
+
+**The `480 + pin` reading had stopped one step short.** `480 + pin` is a GIC *SPI*
+number; an ACPI `Interrupt ()` resource carries the *INTID*, which is the SPI plus
+the 32 private interrupts below it. 494/495/497 were never a competing encoding of
+the same quantity — they were the same encoding, read one field early.
+
+This is the second time in this port that exact slip has cost time. The UFS pair in
+`docs/07-uefi-platform.md` records the first: bitra's `0x129` and gauguin's SPI 265
+were briefly read as disagreeing by 32, until someone noticed one was an INTID and
+the other an index. The lesson is not about UFS or USB; it is that this device is
+described in three numbering spaces — DT SPI indices, GIC INTIDs, and ACPI GSIs —
+and two of the three are 32 apart. **Every time a number here has looked wrong by
+32, the number was right and the space was wrong.**
+
+### Two independent confirmations, because one measurement is an anecdote
+
+| source | what it independently says |
+|---|---|
+| the PDC's own `qcom,pdc-ranges` | the device's pin-to-SPI map. Not a transcription of a number from anywhere — it is the map the hardware is programmed from |
+| `Platforms/Realme/bitra` `USB0._CRS` | carries exactly `0x20E`, `0x20F`, `0x211`, in that order, with **Edge, Edge, Level** triggers. The dts gives type cells 3, 3, 4 on pins 14, 15, 17 — both edges, both edges, level. They agree value for value |
+| every `PM0x` node in the corpus | 21 of the 66 tables have a `PM0x` node at all, and **all 21** give it `0x201` = 513. 513 = 512 + PDC pin 1, and gauguin's own `spmi@c440000` says `interrupts-extended = <0x62 0x01 0x04>` — its arbiter is on PDC pin 1. So the same arithmetic, on a block whose pin is independently stated |
+
+The corpus row is worth stating carefully because an earlier draft of this step got
+it wrong in two ways at once: it is *not* "all 29 reference tables", and it is not
+every table in the corpus. It is 21 of 66 — every table that has a `PM0x` node, and
+no table that does not. Three of the 21 (`Kailua`, `Waipio`, ×2) also carry
+`0x203`, a second PMIC on PDC pin 3, which is the same arithmetic again.
+
+### What went in, and what it cost
+
+The three entries are now in `USB0`'s `_CRS`, after `A5`/`A2`/`A3`, in bitra's order
+and with bitra's trigger types — `0x211` Level, `0x20F` Edge, `0x20E` Edge, all
+`SharedAndWake`. `iasl` compiles the file with **0 errors**; the AML goes from
+**1,520 to 1,547 bytes**.
+
+**That is the first edit to this ASL that moves a byte of AML.** Every earlier
+change to the file — including the one `docs/07` records as a drift between the
+source and the two installed copies — was a comment, so the compiled table was
+byte-identical and the built payload was untouched. This one is not. The consequence
+is specific: **the staged `p2-freewhy-g` payload and the hash the record carries for
+it no longer describe a volume containing the current DSDT**, and the row in Step
+4.60 that said otherwise has been corrected rather than left standing.
+
+So the change was propagated the whole way rather than announced:
+
+1. `tools/make_uefi_platform.py` re-run. Its output was diffed against the committed
+   `uefi/` tree first, into a scratch directory: **123 generated files, one
+   difference** — the ASL. So the regeneration is idempotent and the commit is one
+   file, not a churn.
+2. `tools/sync-uefi-platform.sh` installs it into `work/uefi/Mu-Silicium` and
+   compiles `DSDT.aml` there: **1,547 bytes**.
+3. `./build_uefi.py -d gauguin -r DEBUG -c` rebuilds the volume. The build reports
+   `Success`, 48 images verified, and the `DTB image must not be empty.` nag from
+   `mkbootimg` that `tools/build-apriori-variant.sh` already recognises as expected
+   on the sync-dtb path — it is after the FD is written and does not touch it.
+4. `tools/build-p2-payloads.sh` into **`work/out/p2-phywake/`**, a new directory, so
+   the old payload stays where it is as the control. The script's own rule, and the
+   reason it has a `P2DIR`: *the payload on the phone is the control, and a build
+   that overwrites it destroys the comparison it exists for.*
+
+Then the two were read back rather than assumed, which is the only part of this that
+distinguishes "rebuilt" from "rebuilt correctly":
+
+| | control `p2-freewhy-g` | new `p2-phywake` |
+|---|---|---|
+| `Mu-gauguin-silicon-gzip.img` sha256 | `cbe5a131…02132` | `09f4f1f6…a2df7` |
+| DSDT in the payload | `@0x54d4c8`, **1,520** bytes, checksum valid | `@0x54d4c8`, **1,547** bytes, checksum valid |
+| `--expect P2FreeWhy` | rc=0 | rc=0 |
+| ABL's own offline checks | pass | pass |
+| volume vs GenFv's map | 123 offsets/GUIDs, 0 mismatches | 123 offsets/GUIDs, 0 mismatches |
+
+The `DSDT` sits at the *same offset* in both because the `AcpiTables` FFS file is
+padded; the tables *after* it do not — `APIC`, `FACP`, `FACS` and `GTDT` each shift
+by 28, and `docs/07`'s offset table has been updated to say so. The offset that
+matters for the comparison is that the two payloads differ in exactly the one place
+the change was made.
+
+That last sentence is a claim, so it was measured instead of asserted. Extracting
+both inner volumes FFS-file by FFS-file — by each file's own header length, so a
+positional shift cannot masquerade as a content change — gives **two** differing
+files out of 123:
+
+| file | control | new | what differs |
+|---|---|---|---|
+| `AcpiTables` | 2,878 B | 2,906 B | **+28** — the +27 AML bytes plus its pad |
+| `DxeCore` | 172,592 B | 172,592 B | **32 bytes**, first at `+3220` |
+
+And the `DxeCore` 32 bytes are not code. Disassembling both and masking every
+`#0x…` immediate leaves **30,437 instructions in each and 34 differing lines, every
+one of them a `mov w1, #<line>`** — the `ASSERT` identifiers. So the only executable
+difference between the control and the new payload is the ACPI table, and the
+`DxeCore` delta is a debug artifact of the `P2BRINGUP` block's own comments moving
+`__LINE__`, which is the same effect Step 4.49 recorded for `AcpiTableUpdate.c`.
+
+**This also retired a scare.** A byte-positional comparison of the two volumes first
+reported 836,156 differing bytes spread over 12 files, which is 30,000× the AML
+change and looked like a real confound. It was not: `AcpiTables` grew by 28, every
+file laid out after it shifted, and a positional diff calls a shift a difference in
+every byte past it. The 12 names were real files with real sizes, but the sizes were
+being read as difference counts. File-level extraction is the measurement; a
+`cmp` on two FVs is not.
+
+### The patch was checked too, because the shifted assertions implied a stale one
+
+The shifted `ASSERT` IDs have a second possible cause that had to be excluded: if
+`uefi/patches/mu-basecore-local.patch` were behind the `Mu_Basecore` working tree,
+then the *committed* patch would not reproduce the firmware that was built, and the
+remote would build something else from a fresh clone. That is directly load-bearing
+for this project's commit-and-push rule, so it was tested rather than reasoned about:
+
+- `git apply --check -R uefi/patches/mu-basecore-local.patch` in the checkout →
+  **OK**, i.e. the patch describes this tree exactly.
+- The patch body after its header is **74,213 bytes and byte-identical** (`cmp`) to
+  `git diff` in the checkout. The patch is current, not stale.
+
+So the shifted assertion IDs are explained entirely by the *control* being the older
+build: `p2-freewhy-g` was built before Steps 4.42–4.48 added their comment text to
+the `P2BRINGUP` hunks, and those comments moved `__LINE__`. Both builds are correct;
+they are separated only by line numbers in debug strings.
+
+### One thing this pass found that is not a correction
+
+`USB0`'s `_CRS` in this table carries `0xA2` — `pwr_event` — and bitra's does not.
+That is not an invention: gauguin's own dts gives `pwr_event` on SPI 130, so INTID
+162 = `0xA2`, and the row is in the file's own header table. It had simply never been
+mentioned in any audit of this file, including the one that listed the three entries
+as absent, which counted bitra's set instead of reading this one. It is right and it
+stays — but it is the kind of thing that reading a sibling table and calling it an
+audit will keep producing.
+
+### The honest limits
+
+- **The wake lines are not exercised by anything P2 does.** They are `SharedAndWake`
+  resources on a USB controller; nothing in the bring-up path asserts them, and DXE
+  reaching BDS does not depend on them. This step removes a known-unknown from the
+  table; it does not unblock P2, and it was not expected to.
+- **`512 + pin` is established for pins 0–93 on this PDC**, which is where these
+  three sit. The later triples in `qcom,pdc-ranges` have different bases (SPI 609,
+  63, 655, 139), so the arithmetic is a property of the first window, not a rule for
+  the whole map. Any future PDC-reached interrupt must be looked up in the table, not
+  computed.
+- **The device was not touched.** Nothing was written to `boot`, nothing was flashed,
+  and the restore net is unchanged. `p2-freewhy-g` is still the payload of record on
+  the phone until a `p2-phywake` reading exists, and the gate before that is the same
+  one as before: read the panel first, then flash.

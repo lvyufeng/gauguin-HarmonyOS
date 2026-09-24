@@ -17,21 +17,77 @@
  *   USB pwr_event    162 (0xA2)             dts interrupts-extended  SPI 130
  *   USB hs_phy_irq   163 (0xA3)             dts interrupts-extended  SPI 131
  *
- * Three interrupts bitra's node also carries are deliberately absent: GSIs
- * 526, 527 and 529, which the dts reaches through the PDC (phandle 0x62) on
- * pins 14, 15 and 17. Those three are the dp_hs / dm_hs / ss PHY wake lines.
- * They are omitted because their GSI encoding is undetermined - 512 + pin and
- * "the INTID the PDC maps the pin to" (480 + pin, here 494/495/497) are both
- * consistent with the evidence and the two readings differ. They are wake
- * interrupts, not the controller's own, so leaving them out does not affect
- * whether the controller starts; putting in a wrong number would. See the
- * "USB PHY wake interrupts" note in docs/07-uefi-platform.md.
+ * Three interrupts bitra's node also carries were left out of this table until
+ * Step 4.62, as GSIs 526, 527 and 529: the dts reaches them through the PDC
+ * (phandle 0x62) on pins 14, 15 and 17, and they are the dp_hs / dm_hs / ss PHY
+ * wake lines. They were omitted because their GSI encoding was undetermined.
+ * Two readings were on the table and both fit: 512 + pin, and "the INTID the
+ * PDC maps the pin to" - 480 + pin, here 494/495/497.
+ *
+ * The device tree answers it, and the answer is 512 + pin:
+ *
+ *   qcom,pdc-ranges = <0x00 0x1E0 0x5E  0x5E 0x261 0x1F  0x7D 0x3F 0x01 ...>
+ *
+ * is a list of <first pin, GIC SPI, count> triples, so its first entry reads
+ * "pins 0..93 map to SPI 480..573" - pins 14, 15 and 17 all fall in it. The dts
+ * then names those three pins on the wake lines-
+ *
+ *   usb@a6f8800 interrupts-extended = <0x01 0x00 0x82 0x04  0x01 0x00 0x83 0x04
+ *                                       0x62 0x0e 0x03  0x62 0x0f 0x03
+ *                                       0x62 0x11 0x04>
+ *   interrupt-names               = "pwr_event", "hs_phy_irq", "dp_hs_phy_irq",
+ *                                   "dm_hs_phy_irq", "ss_phy_irq"
+ *
+ * - so dp_hs is pin 14, dm_hs pin 15 and ss pin 17, and INTID = 32 + SPI gives
+ * 526, 527 and 529. The 480 + pin reading had stopped one step short: 480 + pin
+ * is a GIC SPI number, and an ACPI Interrupt () resource carries the INTID.
+ * That is the same slip the UFS pair above documents, on a different number.
+ *
+ * Two more things agree, and all three are independent. bitra - the same SM7225
+ * line, and the source of this file's form - carries exactly 0x20E, 0x20F and
+ * 0x211 in its USB0 _CRS, with Edge, Edge and Level triggers matching the type
+ * cells 3, 3 and 4 the dts gives above. And 21 of the 66 tables in
+ * Silicium-ACPI have a PM0x node at all; all 21 carry 0x201 = 513 for it, which
+ * is the same arithmetic on the SPMI arbiter's own PDC pin 1 - gauguin's
+ * spmi@c440000 says interrupts-extended = <0x62 0x01 0x04>. The trigger types
+ * and the listing order below are bitra's, since it is the closest table that a
+ * shipped Windows driver already binds.
+ *
+ * See the "USB PHY wake interrupts" note in docs/07-uefi-platform.md.
  *
  * The CPU devices are Moorea's Silicon/Qualcomm/Moorea/DSDT_Minimal.asl: eight
  * ACPI0007 processors with _UID 0-7, matching the Processor UID and MPIDR that
  * Moorea's APIC GICC entries carry (0x0, 0x100 ... 0x700), which is what
  * gauguin's device tree states too. No _LPI: gauguin's low-power idle
  * parameters have not been derived, and an unverified _LPI is worse than none.
+ *
+ * P3 also asks for I2C, SPI, GPIO, buttons and thermal zones, and none of them
+ * is here. That is not an omission - it is measured, and the measurement is the
+ * reason. Every one of those nodes needs a `_HID` (and for the GPIO and I2C
+ * blocks a `_DSM` whose contract is documented nowhere in this tree), and the
+ * device tree carries no ACPI name: it has registers and pins, which are the
+ * half that is knowable. Across the 36 reference DSDTs in Silicium-ACPI the
+ * same block at the same address carries a different `_HID` on every SoC - the
+ * TLMM window 0xF100000 is QCOM1A0C on vili and lemonade, QCOM0A0C on lisa and
+ * a52sxq, QCOM250C on alioth and QCOM090C on renoir - and the SPMI and both
+ * TSENS windows are described by none of the 36. No Bitra-family reference
+ * exists: Platforms/Realme/bitra/DSDT.aml, which this file's form comes from,
+ * has the same five devices this one has and nothing more.
+ *
+ * The consequence of copying a name from another SoC is specific and bad. A
+ * node whose `_HID` no driver claims does not fail, warn or fall back; it is
+ * absent from Device Manager and the hardware behind it is simply not there.
+ * That is worse than a missing node, which at least reads as missing.
+ *
+ * But the lesson is not that this board has a hidden name. ACPI's `_HID` is not
+ * a hardware fact - it is a string this port chooses, and the corpus choosing
+ * differently on every SoC is evidence the choice is free. What constrains it is
+ * the driver: a device binds to the name its .inf lists and to nothing else. So
+ * the tables here are written *to a driver*, not *to the SoC*, and the order of
+ * work is to adopt a Windows driver set and then name every block after it.
+ * tools/acpi-hid-census.py reproduces the measurement above and, given a driver
+ * set, reports which of gauguin's twelve blocks it covers - and which SoC's set
+ * it is, read off the names it answers to. Run it before adding any node here.
  */
 DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
 {
@@ -210,6 +266,21 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
                     Interrupt (ResourceConsumer, Level, ActiveHigh, SharedAndWake, ,, )
                     {
                         0x000000A3,
+                    }
+                    // The three PHY wake lines, from the PDC. Order and trigger
+                    // types are bitra's: ss (PDC pin 17, level), then dm_hs
+                    // (pin 15, edge) and dp_hs (pin 14, edge). See the header.
+                    Interrupt (ResourceConsumer, Level, ActiveHigh, SharedAndWake, ,, )
+                    {
+                        0x00000211,
+                    }
+                    Interrupt (ResourceConsumer, Edge, ActiveHigh, SharedAndWake, ,, )
+                    {
+                        0x0000020F,
+                    }
+                    Interrupt (ResourceConsumer, Edge, ActiveHigh, SharedAndWake, ,, )
+                    {
+                        0x0000020E,
                     }
                 })
                 Method (_STA, 0, NotSerialized)  // _STA: Status
