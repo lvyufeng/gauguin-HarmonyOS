@@ -5451,3 +5451,153 @@ ran, so it is the column worth not leaving blank.
 That table is the entire output of a session. Everything else is in the files
 `fastboot-capture.sh` and `pull-bootloader-log.sh` wrote, and — if step 4a ran —
 in the pstore ring, which is gone the moment the power button is held.
+
+## Step 4.34 — Nothing on this board can be promoted, and the heap is one line of a file in this repo
+
+Step 4.33 left an instrument on the phone and one question under it: the two
+requests step 4.18 reduced the 27 failures to — `PdcDxe`'s 9 pages refused at one
+slot and `ShmBridgeDxe`'s byte-identical 9 pages granted two slots later — have
+two possible shapes. Either the allocator had nowhere to put the first one, or it
+had somewhere and did not look. One of those is answerable without the phone, and
+it turns out to be answerable completely: not "the heap is small", but **the last
+rung of the allocator's ladder cannot be reached on this board at all, so the only
+memory the allocator will ever see is a single line of a config file — and that
+line is in this repository.**
+
+### What `free=` is, and what it can and cannot say
+
+The field the flashed line prints is `P2LargestAlloc` (`Dispatcher/Dispatcher.c:185-204`):
+the ladder `{ 4096, 1024, 256, 64, 16, 4, 1 }` pages of `EfiBootServicesData`
+(`:189`), each tried with `CoreAllocatePages` (`:196`) and freed again on success,
+with the first that succeeds printed by `P2Tick` (`:617`). So the field is one of
+eight numbers, and it is a statement about the largest *contiguous run* and not
+about a total:
+
+| `free=` | 4096 | 1024 | 256 | 64 | 16 | 4 | 1 | 0 |
+|---|---|---|---|---|---|---|---|---|
+| bytes it proved | 16 MiB | 4 MiB | 1 MiB | 256 KiB | 64 KiB | 16 KiB | 4 KiB | none |
+
+Two things follow, and they are why the field is worth the row it costs. A refused
+load of N pages, on a line whose `free=` is at least 4·N pages, was not refused for
+want of room. And `free=0` is unambiguous: not one 4 KiB page of the default type
+could be found at that instant, which is exhaustion and not an artefact of the
+type's bin — by the time `FindFreePages` returns 0 it has already tried the
+request's own bin, then the default bin, then anywhere (`Mem/Page.c:1088-1116`).
+
+### The promote-and-retry rung is dead here
+
+Both places that re-attempt an allocation call `PromoteMemoryResource` and retry
+**only if it promoted something**: `FindFreePages`' final step
+(`Mem/Page.c:1129-1134`) and `CoreInternalAllocatePages`' failure path
+(`:1333-1341`). `PromoteMemoryResource` (`:382-460`) promotes one kind of entry
+and no other — a GCD range that is `EfiGcdMemoryTypeReserved` whose capabilities
+are `PRESENT | INITIALIZED` and *not* `TESTED` (`:402-405`).
+
+Those three bits are set in exactly one place in this whole tree: the
+`mAttributeConversionTable` at `Gcd/Gcd.c:91-93`, driven by the resource HOB's
+attribute bits. Nothing in `Gcd.c` ORs them in afterwards — those three table rows
+are the only mentions of the three capabilities in the file. And this board's own
+table gives every `Reserv` row one of two attributes, both of which fail the test:
+
+  * **`UNCACHEABLE`** → the capabilities come out as `EFI_MEMORY_UC` alone, with
+    neither `PRESENT` nor `INITIALIZED`, so the equality at `Page.c:402` is false.
+    That is `AOP CMD DB`, `SMEM` and `PIL Reserved` (`device/config/uefiplat.cfg:8-10`).
+  * **`SYS_MEM_CAP`** → the capabilities *include* `TESTED`, so the left side of
+    the comparison is `PRESENT|INITIALIZED|TESTED` and can never equal
+    `PRESENT|INITIALIZED`. That is `Display Reserved` (`uefiplat.cfg:27`).
+
+The other two `Reserv` rows, `ABOOT FV` and `Kernel`, are not even GCD-Reserved:
+the switch at `Gcd.c:2658-2688` maps a `SYS_MEM` resource HOB whose attribute mask
+is exactly `TESTED` — which is what `SYS_MEM_CAP` is — to
+`EfiGcdMemoryTypeSystemMemory`, and the allocation HOB then marks the range
+reserved *inside* system memory (`MemoryInitPeiLib.c:98`).
+
+So `PromoteMemoryResource` returns FALSE on its first call and every call after
+it, and the retry rung it guards is unreachable on this board. **No refused request
+has a hidden region behind it.** Step 4.18's reading — that the deciding factor is
+heap state at the instant a request arrives — keeps its force, but narrows: it is
+not "the allocator could not find a region that a retry would have freed", because
+there is no such region to free.
+
+Worth saying in the same breath, because it is why this must not be "fixed": if
+those attributes were made promotable, the first refused allocation would hand the
+allocator the 344 MiB `PIL Reserved` region, which is where XBL put the firmware
+this payload is running beside. The accident is load-bearing.
+
+### The whole supply is one row, and the row is ours
+
+`AddHob` (`MemoryInitPeiLib.c:86-99`) turns each `AddMem` row into a resource
+descriptor HOB and, for `SYS_MEM` rows, a memory allocation HOB carrying that
+row's own `MemoryType`; `CoreAddMemoryDescriptor` (`Page.c:546-597`) adds the type
+to the memory map; and `CoreFindFreePagesI` looks at a map entry only if
+`Entry->Type == EfiConventionalMemory` (`Page.c:956`) and its attribute has no
+`EFI_MEMORY_SP` (`Page.c:963`). Exactly one row of this board's map carries
+`Conv`:
+
+```
+0x9B800000, 0x02360000, "DXE Heap",  AddMem, SYS_MEM, SYS_MEM_CAP, Conv, WRITE_BACK_XN
+```
+
+`device/config/uefiplat.cfg:16` — 9056 pages, and the 450-page runtime-bin block
+comes off the top of it (`Page.c:585-592`). Everything else that is not a register
+range is an *allocated* range of its own type and is not allocatable memory at all:
+the `BsData` rows are the ones DxeCore itself runs on and out of.
+
+That row is this repository's, and not a number inherited from XBL.
+`gauguinPkg/Library/MemoryMapLib/MemoryMapLib.c` is generated from
+`device/config/uefiplat.cfg` by `tools/make_uefi_platform.py` — it says so in its
+own header comment — and it is compiled into our FV and linked into PrePi, whose
+`MemoryPeim` is what builds the HOBs. `tools/heap-compare.py` records the other
+half: every sibling platform at this base declares 60.0 MiB, so 35.4 MiB is this
+board's own figure, and the 24.6 MiB between `Sched Heap` and `FV Region` is a
+carveout this config never mentions, which extending the row would be claiming.
+
+None of this says the row is too small. It says that if the reading comes back
+"room", the row is the only place room could come from — and it is a rebuild of
+this repository rather than an XBL flash. What is *not* re-opened by that is where
+the extra pages would come from: step 4.28 measured that the 24.6 MiB above the row
+is a carveout this config never mentions, so growing the row is the mechanism and
+not yet an available supply.
+
+### The two boot-services PCDs are decorations
+
+`BuildMemoryTypeInformationHob` (`EmbeddedPkg/Library/PrePiHobLib/Hob.c:887-908`)
+is what turns the platform's memory-type figures into the HOB the bins are built
+from, and it emits five entries: `EfiACPIReclaimMemory`, `EfiACPIMemoryNVS`,
+`EfiReservedMemoryType`, `EfiRuntimeServicesData`, `EfiRuntimeServicesCode`
+(`:893-903`). `SiliciumPkg.dsc.inc:45-53` also sets
+
+```
+gEmbeddedTokenSpaceGuid.PcdMemoryTypeEfiBootServicesCode|1000
+gEmbeddedTokenSpaceGuid.PcdMemoryTypeEfiBootServicesData|800
+```
+
+and nothing reads either token. `PcdMemoryTypeEfiBootServicesCode` occurs in two
+files in the tree: the DSC line that sets it, and `EmbeddedPkg.dsc`, which sets it
+to 0. There is no `Info[]` slot for a boot-services type in the builder, so no
+such bin is ever created.
+
+Two consequences, and the second is the one that saves a session. The bins are
+only the runtime types — 300 + 150 = 450 pages, which is the block the digest's
+`hob_rc`/`hob_rd` check against the device's own HOB — so 450 pages against 9056
+is not the fault. And those two PCD lines are not a lever for it, which matters
+precisely because they are the first thing in the DSC that looks like one: a
+session that read `1000` and `800` as the boot-services bins would be tuning
+something that does not exist.
+
+### What this does not decide, and what the reading now means
+
+All of the above is a statement about the allocator's *shape*, read off sources.
+It does not say which of step 4.18's two shapes the run is in; that is what the
+probe on the phone is for, and the decode is now bounded rather than open:
+
+  * **Bottom row `K <n> <phase><why> <started>/<apriori> free=<pages> <guid>`** —
+    `free=` is a number from the table above. `free=0` means the heap was empty at
+    that instant, whatever it started with. A large `free=` on a line whose
+    `<why>` letter is the `Out of Resources` letter means the refusal was *not*
+    about room, and the next reading is the `P2 BINS` census, not a bigger heap.
+  * **Bottom row `KEY <errors>/46 err=<name> at=<i> free=<pages> miss=<i>`** —
+    `CoreDispatcher` returned and the digest is printing, so the whole funnel is
+    on the panel, `bs9=` included.
+  * **`Loading Driver at ...` still on the panel** — the flash did not take.
+    No build after the one in `work/out/p2-variants/` can print that row at all.
