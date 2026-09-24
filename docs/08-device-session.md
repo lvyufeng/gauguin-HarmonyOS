@@ -2470,6 +2470,14 @@ different runs.
 | `P2 FREE largest=` ≤ 64 | the largest free run is 256 KiB or less, less than the largest request the promoted set makes | the load order's arithmetic was right and the heap really is being consumed by something else; find what |
 | `P2 FREE largest=0` | nothing is allocatable at all at digest time | the `L`s are exhaustion by another name |
 
+**The third and fourth rows above are now answered off the volume, without the
+panel.** Step 4.37 measured every promoted entry's PE `SizeOfImage` and found that
+no size threshold classifies the 46 — the best one is wrong about 17 of them — and
+that `PdcDxe` (failed) and `ShmBridgeDxe` (loaded) ask for the same 36,864 bytes two
+dispatch slots apart. So "the `L`s are not a single allocation that could not be
+satisfied" is established rather than conditional, and `P2 FREE largest=` no longer
+has to be read to get there. The row that still has to be read is `P2 WHY`'s.
+
 **`P2 WALK` prints one line per entry in `mDxeFileTypes`, and the DRIVER pass is
 index `0`, not `7`.** The array is
 `{ EFI_FV_FILETYPE_DRIVER, COMBINED_SMM_DXE, COMBINED_PEIM_DRIVER, DXE_CORE,
@@ -5911,3 +5919,143 @@ instead of silently zero-filling the rest.
 
 What it does **not** answer is whether `/dev/mem` is readable on this TWRP at all.
 That is one `--probe` away and it needs the phone.
+
+## Step 4.37 — The twenty-seven that would not load are not the big ones, and two of them asked for exactly the same room
+
+Step 4.12 read 46 characters of `P2 SEQ` off the panel and could say only which
+*positions* had failed, because a position could not be turned into a driver name
+without transcribing a 36-character GUID off a neighbouring `K` row. That is now
+fixed on the host side: **`tools/apriori-index.py`** prints the Apriori index, the
+GUID and the driver's own name for every position, reads its letter table out of
+`P2WhyLetter()` rather than carrying a hand-typed copy, and asserts its own
+position mapping against two measurements that came from the volume and not from
+the string. The 46 characters decode to this:
+
+     pos  ap    letter  driver                              phase
+    ----  --    ------  ----------------------------------  ------------------------
+       0   1    s       PcdDxe                              EntryPoint returned success
+       1   2    s       EnvDxe                              ...
+       ...
+      17  18    s       NpaDxe                              ...
+      18  19    L       RpmhDxe                             CoreLoadImage failed
+      19  20    L       PdcDxe                              CoreLoadImage failed
+      20  21    L       ClockDxe                            CoreLoadImage failed
+      21  22    s       ShmBridgeDxe                        EntryPoint returned success
+      22  23    L       ScmDxe                              CoreLoadImage failed
+      23  24    L       DiskIoDxe                           CoreLoadImage failed
+      ...
+      45  46    L       I2C                                 CoreLoadImage failed
+
+`P2 SEQ`'s alphabet is four characters, not ten, and the tool now keeps the two
+tables apart instead of decoding both with `P2WhyLetter`'s. Three facts fall out of
+the string that do not need the panel to be re-read, because they are properties of
+the characters already recorded:
+
+  * **no `?` anywhere** — `?` is what the promotion loop stamps into
+    `mP2AprioriRes` before anything runs, so its absence means the drain reached
+    every one of the 46 promoted entries. The batch ran to the end of the array;
+    nothing was skipped.
+  * **no `S` anywhere** — `S` is `CoreStartImage` returning an error. Its absence
+    means every driver that loaded also started, and **all 27 failures are at
+    `CoreLoadImage`, so no driver in this array ran and failed.** The exception is
+    hypothetical, not observed: `P2 ERR` would spell an `S` row in words.
+  * **one contiguous failing block, positions 18 through 45, with a single
+    survivor at position 21.** `sx18 (0-17), Lx3 (18-20), sx1 (21), Lx24 (22-45)`.
+    A monotone cause — a resource that ran out at position 18 and stayed out — has
+    to explain why position 21 succeeded in the middle of it.
+
+### The cause is not room, and the host can say so without the panel
+
+This is the part worth having before anyone photographs a screen, because it
+retires the move the phase has been circling: **the failures are not the big
+ones.** Measured out of the payload itself, using `fv-inventory.py`'s section walk
+to the `EFI_SECTION_PE32` and the PE optional header's `SizeOfImage` (which is what
+`CoreLoadPeImage` actually allocates, not the FFS file size, which is padded and
+carries a UI section):
+
+  * **`PdcDxe` and `ShmBridgeDxe` are a matched pair.** PE32 length 36,864 bytes
+    and `SizeOfImage` 36,864 bytes — *identical* to the byte — and they are two
+    dispatch slots apart in the same run (`PdcDxe` at position 19, `ShmBridgeDxe`
+    at 21, with only the failed `ClockDxe` between them). `PdcDxe` failed to load;
+    `ShmBridgeDxe` loaded and started. **No account of these 27 failures as an
+    allocation failing fits this pair:** if the allocator had room for one it had
+    room for the other, and if it did not then neither should have loaded. This is
+    not a hand-picked pair — the tool finds all entries with equal `SizeOfImage`
+    on both sides and prints the one closest together in dispatch order, and this
+    is it.
+  * **No size threshold classifies this run.** Sweeping every `SizeOfImage` as a
+    candidate cut and asking how many of the 46 entries "refuse anything this big
+    or bigger" would get wrong, the best rule is *"refuse anything at or above
+    36,864 bytes"*, and it is **right about 29 of 46 and wrong about 17**. A rule
+    that is wrong about a third of the entries is not the rule. The failures and
+    the successes overlap across almost the whole width of the size range —
+    successes 32,768..393,216 (`PlatformInfoDxeDriver` and `CmdDbDxe` at the
+    bottom, `RuntimeDxe` and `ReportStatusCodeRouterRuntimeDxe` at the top, median
+    49,152), failures 36,864..397,312 (`PdcDxe`, `DALTLMM`, `WatchdogTimer` and
+    `EnglishDxe` sharing the bottom, `BdsDxe` the top, median 73,728) — and only
+    three failures (`VariableRuntimeDxe`, `ResetSystemRuntimeDxe`, `BdsDxe`) are
+    above the largest success at all.
+  * Physical position does not separate them either, and this is a re-confirmation
+    rather than a discovery: the failures sit at physical file indices 5,6,7,8,9,
+    12,13,15,16,18,19,23,33..38,40,44..49,54,73 and the successes at
+    2,3,4,10,11,17,24..31,39,42,43,52,74 — interleaved throughout. `fv-census.py`
+    had already ruled a physical cutoff out from the 5-versus-74 pair; this is the
+    same fact seen from the Apriori side.
+  * Every Apriori entry in the volume — all 70, not only the 46 that ran — is
+    `PE32+` (`0x20B` optional-header magic) with machine type `0xAA64`, so this is
+    not a wrong-architecture load and not a 32-bit image the loader refuses.
+
+So **a larger DXE heap, a larger reserved region, or a bigger `P2LargestAlloc`
+ladder cannot be the fix**, and the `free=` value in a `K` row is very unlikely to
+be the explanation. That is not a statement that memory is fine — it is a statement
+that these 27 refusals were not decisions about how much room a driver needed.
+
+### The prediction this makes, which the panel can kill
+
+Because the cause is not room, the `K` rows' `free=` should be **flat and large
+across the whole failing block** — the same ladder value at position 18 as at
+position 45. If a reading shows that, size is out for good and the only remaining
+datum is `P2 WHY`'s letters, which is the row that has never been read. If instead
+`free=` collapses at position 18 and stays collapsed, then something *is* being
+consumed and the matched `PdcDxe`/`ShmBridgeDxe` pair needs an explanation that is
+not about size — an allocation that only the failing images make, before the one
+that matters. Either reading is decisive, which is what makes this worth writing
+down rather than leaving as an expectation.
+
+And the shape of `P2 WHY` is itself the next discriminator, before any name is
+looked up: **if all 27 letters are the same, the cause is one thing affecting
+27 drivers; if they differ, the cause is per-driver** and the ones that are `R`
+(`EFI_OUT_OF_RESOURCES`) have to be separated from the ones that are `N`, `X`, `E`
+or `U`, because those four have no mechanism in common with `R`.
+
+### Two things reconciled while building the decoder
+
+  * **Position 45 is `I2C`, not `AdcDxe`.** The first draft of the tool asserted
+    `AdcDxe` there, from misreading the decode table's `miss=47 9143B2B7-...` row.
+    `9143B2B7` is Apriori file index 46 — `AdcDxe` — and position is file index
+    minus one, so `AdcDxe` is position **46** and position 45 is `I2C`. The
+    corrected anchors are the two `fv-census.py` measured: position 21 is
+    `ShmBridgeDxe` and position 36 is `SecurityStubDxe`, both of which the table
+    satisfies and both of which the tool now asserts on every run.
+  * **The 69-versus-46 question is closed, and the answer is that it was never a
+    contradiction.** `tools/apriori-index.py` reports 69 promotable entries in the
+    volume while the panel shows 46 characters, and the two can be reconciled
+    without deciding anything, because **both open readings of `P2 APRI` produce
+    exactly 46:**
+    - the array read whole (`entries=70`, then `miss=47`) promotes `ap1..ap46` and
+      does not promote `ap47..ap69`;
+    - the array read 368 bytes short (`entries=47`, `unhit=1`) promotes `ap1..ap46`
+      and `ap47` does not exist.
+
+    Both give a 46-character `SEQ` and both name the same 46 drivers. So **the
+    string that has been read three times cannot decide the fork**, which is worth
+    stating plainly because it looked like it might: the row that decides it is
+    `P2 APRI` itself. `mP2ApriSum` is taken over `SizeOfBuffer`, so a short read
+    prints the hash of a prefix and `sum=` names its own length — `b4ba9d75` is 47
+    entries, `a998b263` is all 70 — and `KEY`'s `unhit=`/`miss=` corroborates it
+    (`unhit=1, miss=none` against `unhit=24, miss=47`).
+
+The decoder is a host tool and its input is a string; it changes nothing about what
+the phone is doing. **The pending reading is unchanged and is still the bottom of
+the panel** — the `KEY` row and the `P2 WHY` row under it. What has changed is that
+neither of them now requires anyone to write down a GUID.
