@@ -4930,6 +4930,14 @@ the host: 17856 of 17856 64-byte blocks identical to
 build, and the header read back off the partition — v1, 2048-byte pages,
 kernel 1,136,759 bytes at `0x10008000`, tags `0x10000100` — is that image's own.
 
+**Step 4.32 corrects the two numbers in that sentence and keeps the conclusion.**
+280 blocks is 17,920 bytes and 17,856 blocks is 1,142,784, so the clause merges two
+measurements; 411 is `p2-4.19`-vs-`p2-4.20` and not a candidate-vs-readback figure;
+and no 09-24 readback was archived at all, so this verification cannot be re-run from
+disk. The conclusion is instead carried by step 4.25's flash record — `p2-4.20` written
+to `sde55` and read back identical — and by `work/out/p2-4.20/` still holding
+`dbf131d2…` today.
+
 
 ## Step 4.31 — The panel was holding the load flood, and no `P2` line has ever been on it
 
@@ -5044,7 +5052,108 @@ row in either state, and the two readings it is worth flashing for:
 | instrument added | `P2Tick`: one `K <n> <phase><status> <s>/<ap> free=<pages> <guid>` row per attempted dispatch, 70 columns, printed last |
 | instrument removed | the three `DEBUG_INFO \| DEBUG_LOAD` prints in `CoreLoadPeImage` (`Image.c:862`, `:916`, `:919`), `P2BRINGUP`-marked |
 | build | payload of record `work/out/p2-variants/Mu-gauguin-silicon-gzip.img`, sha256 `7c8fdb5a…0e1ef44`, 1,142,784 B — verified to carry `K %d %c%c %d/%d free=%d %g`, `KEY 0/%d` and `P2 RETRY`, and verified *not* to carry `Loading driver at` |
-| still first | read `boot` back and compare it block-for-block before concluding anything about "our payload stops mid-dispatch" |
+| still first | read `boot` back and compare it block-for-block before concluding anything about "our payload stops mid-dispatch" — the comparison is now `tools/identify-boot.py` (step 4.32), which prints both sha256s so the answer can be pinned instead of remembered |
+
+
+## Step 4.32 — Every archived read of `boot` reconciles, and two of the paths no longer name their bytes
+
+Step 4.31 left one row as "still first": read `boot` back and compare it
+block-for-block. That row is a rule this device has had for weeks —
+"对照的那张必须在覆盖之前读" — and a rule with no instrument behind it is the kind
+of thing that survives until the session under time pressure gets it wrong, which
+is what happened at step 4.30: the comparison was made, was right, and the loop
+that made it was thrown away. So the rule now has a tool, `tools/identify-boot.py`,
+and running it over everything in the archive is what this step is.
+
+### The tool, and the three ways the first three drafts of it were wrong
+
+It answers one question — *is the image on the partition the one I think it is* —
+and it does not care which image that should be: it reports the best match, how
+close the rest came, and says "none of them" as loudly as a match. Each of its
+three corrections came from a measurement rather than from taste:
+
+| | |
+|---|---|
+| the window | the first draft compared the leading **280 64-byte blocks** (17,920 B), because that is what step 4.30's hand comparison used. Two *different* builds, `p2-4.19` and `p2-4.20`, agree on **278 of those 280** and disagree on **17,413 of the file's 17,824** — they differ in the header page, and the rest of the first 17 KB is BootShim, identical by construction. A 280-block window calls two images that are 97% different a near-match |
+| the grading length | grading over the *readback's* length called a perfect match a **54%** match, because the partition (2 MiB read) is longer than the image in it (1,142,784 B). A candidate is now graded over its **own** extent, and the blocks past its end are reported as tail, not as disagreement |
+| unequal lengths | a candidate *longer* than the readback was reported "not a match", which is what a naive comparison of unequal lengths says. `work/out/boot-readback-payload.bin` is 1,140,736 B and the image it contains is 1,142,784 — the last 2,048 bytes were never on the wire. That is now `identical over every byte read`, with the un-read count named, and exit status 0 |
+
+### What the archive says, read back through it
+
+Every partition read kept in `work/out/`, identified by content:
+
+| read (mtime) | bytes | kernel_size | best match | verdict |
+|---|---|---|---|---|
+| `boot-readback-head.bin` (09-23 16:10:02) | 2,097,152 | 1,135,628 | `boot-now-0923.img` | identical; same sha256 as the next row |
+| `boot-readback-2026-09-23.bin` (16:10:31) | 2,097,152 | 1,135,628 | `boot-now-0923.img` | **17,856/17,856 — identical over its whole length** |
+| `boot-readback-payload.bin` (16:10:36) | 1,140,736 | 1,135,628 | `boot-now-0923.img` | identical over every byte read; 2,048 unread |
+| `boot-pre-flash-0923c.bin` (22:57:24) | 1,048,576 | 1,135,628 | `boot-now-0923.img` | identical over every byte read; 94,208 unread |
+
+Four reads, three sizes, two times of day, one answer, and every byte of overlap
+agrees. The reads and the document's own records then form a single chain of
+payloads on `boot`, each one's kernel a little larger than the last:
+
+| kernel_size | image | on `boot` |
+|---|---|---|
+| 1,134,485 | `boot-before-p2walk.img` | before step 4.13 |
+| 1,135,628 | `boot-now-0923.img` | at both 09-23 reads, 16:10 and 22:57 |
+| 1,136,314 | `8c565681d1093b76…` (step 4.13), preserved at `p2-silicon-gzip-preread-0923d.img` | from 4.13 until 4.25 |
+| 1,136,759 | `dbf131d254374646…` (`p2-4.20`, step 4.25) | from 09-24 until now, as far as anything records |
+
+So the apparent contradiction — step 4.30 saying the read held `p2-4.20` while the
+archived reads hold `boot-now-0923.img` — is not one. Those reads are from 09-23,
+`p2-4.20` was built 09-24 11:32 and flashed by step 4.25, and the reads predate it.
+`p2-4.20/Mu-gauguin-silicon-gzip.img` is still `dbf131d2…` today, so that step's
+record is intact.
+
+What does not survive is a **path** as a name for bytes:
+
+| path | step's record | measured now |
+|---|---|---|
+| `work/out/p2-variants/Mu-gauguin-silicon-gzip.img` | step 4.13: `8c565681…`, 1,140,736 B, flashed and read back | `7c8fdb5a…`, 1,142,784 B (step 4.31's build) — a different image under a reused path |
+| `work/out/p2-4.20/Mu-gauguin-silicon-gzip.img` | step 4.25: `dbf131d2…`, flashed and read back identical | unchanged — nothing has rebuilt it since |
+| `work/out/boot-now-0923.img` | — | written 09-23 20:47, i.e. *after* the 16:10 read it matches: a named copy of what the partition held, not a build output |
+
+Step 4.13's bytes survive because it kept a second copy under a name that means
+"the image that was on the phone before the next one" —
+`p2-silicon-gzip-preread-0923d.img`, still `8c565681…`. That is the mechanism the
+rule needs, and it is the one the tool's output is now built around: it prints the
+**candidate's** sha256 beside the **readback's**, so the pair can be written into a
+step and the next comparison is against a hash rather than against a filename.
+
+### The sentence at step 4.30 that cannot be right
+
+> `boot` was verified by `dd`-ing its first 280 blocks and comparing block-for-block
+> against every image on the host: 17856 of 17856 64-byte blocks identical to
+> `work/out/p2-4.20/Mu-gauguin-silicon-gzip.img` (the next best candidate matches 411
+> and differs from byte 8).
+
+Two of those numbers cannot come from one `dd`. 280 blocks is **17,920 bytes**; 17,856
+blocks is **1,142,784 bytes**, which is `p2-4.20`'s exact size. And 411/17,824 is what
+`p2-4.19` and `p2-4.20` agree on *with each other* — measured this step — not a figure
+any candidate takes against a readback containing `p2-4.20`. The conclusion stands, on
+step 4.25's flash record (written to `sde55`, read back identical, 09-24), but the
+verification is not reproducible from disk: **no 09-24 readback of `boot` was archived
+at all.** The next read closes that too, because it is the one that gets saved.
+
+### What is still not known
+
+Which payload `boot` holds *right now*. The last recorded write is step 4.25's, and
+steps 4.26 through 4.31 shipped no build to the phone, so the inference is `p2-4.20`
+(`dbf131d2…`) — but that is an inference from the document's records and not a
+measurement of the partition, and it is exactly the class of answer the previous
+sentence showed can be wrong. One `dd` settles it, and the tool prints both hashes.
+
+| | |
+|---|---|
+| tool | `tools/identify-boot.py` — whole-extent grading, prefix reporting, both sha256s; `--read` takes the readback off the phone in 1 MiB `dd` blocks and compares at 64 |
+| finds | all four archived reads of `boot` hold `boot-now-0923.img` over every byte of overlap, from three read sizes at two times |
+| finds | the payload chain 1,134,485 → 1,135,628 → 1,136,314 → 1,136,759 bytes, each step crossing between a read and a step's own record |
+| finds | `work/out/p2-variants/` no longer holds step 4.13's image (`8c565681…` → today's `7c8fdb5a…`); a path is not a fixation, a sha256 is |
+| corrects | step 4.30's verification sentence: 280 blocks and 17,856 blocks are two measurements in one clause, and 411 is `p2-4.19`-vs-`p2-4.20` |
+| corrects | the "still first" row of step 4.31: the comparison it asks for now has an instrument, and it was run over the archive first |
+| does not change | the firmware, and nothing on the phone |
+| next | `tools/identify-boot.py --read`, then flash `work/out/p2-variants/Mu-gauguin-silicon-gzip.img` (`7c8fdb5a…`) over the identified control |
 
 
 ## Step 5 — Leave it bootable
