@@ -9617,10 +9617,10 @@ nothing to do with the conclusion.
 | second method | the same negative was confirmed by plain text search over the disassembled corpus: `0x0F100000` in 7 files, `0x0C440000` in **0**, `0x0C263000` in **0**, `0x0C265000` in **0** |
 | third method, and why it was wrong | the text search above is a *third* usage of the same bad test, so it is not independent evidence: all 22 reference `SPMI` nodes contain `0x0C400000`, and gauguin's arbiter is 16 KB higher, inside the region they declare. The corpus does not lack SPMI; the test could not see a block named by containment. Only `0x0C263000` and `0x0C265000` survive as true negatives, and for a stronger reason than the search gives — Step 4.58 |
 | why it matters | a device node whose `_HID` no driver claims is absent from Device Manager with no error, no warning and no yellow mark — strictly worse than an omitted node, which is at least visibly missing. The file's own precedent (the three USB PHY wake GSIs) is the same rule at smaller scale |
-| unblocker | the Windows driver set's `.inf` files, which name the `ACPI\...` ids the drivers bind. `--drivers DIR` reports which of gauguin's twelve blocks a set covers. **Obtain the set before authoring these tables** — written first, every added node is a silent failure |
+| unblocker | the Windows driver set's `.inf` files, which name the `ACPI\...` ids the drivers bind. `--drivers DIR` reports which of gauguin's twelve blocks a set covers. **Obtain the set before authoring these tables** — written first, every added node is a silent failure — **obtained and read in Step 4.60: family byte `0A`, 8 of 10 blocks named** |
 | instrument bug | the census's first draft used `True` as a "address is on the next line" sentinel; `isinstance(True, int)` is true, so every window recorded base 1 and the tool reported zero references for all twelve blocks. Fixed with a string sentinel; the finding survived unchanged |
 | compiled | `iasl` still reports 0 errors on the edited `gauguin.asl` and the AML is still 1,520 bytes — the step adds a comment to its header and no node, deliberately |
-| does not close | the P2 gate, which is unchanged and still needs the glass, and P3 item 1's remainder, which now has a named precondition instead of an open item |
+| does not close | the P2 gate, which is unchanged and still needs the glass, and P3 item 1's remainder, which now has a named precondition instead of an open item — **the precondition was met in Step 4.60, which also found `--drivers` could not have met it: see below** |
 
 ## Step 4.58 — the id is two facts in one string, and the corpus carries the index half
 
@@ -9782,3 +9782,135 @@ becomes `PM01` is a choice this port makes, so it is not folded into the
 | still open | `TSENS0`/`TSENS1` have no index in the corpus at all, and the thermal zones are a second namespace with 147 ids of their own; `SE2` has no reference at any address, exact or contained, and is disabled in the device tree anyway; and the button and power-key nodes need a PMIC node (`\_SB.PM01`) that carries the same unknown byte |
 | unchanged | nothing on the device. P2's gate still needs the glass; P4 is untouched; the stock `boot` and the restore path are as they were |
 
+
+## Step 4.60 — the driver set was readable all along, and the tool was blind to it
+
+Step 4.58 ended with the unknown collapsed to a single byte and the check on it
+declared mechanical: obtain a Windows driver set, run `--drivers DIR`, read which
+family byte names all ten blocks. So the first thing done here was to go and get
+one. `WOA-Project/Qualcomm-Reference-Drivers` on GitHub is a 32 GB mirror of the
+per-reference-laptop driver packages the OEMs publish to Windows Update; the
+SC7280 / Kodiak folder `7280_CLS/200.0.4.0` sparse-clones to 433 MB, and its 112
+`.cab` files extract to 112 `.inf` in `~/work/woa-ref/inf-7280` (2.0 MB).
+
+The tool was pointed at them and reported this:
+
+```
+112 .inf files, 0 distinct ACPI hardware ids
+0 of them are QCOM ids
+...
+No family byte under any measured index table makes this set answer a name
+for any of gauguin's 12 blocks. So this set is not the one for this device -
+it is a set for some other SoC, and its ids say which one, above.
+```
+
+Every sentence there is false. The set is the right kind of set, it lists 158 ACPI
+ids, 157 of them `QCOM`, and it names eight of gauguin's ten blocks.
+
+### A reader that sees nothing is not a reader
+
+**Every `.inf` in a Windows Update driver package is UTF-16 with a BOM.** Read one
+as UTF-8 and it does not fail — it succeeds, and returns text whose every other
+byte is NUL. So the string on disk as `ACPI\QCOM0A0C` arrives as
+`A\x00C\x00P\x00I\x00\\\x00Q\x00C\x00O\x00M\x000\x00A\x000\x00C\x00`, and no
+regex matches it. Measured directly: all 112 files begin `\xff\xfe`;
+`has b'A\x00C\x00P\x00I'` is `True`; the default read hits 0 ids and the UTF-16
+read hits 1.
+
+This is worth more than the fix. In a dynamically-typed language a text read that
+sees nothing is *indistinguishable from a corpus that holds nothing*, and the code
+downstream had been written for the empty case — so it did not crash, it
+confidently explained why the set was for some other SoC. And this particular tool
+had already been trusted once to say "no reference exists": it is the instrument
+that established `Platforms/Realme/bitra/DSDT.aml` is a five-device skeleton, and
+the byte the whole of P3 item 1 was recorded as waiting on was to come from it.
+
+The fix is `read_win_text()`, which checks the BOM first, then NULs in the first
+4 KiB as a second signal for the files that lack one, and only then falls back to
+UTF-8 — plus an encoding tally in the summary line, so that the next reader to
+point this tool at a Windows tree cannot be silently blind to it:
+
+```
+112 .inf files, 158 distinct ACPI hardware ids
+  encodings: 112 utf-16 (BOM)
+```
+
+Verified three ways: the real UTF-16 set now reads (158 ids), a hand-written ASCII
+`.inf` still reads (reported as `utf-8`), an empty directory still says "no `.inf`
+files", and `--functions` is unchanged (66 tables, same result as Step 4.58).
+
+### The measurement: family byte `0A`, eight of ten
+
+```
+  coverage   generation                           family  blocks, and the id each gets
+  8/10       modern  (index table read off 09 0A 0C 1A 25) 0A
+                                                           yes SE0u   QCOM0A16
+                                                           yes SE1    QCOM0A10
+                                                           yes SE2    QCOM0A10
+                                                           yes SE3    QCOM0A10
+                                                           yes SE5    QCOM0A10
+                                                           yes SE7    QCOM0A10
+                                                           yes SPMI   QCOM0A0B
+                                                           yes TLMM   QCOM0A0C
+                                                            -  SE0    QCOM0A0E
+                                                            -  SE6    QCOM0A0E
+```
+
+8 of 10 under `0A`, and 0 of 10 under each of the other 255 bytes. The two misses
+are `SE0` and `SE6`, which the set does not name at all — the id that would name
+them, `QCOM0A0E`, is the correct UART index for that table, so they are absences
+in the *set*, not contradictions of the byte. A Kodiak board does not publish
+those two as ACPI devices.
+
+Two independent checks agree:
+
+- **The corpus agrees.** Of the 66 reference tables, exactly two carry these ids,
+  and they are the two that declare `SDM7280`: `Platforms/Xiaomi/lisa` and
+  `Platforms/Samsung/a52sxq`. Both carry `Device (GIO0) { Name (_HID, "QCOM0A0C") }`
+  with the TLMM window, plus `QCOM0A0B`, and `QCOM0A10` on `Device (I2C2)` /
+  `Device (I2C4)` with `_STR "QUP_0_SE_1,Shared"`, and `QCOM0A16`.
+- **The ids organise themselves.** All eight land on the expected *kind* of block
+  in the right bit positions: `qcgpio7280.inf` claims `QCOM0A0C`, `qcspmi7280.inf`
+  `QCOM0A0B`, `qci2c7280.inf` `QCOM0A10`, `qcuart7280.inf` `QCOM0A16`,
+  `qcpmicgpio7280.inf` `QCOM0A2D`, `qcpmic7280.inf` `QCOM0A2B` plus `QCOM0AD3`.
+  `0x2D & 0x7F = 0x53` is a PMIC sub-function. A collision would not arrange eight
+  independent ids by block kind.
+
+**What this is and is not.** `0A` is measured on Kodiak (SM7325), SM7225's sibling
+in the same table generation. No SM7225 Windows driver set and no independent
+SM7225 reference DSDT exists, so the byte is measured for the *family*, not on the
+die. Two oracles, not a proof — recorded that way rather than as a fact.
+
+### TSENS is the one block this does not reach
+
+The set's only `QCOM04xx` id is `QCOM0427`, and it belongs to `qcabd.inf`, not to a
+thermal sensor. Neither the set nor any of the 66 tables describes a thermal
+sensor device of any kind, so `TSENS0`/`TSENS1` remain unnameable by this route and
+by the corpus route Step 4.58 already recorded. The driver set closed the family
+byte and did not close thermal.
+
+### What the driver set does *not* gate
+
+Worth stating because the record said otherwise: **there is no `.inf` gate on the
+UEFI phase.** `_HID` is firmware-supplied; TianoCore's `AcpiTableDxe`, which is in
+this build, auto-computes `_CID = PNP0C02` for any 4-char `_HID` in the reserved
+`QCOM` range; and the build already ships `QCOM0497`/`QCOM0498`/`QCOM24A5` with no
+driver set at all. So none of this can break P2. What the set prevents is authoring
+names that are *silently wrong for specific UMDF clients later* — a node whose
+`_HID` no driver claims is simply absent from Device Manager, with working hardware
+behind it. That is the failure the set protects against, and it is a P3/P5 failure,
+not a P2 one. The direct blockers for P2 remain `P2STATS` (heap and page
+accounting) and `P2WALK` (the allocation census), and neither needs a driver set.
+
+| | |
+|---|---|
+| finds | the family byte is `0A`. The SC7280/Kodiak Windows driver set names 8 of gauguin's 10 blocks under it and 0 of 10 under every other byte; the only two corpus tables carrying those ids are the two `SDM7280` ones |
+| the bug | every `.inf` in a Windows Update package is UTF-16 with a BOM. Read as UTF-8 it does not fail — it returns text with NULs in every other byte, so no id matches, and `--drivers` reported 0 ids for a set holding 157 and then explained why the set was for some other SoC |
+| why the bug matters | a text read that sees nothing is indistinguishable from a corpus that holds nothing. This tool is the instrument that established no Bitra reference exists, and the byte P3 item 1 was waiting on was to come from it |
+| fix | `read_win_text()`: BOM, then NULs in the first 4 KiB, then UTF-8; plus a per-encoding tally in the summary line so the next Windows tree cannot be read silently as empty |
+| verified on | the real set (158 ids now, was 0); a synthetic ASCII `.inf` (still reads, reported `utf-8`); an empty directory (still "no `.inf` files", exit 1); `--functions` over 66 tables unchanged |
+| corroboration | `Platforms/Xiaomi/lisa` and `Platforms/Samsung/a52sxq`, the only two `SDM7280` tables and the only two carrying `QCOM0A0C`, `QCOM0A0B`, `QCOM0A10`, `QCOM0A16`; and `0x2D & 0x7F = 0x53` block-kind agreement across all eight ids |
+| the honest caveat | `0A` is measured on SM7325, not on SM7225. No SM7225 driver set and no SM7225 DSDT exists. Two oracles, not a proof |
+| not reached | `TSENS0`/`TSENS1`. The set's only `QCOM04xx` is `QCOM0427` (`qcabd.inf`); no driver set can name a block the corpus has never seen |
+| not gated | the UEFI phase. `AcpiTableDxe` auto-computes `_CID`, and the build ships `QCOM`-prefixed ids with no driver set at all. The set protects P3/P5 authoring, not P2 |
+| unchanged | nothing on the device. The staged P2 payload, its hash and the restore net are as they were; no ASL was edited, since any edit to it invalidates the staged artifact |

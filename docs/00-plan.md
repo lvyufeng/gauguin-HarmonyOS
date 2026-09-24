@@ -18,7 +18,7 @@ the sections under it are the plan.
 | **P0** survey + backup | partitions dumped and verified; no existing port | **done** — 74 partitions carved and signature-checked, `boot`/`abl`/`recovery` hashes match the device, 86 XBL drivers recovered, and `git ls-files Silicon/Qualcomm` confirms no SM7225 package upstream |
 | **P1** mainline kernel | device boots mainline and prints something | **not done** — `work/out/boot-pstore.img` is built, reproducible (`make_boot_image.py --kernel`), and carries both channels a device with no UART needs: the panel itself (`simple-framebuffer` + `simpledrm` + fbcon, so the boot log is photographed off the screen) and pstore (`console-ramoops-0`, readable from Android after a warm reboot). The earlier `fastboot boot` was refused with `Failed to load/authenticate boot image` on the RAM path, and the partition path has never been tried |
 | **P2** UEFI skeleton | the boot manager draws on the phone's screen and UFS appears as a block device | **half met, and it is the half that decides viability** — **our firmware executes on this phone**. The image carrying the current device tree was written to `boot`, and on the reboot the panel filled with our own output, ending in `ASSERT [DxeCore] DxeMain.c(593)`. That text can only come from us: `DxeMain.c:593` is our line, and in a DEBUG build `SerialPortLib` is bound to `FrameBufferSerialPortLib`, so every `DEBUG ()` string is drawn into the framebuffer — which is why the firmware can talk while there is no shell, no boot-manager menu and no UART. (It also means text on the panel is not evidence that BDS ran.) What remains is the second half: DXE stops because at least one *architectural protocol* was never installed, and the name of the first missing one is printed two lines above the assert, on a screen that is legible by design (`GetFontScale ()` gives 10×24 glyphs, ~90×100 of them) and is wiped only when it scrolls. `docs/08` step 4.8 has the reading, and the dep chain that narrows it. The three earlier attempts stopped before any of our code for a reason now fixed: the tree in the image had no `/__symbols__`, so ABL refused the vendor overlay (`docs/07`). The gate said "reaches a shell" until the volume was inventoried and the shell turned out to be absent from *every* platform in the tree, `suryaPkg` included, so it would not have distinguished our firmware from a working one |
-| **P3** ACPI | Windows installer boots and sees UFS | **item 1 half done, 2–4 not started** — the DSDT, `APIC`, `FACP`, `FACS`, `GTDT` and the shared `SSDT` are in the build and were read back out of the artifact; UFS and USB are described and I2C, GPIO, buttons and thermal are not. Those four need `_HID`s a device tree does not carry, and the reference corpus shows the id is `QCOM<family byte><block index>` — the index is readable off the corpus, the byte is not, and it comes from a driver set. `AcpiTableUpdate` is a no-op in ours alone: all 13 sibling packages implement it, 1,188–11,685 bytes, and every one patches the DSDT and reinstalls it. The two nearest SoCs, Kodiak (SM7325) and Rennell (SM7125), write 32 named fields; even the smallest sibling writes two. So the machinery exists and what is missing is the SMEM-derived values our DSDT does not declare. 2–4 are **not** volume-gated: see the space note below |
+| **P3** ACPI | Windows installer boots and sees UFS | **item 1 half done, 2–4 not started** — the DSDT, `APIC`, `FACP`, `FACS`, `GTDT` and the shared `SSDT` are in the build and were read back out of the artifact; UFS and USB are described and I2C, GPIO, buttons and thermal are not. Those four need `_HID`s a device tree does not carry, and the reference corpus shows the id is `QCOM<family byte><block index>`. Both inputs are now known: the index is measured off the 66-table corpus, and the byte is `0A`, measured against the SC7280/Kodiak Windows driver set (8 of gauguin's 10 blocks named, 0 of 10 under every other byte) and corroborated by the only two corpus tables carrying those ids, `Xiaomi/lisa` and `Samsung/a52sxq`. TSENS is the one block neither source names. No `.inf` gates the UEFI phase. `AcpiTableUpdate` is a no-op in ours alone: all 13 sibling packages implement it, 1,188–11,685 bytes, and every one patches the DSDT and reinstalls it. The two nearest SoCs, Kodiak (SM7325) and Rennell (SM7125), write 32 named fields; even the smallest sibling writes two. So the machinery exists and what is missing is the SMEM-derived values our DSDT does not declare. 2–4 are **not** volume-gated: see the space note below |
 | **P4** Windows | desktop appears | not started — destroys `userdata` |
 | **P5** peripherals | touch, Wi-Fi, GPU, audio | not started |
 
@@ -340,23 +340,62 @@ The count is not the point; the decomposition is. A Qualcomm scoped `_HID` is
 table generator — measured across 66 tables, the GPIO controller is `..0C` under
 every modern family and `..0D` under the three older ones, the arbiter is `..0B`
 and `..0C` respectively. Ten of gauguin's twelve blocks therefore have a known
-index in each measured generation, and the only thing missing is which family
-byte SM7225 carries. That byte does not follow the marketing name — pipa and
+index in each measured generation, and the one input left was which family byte
+SM7225 carries. That byte does not follow the marketing name — pipa and
 alioth both declare `SDM8250` and carry 05 and 25 — so it has to be read off a
 driver set, and `--drivers DIR` tries all 256 bytes against each measured index
 table and reports the one that names all ten blocks.
 
+**That byte has now been measured, and it is `0A`.** The set is the SC7280 /
+Kodiak one, `WOA-Project/Qualcomm-Reference-Drivers` → `7280_CLS/200.0.4.0`,
+112 `.cab` files fetched from Windows Update by the reference-laptop OEM and
+extracted to 112 `.inf`. Under the modern index table it names **8 of gauguin's
+10 blocks**, and 0 of 10 under each of the other 255 bytes:
+
+| block | id | block | id |
+|---|---|---|---|
+| SE0u | `QCOM0A16` | SE5 | `QCOM0A10` |
+| SE1 | `QCOM0A10` | SE7 | `QCOM0A10` |
+| SE2 | `QCOM0A10` | SPMI | `QCOM0A0B` |
+| SE3 | `QCOM0A10` | TLMM | `QCOM0A0C` |
+
+The two misses are `SE0` and `SE6`, which the set does not name at all; it would
+take `QCOM0A0E`, the correct index for a UART in that table. So the misses are
+absences in the *set*, not contradictions of the byte — a Kodiak board simply
+does not publish those two as ACPI devices. Two further checks agree: the only
+two tables in the whole 66-table corpus that carry these ids are
+`Platforms/Xiaomi/lisa` and `Platforms/Samsung/a52sxq`, both declaring `SDM7280`,
+both with `Device (GIO0) { Name (_HID, "QCOM0A0C") }`; and all eight ids land on
+the expected *kind* of block in the right bit positions — `qcpmicgpio7280.inf`
+claims `QCOM0A2D` and `qcpmic7280.inf` claims `QCOM0A2B` plus `QCOM0AD3`, where
+`0x2D & 0x7F = 0x53` is a PMIC sub-function. A collision would not organise itself
+that way across eight independent ids.
+
+Stated honestly: `0A` is measured on Kodiak (SM7325), which is SM7225's sibling in
+the same table generation, and no SM7225 Windows driver set and no independent
+SM7225 reference DSDT exists to confirm it on the die itself. It is a measurement
+with two independent oracles, not a proof. It also does **not** resolve TSENS:
+the set's only `QCOM04xx` id is `QCOM0427` (`qcabd.inf`), and neither it nor any of
+the 66 tables describes a thermal sensor of any kind, so TSENS stays unnameable
+and is the one block this measurement does not reach.
+
 Read that as the name being **a declaration rather than a hardware fact**: a device
 binds to the `_HID` its `.inf` lists and to nothing else, so the tables are written
 *to a driver*, not *to the SoC*, and the corpus disagreeing on every SoC is evidence
-the choice is free rather than evidence that a correct name is missing. What is
-missing is the driver set. Copying a name from another SoC without one does not fail
-loudly — a node whose `_HID` no driver claims is absent from Device Manager, and the
-hardware behind it is silently not there, which is worse than a node that is visibly
-missing. **So obtaining the driver set is a precondition for authoring these tables,
-not a later step**, and `--drivers DIR` on the tool reports which of gauguin's twelve
-blocks a given set covers. This is the same mechanism P5 names as "re-bind the WoA
-driver INF"; P3's tables are its first instance. `BTNS` looks like an exception —
+the choice is free rather than evidence that a correct name is missing. The driver
+set was the missing input; it is now in hand and read, and it is what turns
+"a plausible `QCOM`-prefixed name" into "the name a real driver will claim".
+Copying a name from another SoC *without* a set does not fail loudly — a node whose
+`_HID` no driver claims is absent from Device Manager, and the hardware behind it is
+silently not there, which is worse than a node that is visibly missing. Note what
+that does and does not gate, though: **there is no `.inf` gate on the UEFI phase.**
+`_HID` is firmware-supplied, TianoCore's `AcpiTableDxe` auto-computes
+`_CID = PNP0C02` for any `QCOM`-prefixed `_HID` in the reserved range, and the
+build already ships `QCOM0497`/`QCOM0498`/`QCOM24A5` with no driver set at all — so
+none of this can break P2. What it prevents is authoring names that are *silently
+wrong for specific UMDF clients later*. This is the same mechanism P5 names as
+"re-bind the WoA driver INF"; P3's tables are its first instance. `BTNS` looks like
+an exception —
 its `_HID` is a standard `ACPI0011` Generic Buttons Device, so no vendor INF is
 needed for it — but its `_CRS` names `\_SB.PM01` as the controller its `GpioInt`
 resources belong to, and a PMIC node carries the same family byte (`PM01` is
