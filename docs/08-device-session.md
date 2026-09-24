@@ -7277,3 +7277,133 @@ has a predicted number in every field, that `t=` beside `np=` names the allocati
 rather than merely describing a request, and that the row can no longer be read as "the page
 allocator ran out" without also being read as "the 27 failures were not all the same status" — the
 two readings cannot both be right, and one photograph of the bottom of the panel says which.
+
+## Step 4.44 — The bin change cannot widen the search, because rung three does not consult the bins
+
+Step 4.43 ended with the bin question bounded: the linked HOB builder reads five PCDs, and the four
+memory-type PCDs `SiliciumPkg.dsc.inc:50-53` sets for boot services and the loader types are read by
+no `.c` file in the tree. That made it worth asking the prior question, the one that decides whether
+the pending edit belongs on the critical path at all: **if `EfiBootServicesCode` and
+`EfiBootServicesData` had bins, could any of the 27 requests that fail today succeed?** The answer is
+no, and the reason is a property of `FindFreePages` rather than of the DSC.
+
+### `FindFreePages` has four rungs, and only two of them are bins
+
+`FindFreePages` (`Page.c:1312-1398`) is the single funnel. Both callers that matter here go through
+it, and neither passes a type-dependent bound:
+
+| caller | where | `MaxAddress` |
+| --- | --- | --- |
+| `CoreLoadPeImage`'s live `AllocateAnyPages` | `Image.c:731` → `CoreAllocatePages` `Page.c:1566-1577` | `MAX_ALLOC_ADDRESS` (`:1489`, set for every type but `AllocateMaxAddress`, which image loads never use — `:1557-1558`) |
+| `CoreAllocatePoolPages` | `Page.c:2511-2517` | `MAX_ALLOC_ADDRESS`, hard-coded |
+
+The four rungs, in order, each returning only on success:
+
+```
+//  rung 1 — the preferred bin for NewType                    Page.c:1326-1338
+if (((UINT32)NewType < EfiMaxMemoryType) && (MaxAddress >= mMemoryTypeStatistics[NewType].MaximumAddress)) {
+  Start = CoreFindFreePagesI (mMemoryTypeStatistics[NewType].MaximumAddress,
+                              mMemoryTypeStatistics[NewType].BaseAddress, NoPages, NewType, Alignment, NeedGuard);
+  if (Start != 0) { return Start; }
+}
+
+//  rung 2 — the default allocation bin                        Page.c:1343-1359
+if (MaxAddress >= mDefaultMaximumAddress) {
+  Start = CoreFindFreePagesI (mDefaultMaximumAddress, 0, NoPages, NewType, Alignment, NeedGuard);
+  if (Start != 0) { return Start; }
+}
+
+//  rung 3 — the whole map, unconditionally                    Page.c:1367-1377
+Start = CoreFindFreePagesI (MaxAddress, 0, NoPages, NewType, Alignment, NeedGuard);
+if (Start != 0) { return Start; }
+
+//  rung 4 — promote, or give up                               Page.c:1382-1397
+if (!PromoteMemoryResource ()) { P2FreeWhy (...); return 0; }
+return FindFreePages (MaxAddress, NoPages, NewType, Alignment, NeedGuard);
+```
+
+**Rung 3 is `CoreFindFreePagesI (MaxAddress, 0, ...)` with `MaxAddress = MAX_ALLOC_ADDRESS` and
+`BaseAddress = 0` — the entire memory map, with no reference to `mMemoryTypeStatistics` at all.**
+Rungs 1 and 2 can only ever be *narrower* than rung 3, because they are the same call with a tighter
+`MaxAddress` and a non-zero `BaseAddress`. A bin configuration is therefore a **restriction**
+mechanism: it buys a preferred range, and it can never buy reach.
+
+The consequence for the pending edit is immediate. `FindFreePages` returns 0 only if rung 3 failed,
+and rung 3's inputs do not depend on any PCD, any `EFI_MEMORY_TYPE_INFORMATION` entry, or any bin
+range. **So no edit to `SiliciumPkg.dsc.inc:45-53`, and no extension of
+`PrePiHobLib/Hob.c:887-908`, can turn a request that fails at rung 3 into one that succeeds.**
+
+### For the two types on this path, rungs 1 and 2 are the same range anyway
+
+That argument would be enough on its own, but the state of the two boot-service types makes it
+sharper, and it is worth writing down because it was previously only half-stated.
+
+`mMemoryTypeStatistics` is initialised at `Page.c:36-53` in the field order `{ BaseAddress,
+MaximumAddress, CurrentNumberOfPages, NumberOfPages, InformationIndex, Special, Runtime }`
+(`MemoryBin.h:16-24`). Every entry starts as `{ 0, MAX_ALLOC_ADDRESS, 0, 0, EfiMaxMemoryType, … }` —
+so `BaseAddress = 0` and `MaximumAddress = MAX_ALLOC_ADDRESS` for all sixteen types, including
+`EfiBootServicesCode` (`:40`) and `EfiBootServicesData` (`:41`). Then
+`InitializeBinStatisticsFromRange` (`MemoryBin.c:302-313`) walks *every* type, not only the ones the
+HOB named, and clamps:
+
+```c
+    MemoryTypeStatistics[Type].CurrentNumberOfPages = 0;
+    if (MemoryTypeStatistics[Type].MaximumAddress == MAX_ALLOC_ADDRESS) {
+      MemoryTypeStatistics[Type].MaximumAddress = *DefaultMaximumAddress;   //  MemoryBin.c:310-311
+    }
+```
+
+`*DefaultMaximumAddress` is `BaseAddress - 1` (`MemoryBin.c:515`), where `BaseAddress` is the start
+of the one contiguous block `CoreAddMemoryDescriptor` reserved for all the bins
+(`MemoryBin.c:492-497`, `RequiredSize` from `CalculateTotalMemoryBinSizeNeeded` at `:482`). So a type
+with **no** HOB entry does not end up with a degenerate range that fails instantly — it ends up with
+`[0, DefaultMaximumAddress]`, and rung 1 for `EfiBootServicesCode` issues
+`CoreFindFreePagesI (DefaultMaximumAddress, 0, ...)`.
+
+And that is byte-for-byte rung 2's call, because `mDefaultMaximumAddress` in `Page.c` is the same
+`BaseAddress - 1`. **For the two boot-service types, rung 1 and rung 2 search the identical range, and
+rung 3 searches a strict superset of it.** The "boot-services hole" the earlier steps argued about is
+real but it is not a hole in *reachability*: boot-service allocations are unconstrained below the
+reserved block, they are simply unpinned. What a bin would add is the pinning — a fixed block so
+these pages stop being scattered through the map — and that is a fragmentation effect, never a
+capacity one.
+
+### What this does and does not settle
+
+It settles the direction of the change. The bins cannot be the fix for the 27, and the reason is
+structural rather than a matter of choosing the right numbers.
+
+It does **not** prove the bin edit is worthless, and the difference matters, because there is a real
+mechanism left open. Rung 3 needs *contiguous* pages. If boot-service allocations have been sprinkled
+through the region and split it, a 4096-page run can fail to exist even with 6,000 pages free, and
+pinning boot services into a bin is exactly the read-modify-write that would stop that. That
+hypothesis is measurable and the census already measures it: **`free=` large with `largest=` small is
+fragmentation; `free=` small with `largest=` small is capacity.** Step 4.43 predicts `free= ≈6,443`
+and `largest= 4096`, which is neither — a 4096-page run is a healthy largest block, and if it is
+really 4096 then no request on this path (`np <= 97` for an image, `np = 5` for the largest
+`FixupData`) can fail at rung 3 for want of contiguity. So the two fields read together decide whether
+the bin change is a real fix, a robustness measure, or neither — and that reading is still owed.
+
+### The contradiction, restated with rung 3 in it
+
+Step 4.43 showed that `EFI_OUT_OF_RESOURCES` out of an image load requires `n >= 1`, and that the
+status on this path is set at exactly one place, `Page.c:1574-1577`:
+
+```c
+    Start = FindFreePages (MaxAddress, NumberOfPages, MemoryType, Alignment, NeedGuard);
+    if (Start == 0) {
+      Status = EFI_OUT_OF_RESOURCES;
+      goto Done;
+    }
+```
+
+Rung 3 makes that equivalence tight in both directions: `Start == 0` means the **whole map** could not
+hold `NumberOfPages` contiguous pages at the forced alignment. So each of the 27, if it really is
+`EFI_OUT_OF_RESOURCES`, is a statement that a request of at most 97 pages could not be placed anywhere
+in the map. Twenty-seven of those, on a board with gigabytes free, in the same run the census prints a
+`largest=` — that is the thing to look at, and it is why `P2 ERR` (one line, one status name and its
+count) is the first thing to read rather than the census.
+
+Nothing was flashed and nothing in the firmware changed. The change this step makes is to the *status*
+of the pending bin edit: it moves off the critical path and becomes conditional on a measurement, and
+the measurement is already in the payload that is waiting to be flashed.
