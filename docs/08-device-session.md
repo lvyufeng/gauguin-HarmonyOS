@@ -6613,3 +6613,291 @@ describes, and if it says `Out of Resources` the census is what turns that into 
 a full heap or a fragmented one. Either way the next measurement is the same one, which
 is why it is built and staged rather than built on demand.
 
+## Step 4.42 — The ladder was counting itself, and the volume is where the fix costs nothing
+
+Step 4.41 ended owing one thing it could not finish: the host-side cross-check of the
+recorded 46-character `P2 SEQ` against `tools/pe-facts.py`'s per-entry PE facts. Doing
+it found the falsified premise it was for, and then something the write-up had not been
+about at all — the probe staged in that step was going to count the instrument as part
+of the run, and could have described a ladder rung in place of the run's first failure.
+This step is that reading, the source corrections it forced, and the payload rebuilt with
+them. Nothing is flashed; the device-side reading is still the one that is owed.
+
+### The volume is memory-mapped, so every file it reads is a second allocation
+
+`FVMAIN.Fv`'s own header, read out of the built volume rather than recalled:
+
+```
+FvLength 0x703000   Attributes 0x0003feff   HeaderLength 72   Revision 2
+  bit  9  EFI_FVB2_MEMORY_MAPPED   1
+  bit 10  ERASE_POLARITY           1
+  bits 16..20  ALIGNMENT           3   -> EFI_FVB2_ALIGNMENT_8 (PiFirmwareVolume.h:54)
+```
+
+Bit 9 is the one that matters. `FwVol.c:346-347` sets `FvDevice->IsMemoryMapped = TRUE`
+from it, and that turns on the per-file copy in `FvReadFile`:
+
+```c
+if (FvDevice->IsMemoryMapped) {
+  if (!FvDevice->LastKey->FileCached) {
+    WholeFileSize = IS_FFS_FILE2 (FfsHeader) ? FFS_FILE2_SIZE (FfsHeader) : FFS_FILE_SIZE (FfsHeader);
+    FfsHeader     = AllocateCopyPool (WholeFileSize, FfsHeader);
+    if (FfsHeader == NULL) {
+      return EFI_OUT_OF_RESOURCES;
+    }
+    FvDevice->LastKey->FfsHeader  = FfsHeader;
+    FvDevice->LastKey->FileCached = TRUE;
+  }
+}
+```
+
+`FileCached` (`FwVolRead.c:322-332`) is a latch on the file's key and nothing on the
+load path resets it. The only `CoreFreePool` calls near it — `FwVol.c:276` and `:279` —
+are in `DestroyFvDevice`-class teardown. So **every promoted module's whole FFS file is
+copied into the pool once and stays there for the entire load window**, beside its own
+image. That is a second heap consumer in the same window as the image allocations, and
+it had never been measured. `tools/pe-facts.py` now prints it, because it is a property
+of the volume the tool was already walking:
+
+| over the 46 promoted entries | bytes | pages |
+| --- | --- | --- |
+| Σ whole-file size — what `AllocateCopyPool` is asked for | 2,947,366 | **759** |
+| Σ image request — `SizeOfImage + (SectionAlignment if > 0x1000)` | 6,397,952 | **1,562** |
+| together | | **2,321 = 9.07 MiB** |
+
+759 is not 2,947,366 rounded up once (719.6, which is the 720 the first pass at this
+arithmetic produced before the per-file rounding was separated out): each file is copied
+by its own `AllocateCopyPool`, so each one rounds up on its own. The largest single cache
+entry is `BdsDxe` at 385,166 B = **95 pages**, and `DALSys` is next at 76.
+
+This sharpens the 4.18 crux without changing it. The run does not ask the heap for 1,562
+pages and then fail on the 1,563rd; by slot 46 it asks for 1,562 image pages **and** 759
+cache pages, against the ~7,261 pages `pe-facts.py` derives for `DxeCore`'s conventional
+region. The margin is 3.1x rather than the 4.6x the same tool printed for images alone —
+still far too wide to be a full-heap story, which is exactly why the question stays where
+4.18 left it: state at the instant, not room in total.
+
+### The staging measurement, which is the strongest form of the crux so far
+
+`pe-facts.py`'s cumulative column, joining the recorded `SEQ` to each entry's PE header:
+
+| slot | entry | request | cum demand | result |
+| --- | --- | --- | --- | --- |
+| 18 | `NpaDxe` | 20 | 566 | `s` — the last success before the run |
+| 19 | `RpmhDxe` | 16 | 582 | `L` — the first failure |
+| 20 | `PdcDxe` | 9 | 591 | `L` |
+| 21 | `ClockDxe` | 47 | 638 | `L` |
+| 22 | `ShmBridgeDxe` | 9 | 647 | `s` — the run's last success |
+
+**Of the 81 pages of demand between the last clean success and the run's last success, 72
+were refused** — 89%. And `ClockDxe`'s 47 pages, the largest of the three, is not a
+request anyone would call large: it is a 192,562-byte file whose `SizeOfImage` is
+192,512, so its request is the image rounded up and nothing else — its
+`SectionAlignment` is 0x1000, which is why the runtime link line's 64 KiB does not apply
+to it — and the requests that succeed on either side of it are 20 pages and 9. A window
+in which 20 succeeds, 16 fails, 9 fails, 47 fails and 9 succeeds is not a window running
+out of a room-shaped resource, and then every request for the next 24 slots fails.
+
+### The premise in `P2Retry`'s comment was false, and the correction had a second falsification in it
+
+The comment beside `P2Retry` asserted that every one of the 27 failures asks for
+`EfiBootServicesCode`, on the grounds that the memory type comes from the PE subsystem
+(`Image.c:631-641`) and only 10 of the 46 promoted images are subsystem-12. The join says
+otherwise, and it says it without the phone: **21 subsystem-11 against 6 subsystem-12** —
+`SdccDxe`, `VariableRuntimeDxe`, `ResetSystemRuntimeDxe`, `EmbeddedMonotonicCounter`,
+`RealTimeClock`, `CapsuleRuntimeDxe`. The four subsystem-12 images that succeed are
+`EnvDxe`, `ReportStatusCodeRouterRuntimeDxe`, `StatusCodeHandlerRuntimeDxe` and
+`RuntimeDxe`, and they ask for 15, 112, 96 and 112 pages — **335 pages against the
+150-page `PcdMemoryTypeEfiRuntimeServicesCode` bin** (`SiliciumPkg.dsc.inc:49`), so that
+bin is empty by slot 5, fourteen slots before the first failure. After that the runtime
+requests fall to the same default window the boot-service ones use, because boot services
+have no bin at all: `PrePiHobLib/Hob.c:887-905` builds the type-information HOB from five
+entries and none of them is a boot-service type, even though
+`PcdMemoryTypeEfiBootServicesCode` (1000) and `PcdMemoryTypeEfiBootServicesData` (800)
+exist at `SiliciumPkg.dsc.inc:50-51` and are never read.
+`AllocateMemoryTypeInformationBins` (`MemoryBin.c:447`) carves one contiguous block off
+the top of the heap and lowers the default window's ceiling to just below it (`:515`), so
+the type is a real difference that does not survive to the failure.
+
+The correction I wrote into the comment then contained a claim of its own that is false,
+and the same join falsifies it: *"they ask for 96 to 112 pages against the 9 to 17 the
+other 21 ask for."* The 21 subsystem-11 failures ask for **9 to 97** pages — `BdsDxe` is
+97, `PmicDxe` 34, `UFSDxe` 28, `GpiDxe` 22 — and the six subsystem-12 ones for **26 to
+112** (`SdccDxe` is 26: it is subsystem-12 with `SectionAlignment` 0x1000, so it carries
+no 64-KiB penalty at all). The ranges overlap at both ends, and `bs9`/`bs16`-versus-
+`ShmBridgeDxe` already made size a non-explanation: **size is not what decides these
+either.** What `SectionAlignment` 0x10000 does explain is only why five of the six ask
+for a 64-KiB-rounded request: `EDKII.DXE_RUNTIME_DRIVER` is linked with `/ALIGN:0x10000`
+(`SiliciumPkg.dsc.inc:22-23`) where every other module type gets `/ALIGN:0x1000`
+(`:19-20`), and `Image.c:682-688` turns that into `SizeOfImage + SectionAlignment`. That
+is a property of the DSC, not of the allocator.
+
+Both of those sentences are corrected in the sources this step, and so is `Page.c`'s
+census comment for the same reason: it claimed the runtime types are clipped by 16 pages
+where `EfiBootServicesCode` is clipped by one, which is the `#else` arm of
+`ProcessorBind.h:163-170` that `SiliciumPkg.dsc.inc:14` removes from the build.
+`RUNTIME_PAGE_ALLOCATION_GRANULARITY` is 0x1000, so every one of the 46 is clipped by the
+same single page and `raw == big` on every line the device will print. The field stays —
+it is what would make `raw > big` readable the day the granularity changes — but the
+sentence that said otherwise is gone.
+
+### The probe defect: `P2LargestAlloc` runs inside the dispatch loop, and its rungs are terminal failures
+
+`P2LargestAlloc` (`Dispatcher.c:195-219`) walks a ladder — `{4096, 1024, 256, 64, 16, 4, 1}`
+pages — of `CoreAllocatePages (AllocateAnyPages, EfiBootServicesData, N, …)` and returns
+the first rung that succeeds. It has three call sites: `P2Key`'s two `free=` readings
+(`:280`, `:291`), and `P2Tick` (`:683`).
+
+`P2Tick` is called after **every attempted dispatch** — the load-failure path
+(`:1122`) and the start path (`:1167`) — so the ladder runs once per tick from the first
+tick onward, and the first tick is `PcdDxe` starting at slot 1, eighteen slots before the
+first load failure at slot 19. Every rung that fails is a terminal page failure at
+`FindFreePages`'s last rung, which is precisely the condition `P2FreeWhy` exists to
+record. And `P2FreeWhy` counts before it judges (`Page.c:1182-1187`): the tally takes
+every arrival, and the *description* is taken by the first arrival of four pages or more.
+
+Three consequences, in ascending order of how much they mattered:
+
+  * `P2 FWTY`'s counts included the instrument. Every rung is `EfiBootServicesData`, and
+    no promoted image asks for `EfiBootServicesData` at all — the images are
+    `EfiBootServicesCode` (21 failures) or `EfiRuntimeServicesCode` (6) — so the `bd`
+    field in the pre-guard build was going to be **a count of failed ladder rungs and
+    nothing else**. A field built to measure a category of failure would have measured
+    the instrument instead. The `n` total was inflated with it; `bc` and `rt` were not,
+    because no rung ever asks for either of those types.
+  * **The described record could have been a rung.** A rung of 16, 64, 256, 1024 or 4096
+    pages is describe-eligible, and the first one to fail before slot 19 would have set
+    `mP2FwSeen` — after which `P2 FWHY` describes *that* instead of the run's first
+    image-sized refusal, with `a=1` and `np=` one of those powers of four. The 4096-page
+    rung is 16 MiB against a 28.4 MiB heap, which makes it the rung most likely to be
+    the first to fail; whether the description was actually lost depends on which rung
+    first found nothing, which is the point — an instrument whose output depends on an
+    unmeasured coincidence cannot be read.
+  * The 4.39 argument about how many probes run inside dispatch was counting the
+    instrument as one of them.
+
+The fix is a flag set and cleared **inside `P2LargestAlloc`** and not at its call sites,
+because there are three of them and because the ladder's own report walks the same ladder
+before the digest is printed. `mP2FwProbe` (`Dispatcher.c:191`, set at `:204`, cleared at
+`:211` and `:216`) is declared in `DxeMain.h` beside `P2FreeWhyReport` and read at the
+top of `P2FreeWhy` (`Page.c:1167-1170`), which returns before the tally. The count is not
+thrown away: `mP2FwSkip` (`Page.c:1132`) is printed as a new **`g=%d`** field, and it is
+the only field on either line that measures the instrument — one increment per rung that
+found nothing, so `free=1024` beside `g=1` on a tick is the 4096-page rung failing and
+the 1024-page one succeeding. It is also what distinguishes this build's `P2 FWHY` row
+from the previous build's, which was the same row without the field.
+
+Nothing on the load path got more expensive: the guard is inside a function that is only
+entered on a terminal failure, and `P2LargestAlloc` gained two stores.
+
+### The rebuilt payload differs from the control by one literal, and costs no volume
+
+`work/out/p2-freewhy-g/Mu-gauguin-silicon-gzip.img`, sha256
+`cbe5a13114fc4a0465677e480a29a76fa2836cf2ae00fb9e9838c490e0102132`, still 1,142,784
+bytes. (An earlier rebuild of this same step — the `g=` guard alone, before the two
+`Mem/Page.c` self-references in the line-number section below were corrected — hashed
+`4c7456d01d9c626f…`. The comment edit is a source edit, so it made a new payload; the hash
+in this document is the one on disk.) The same three checks 4.41 ran, run again against
+`p2-freewhy` — the payload built before the guard, sha256 `eb1601ab98fe97d2…` and
+unchanged, so the control is intact:
+
+  * **All 123 FVFF entries are identical** in GUID, type, size, state and offset. Not
+    "one file grew": nothing moved, and the walk agrees with GenFv's own map of the volume
+    — 123 offsets and GUIDs, zero mismatches, for all three payloads. The only size that
+    changed anywhere in the payload is the LZMA section in `FVMAIN_COMPACT`
+    (`9E21FD93-…`), 0xf8b65 → **0xf8b78**, nineteen bytes *larger* — and that section is
+    the compressed container, not a file in the volume. (4.41's own write-up called that
+    GUID "the FFS file DxeCore"; it is the section, and the 282-byte growth it recorded is
+    that section's. The number stands, the name was off by one level of nesting.)
+  * **The decompressed inner FVs are 7,352,320 bytes each, and every byte outside
+    `DxeCore`'s FFS file is identical.** `DxeCore`'s header is at the same offset and the
+    file is the same size — `0x4f8`, type `0x05`, `0x2a230` — and all **99,277** differing
+    bytes lie inside it, from `0x6c4` to `0x2a240` against the file's `0x4f8`…`0x2a728`.
+    A comment-only source edit moving 99 KB of a DEBUG PE is the line-number table, which
+    is the largest thing in a DEBUG image that tracks a comment. The volume's free space is
+    **760 bytes** (`0x703000` − `0x702d08`), unchanged.
+  * **The strings of the two differ by exactly one literal**: `P2 FWHY … c=%d` is gone
+    and `P2 FWHY … c=%d g=%d` is in its place. One caveat, because it is the kind of thing
+    that gets written up as a clean result and is not: a 6-byte-printable extractor also
+    reports `R*eK9+` present in the old image and absent in the new. It is four AArch64
+    instructions that happen to be printable (`2a 65 4b 39` is an `ldrb`) sitting where the
+    line tables shifted by a byte or two — code misread as text, not a literal. The
+    literals differ by one.
+
+`tools/probe-fingerprint.py --expect P2FreeWhy` passes on the new payload — exit code 0,
+measured without a pipe this time, because an earlier run of the same check read `rc` after
+`tail` and so measured `tail` — and
+the image carries 10 of 10 instruments. The marker caveat is worth writing down, because
+it is the one thing that check cannot do: `P2FreeWhy` is a *function name* that the tool
+resolves out of `Mem/Page.c`, so it is present in the previous build too and is no longer
+a discriminator between them. The discriminator is `g=`, and the way to check it is the
+strings diff above. `tools/console-budget.py` re-run says the two lines are 52 and 79
+columns and a digest copy is **49 rows** against a 99-row panel, so two copies still fit:
+`g=%d` cost nothing on the panel either.
+
+### The line numbers this step's edits moved
+
+The doc's citations were stale by the probes' own growth, and this step's edits moved them
+again. Re-measured, so the next step can cite these instead:
+
+| file | symbol | now | before this step |
+| --- | --- | --- | --- |
+| `Mem/Page.c` | `CoreFindFreePagesI` | 903 | 903 |
+| `Mem/Page.c` | `P2FreeWhy` | 1136 | 1129 |
+| `Mem/Page.c` | `P2FreeWhyReport` | 1266 | 1259 |
+| `Mem/Page.c` | `FindFreePages` | 1313 | 1306 |
+| `Mem/Page.c` | `CoreInternalAllocatePages` | 1421 | 1414 |
+| `Mem/Page.c` | `CoreAllocatePages` | 1637 | 1630 |
+| `Mem/Page.c` | `CoreFreePages` | 1782 | 1775 |
+| `Dispatcher/Dispatcher.c` | `P2Tick` | 659 | 651 |
+| `Dispatcher/Dispatcher.c` | `P2Tick ('L')` / `('S')` | 1122 / 1167 | 1114 / 1159 |
+| `Dispatcher/Dispatcher.c` | `P2Digest` | 2221 | 2213 |
+| `Dispatcher/Dispatcher.c` | `P2LargestAlloc` | 195-219 | — |
+
+Inside `CoreInternalAllocatePages`, which is where the next reading will be spent:
+
+| statement | now | 4.41 cited |
+| --- | --- | --- |
+| `Alignment = DEFAULT_PAGE_ALLOCATION_GRANULARITY` | 1451 | — |
+| the `RUNTIME_PAGE_ALLOCATION_GRANULARITY` override | 1456-1458 | — |
+| `if (Alignment != EFI_PAGE_SIZE) { NeedGuard = FALSE; }` | 1468-1470 | `:1210` — 258 lines short |
+| `NumberOfPages += EFI_SIZE_TO_PAGES (Alignment) - 1` | 1478 | — |
+| `MaxAddress = MAX_ALLOC_ADDRESS` | 1489 | `:1305` — 184 lines short |
+| `Status = EFI_OUT_OF_RESOURCES` | 1575 | `:1313` — 262 lines short |
+| `if (Start == 0)` — its only predecessor | 1574 | — |
+
+The three `4.41 cited` figures are the ones that step wrote for statements inside this one
+function, and all three were short — by 184, 258 and 262 lines, which is roughly the length
+of the probe block that sits above them. The likely mechanism is that 4.41 numbered the
+file as it was before the probes were added and did not re-measure after; the effect is
+that a reader following `:1305` lands in `PromoteMemoryResource`, not in the allocator. The
+`Target & EFI_PAGE_MASK` test is the fourth: 4.41 and the `P2FreeWhy` header comment both
+called it `:1033`, and it is **1038** now. Two of those four numbers were fixed in the
+source this step — `Mem/Page.c`'s `:1305` and `:1033` self-references — which is a comment
+edit and therefore another payload hash; the numbers in 4.41's prose are left standing,
+because a step that rewrites an earlier step's measurements to agree with a later one
+destroys the only record of what was measured when. This table is the correction.
+
+The `PromoteMemoryResource` / `CoreAddMemoryDescriptor` / `CoreConvertPages` half of the
+file, everything above the probes, is unmoved.
+
+### Still nothing flashed, and the reading is still owed
+
+The ordering rule is unchanged and it is still the reason this step stops here:
+**先读屏，再刷下一次**, because the print ring holds one boot's worth and the payload now on
+`boot` is the one whose screen is the only evidence of what its own run did.
+
+```
+tools/probe-fingerprint.py --read        # in TWRP: which payload is on `boot`
+tools/panel-text.py --decode PHOTO.jpg   # boot it, photograph the bottom of the panel
+python3 tools/probe-fingerprint.py --expect P2FreeWhy \
+    work/out/p2-freewhy-g/Mu-gauguin-silicon-gzip.img   # passes; do this before flashing
+```
+
+The new probe is worth a flash only after `p2-variants` has been read, for the reason
+4.41 gave: if the reading says the retried request succeeds at the assert, the answer is
+per-request state inside `FindFreePages` and the `P2 FWHY` census is what turns it into
+either a full heap or a fragmented one. This step does not change that order. It changes
+what the census means when it arrives: it is now guaranteed to describe a real request,
+and the `g=` beside it says how much of the run's own instrument it took to know.
+

@@ -530,6 +530,8 @@ def main():
           f"{'subsys':>6} {'type':>3} {'req bytes':>10} {'pages':>6} "
           f"{'cum pages':>10}")
     cum, cum_s, cum_l = 0, 0, 0
+    cum_cache = 0                       # pages the volume's own copies of the files take
+    biggest_cache = ("", 0)
     marks = []          # (ch, name, subsystem, pages, pages, cumulative)
     for k, ch in enumerate(args.seq):
         gs = apriori[k + 1] if k + 1 < len(apriori) else None
@@ -539,6 +541,13 @@ def main():
         req = pe["SizeOfImage"] + (pe["SectionAlignment"]
                                    if pe["SectionAlignment"] > 0x1000 else 0)
         pg = -(-req // 0x1000)
+        # The volume's copy of this file, in the heap beside this image. See the note
+        # over the print below for why it is pages-per-file and not a byte total
+        # rounded once.
+        cp = -(-pe["ffs_size"] // 0x1000)
+        cum_cache += cp
+        if cp > biggest_cache[1]:
+            biggest_cache = (name, cp)
         rt = pe["Subsystem"] == 12
         cum += pg
         if ch == "s":
@@ -554,6 +563,21 @@ def main():
           f"({cum * 0x1000 / (1024 * 1024):.2f} MiB)")
     print(f"  s: {cum_s} pages = {cum_s * 0x1000} B")
     print(f"  L: {cum_l} pages = {cum_l * 0x1000} B")
+    # The other half of what the run asks the heap for, and the half this table used to
+    # leave out: FVMAIN.Fv's header has EFI_FVB2_MEMORY_MAPPED set, so FwVol.c:346-347
+    # sets FvDevice->IsMemoryMapped and FwVolRead.c:322-332 copies *every* file it reads
+    # into the pool. FileCached is a latch and nothing on the load path resets it; the
+    # only CoreFreePool calls are FwVol.c:276/:279 in teardown. So the copy is live for
+    # the whole load window, beside the image.
+    #
+    # It is summed per file, not as bytes-rounded-once, because each copy is its own
+    # AllocateCopyPool: 2,947,366 B is 719.6 pages rounded once and 759 rounded 46
+    # times, and 759 is what the heap sees.
+    print(f"  plus the volume's own copies of the same {len(marks)} files, which are "
+          f"allocated beside their\n  images and never freed inside the load window "
+          f"(FwVolRead.c:328): {cum_cache} pages, the largest\n  being "
+          f"{biggest_cache[0]} at {biggest_cache[1]} - so the run asks for "
+          f"{cum + cum_cache} pages = {(cum + cum_cache) * 0x1000 / (1024 * 1024):.2f} MiB")
     print("as the allocator sees it: the same numbers, to the page. "
           "RUNTIME_PAGE_ALLOCATION_GRANULARITY is 0x1000 on this build "
           "(SiliciumPkg.dsc.inc:14 satisfies the #ifdef), so no per-type rounding "
@@ -696,8 +720,10 @@ def main():
         print(f"    DxeCore's own image, so DxeCore's conventional region is")
         print(f"    about {left} pages = {left * 0x1000 / (1 << 20):.1f} MiB "
               f"- and the whole run asks for {cum}.")
-        print(f"  ratio: {left / cum:.1f}x. A 9-page request cannot be refused for "
-              f"want of room.")
+        print(f"  ratio: {left / cum:.1f}x against the images alone, "
+              f"{left / (cum + cum_cache):.1f}x once the volume's own\n"
+              f"    copies of the same files are added - both ends of that range are a "
+              f"wide margin.\n    A 9-page request cannot be refused for want of room.")
 
 
 if __name__ == "__main__":

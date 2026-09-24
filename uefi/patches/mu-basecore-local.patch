@@ -329,10 +329,10 @@ index 39668123..8405bc31 100644
  #define  USB_INTERFACE_SIGNATURE  SIGNATURE_32 ('U', 'S', 'B', 'I')
  #define  USB_BUS_SIGNATURE        SIGNATURE_32 ('U', 'S', 'B', 'B')
 diff --git a/MdeModulePkg/Core/Dxe/Dispatcher/Dispatcher.c b/MdeModulePkg/Core/Dxe/Dispatcher/Dispatcher.c
-index d7c7147e..fab16910 100644
+index d7c7147e..d3c5f7ad 100644
 --- a/MdeModulePkg/Core/Dxe/Dispatcher/Dispatcher.c
 +++ b/MdeModulePkg/Core/Dxe/Dispatcher/Dispatcher.c
-@@ -60,6 +60,589 @@ EFI_LOCK  mDispatcherLock = EFI_INITIALIZE_LOCK_VARIABLE (TPL_HIGH_LEVEL);
+@@ -60,6 +60,631 @@ EFI_LOCK  mDispatcherLock = EFI_INITIALIZE_LOCK_VARIABLE (TPL_HIGH_LEVEL);
  //
  BOOLEAN  gDispatcherRunning = FALSE;
  
@@ -456,6 +456,16 @@ index d7c7147e..fab16910 100644
 +//
 +STATIC EFI_STATUS  mP2ApriSt[P2BRINGUP_APRIORI_MAX];
 +
++//
++// P2BRINGUP: set while the ladder below is running, and read by Mem/Page.c's
++// P2FreeWhy. The ladder is a measurement of the heap, and each of its failed rungs is
++// indistinguishable from a real request by its arguments alone - all of them are
++// AllocateAnyPages for EfiBootServicesData in powers of four - so the only honest way
++// to keep it out of the census is to say when it is running. See the note on the
++// extern in DxeMain.h for what goes wrong without it.
++//
++BOOLEAN  mP2FwProbe = FALSE;
++
 +STATIC
 +UINTN
 +P2LargestAlloc (
@@ -467,14 +477,19 @@ index d7c7147e..fab16910 100644
 +  EFI_STATUS            Status;
 +  UINTN                 Index;
 +
++  mP2FwProbe = TRUE;
++
 +  for (Index = 0; Index < sizeof (Ladder) / sizeof (Ladder[0]); Index++) {
 +    Memory = 0;
 +    Status = CoreAllocatePages (AllocateAnyPages, EfiBootServicesData, Ladder[Index], &Memory);
 +    if (!EFI_ERROR (Status)) {
 +      CoreFreePages (Memory, Ladder[Index]);
++      mP2FwProbe = FALSE;
 +      return Ladder[Index];
 +    }
 +  }
++
++  mP2FwProbe = FALSE;
 +
 +  return 0;
 +}
@@ -576,15 +591,34 @@ index d7c7147e..fab16910 100644
 +//
 +// P2 RETRY is the decisive part and it is the reason this is not just a census.
 +//
-+// It was built to re-attempt the requests the failures were made of, and it
-+// re-attempted the wrong ones. `EfiRuntimeServicesCode` is what the
-+// *runtime*-typed images ask for, and every one of the 27 failures is a
-+// boot-service image, which asks for `EfiBootServicesCode`: the memory type comes
-+// from the PE subsystem and not from the relocation fallback (Image.c:629-646),
-+// and of the 46 promoted only the 10 subsystem-12 images are runtime-typed, and
-+// only they are rounded to 16 pages and forced to 64-KiB alignment. So the four
-+// sizes below are kept as a control for the runtime bins, and the two that decide
-+// the question are the exact requests the failures made:
++// It was built to re-attempt the requests the failures were made of, and the two
++// small ones still are. The claim that stood here first - that every one of the 27
++// asks for `EfiBootServicesCode` because the type comes from the PE subsystem
++// (Image.c:629-646) and only 10 of the 46 promoted images are subsystem-12 - is
++// measured and false: joining the recorded 46-character P2 SEQ to each entry's PE
++// header with tools/pe-facts.py gives 21 subsystem-11 failures against 6 subsystem-12
++// ones (SdccDxe, VariableRuntimeDxe, ResetSystemRuntimeDxe, EmbeddedMonotonicCounter,
++// RealTimeClock, CapsuleRuntimeDxe). What that changes is the bin each request
++// prefers and nothing else: the memory *type* selects a bin, and 150 pages of
++// RuntimeServicesCode were already consumed by the four runtime images that loaded
++// before the first failure, so those six fall through to the default window - the same
++// one the 21 fall into, because boot services have no bin at all. It is not an
++// alignment or a rounding difference: RUNTIME_PAGE_ALLOCATION_GRANULARITY is 0x1000 on
++// this build, so Alignment is one page for all 46. Size does not separate the two
++// populations either, and an earlier revision of this comment said it did: the 21
++// subsystem-11 failures ask for 9 to 97 pages (BdsDxe is the 97, GpiDxe 22 and PmicDxe
++// 34 are nearer to the runtime sizes than to RpmhDxe's 16) and the six subsystem-12 ones
++// for 26 to 112, so the ranges overlap at both ends. The one thing the type buys them is
++// that `SectionAlignment` is 0x10000 on five of the six, which `Image.c:682-688` turns
++// into a request 64 KiB above `SizeOfImage` - a consequence of how
++// EDKII.DXE_RUNTIME_DRIVER is linked (SiliciumPkg.dsc.inc:22-23's /ALIGN:0x10000
++// against :19-20's /ALIGN:0x1000), not of anything the allocator decides. `bs9` and
++// `bs16` stay the decisive pair because both images in the pair - PdcDxe at slot 20 and
++// RpmhDxe at slot 19, the first failure of the run - are subsystem-11, so the pair tests
++// the heap rather than the type; the four control requests below are 16, 48 and 112 pages
++// of EfiRuntimeServicesCode and 16 of EfiRuntimeServicesData - below, inside and at the
++// top of the 26-to-112 range the six runtime failures asked in - and they put the same
++// question to their type's bin that `bs9` puts to the default window:
 +//
 +//   bs9  -- PdcDxe's request, which failed at slot 20 and is byte for byte what
 +//           ShmBridgeDxe asked for at slot 22 and got. That pair is the whole
@@ -690,6 +724,14 @@ index d7c7147e..fab16910 100644
 +  // allocation of its own. The record is a snapshot of the run - Mem/Page.c takes it
 +  // at the moment the allocator gives up - but the tally that comes with it is live,
 +  // so P2Retry's six requests have to happen after the line that counts them.
++  //
++  // That ordering is necessary and it was not sufficient: the six probes here are the
++  // only ones below, but P2LargestAlloc runs three times before this - once per P2Tick
++  // inside the dispatch loop, and once for `P2 FREE largest=` above - and every rung
++  // it fails is a terminal page failure that Mem/Page.c counts. mP2FwProbe is what
++  // keeps those out, because a ladder probe and a real request are the same three
++  // arguments. Without it the tally counts the instrument and the described record can
++  // be a 4096-page EfiBootServicesData probe rather than the first image-sized refusal.
 +  //
 +  P2FreeWhyReport ();
 +
@@ -922,7 +964,7 @@ index d7c7147e..fab16910 100644
  //
  // Module globals to manage the FwVol registration notification event
  //
-@@ -483,11 +1066,19 @@ CoreDispatcher (
+@@ -483,11 +1108,19 @@ CoreDispatcher (
              DriverEntry->Initialized = TRUE;
            }
  
@@ -942,7 +984,7 @@ index d7c7147e..fab16910 100644
            //
            // If it's an error don't try the StartImage
            //
-@@ -519,6 +1110,20 @@ CoreDispatcher (
+@@ -519,6 +1152,20 @@ CoreDispatcher (
  
          Status = CoreStartImage (DriverEntry->ImageHandle, NULL, NULL);
  
@@ -963,7 +1005,7 @@ index d7c7147e..fab16910 100644
          REPORT_STATUS_CODE_WITH_EXTENDED_DATA (
            EFI_PROGRESS_CODE,
            (EFI_SOFTWARE_DXE_CORE | EFI_SW_PC_INIT_END),
-@@ -896,6 +1501,8 @@ CoreAddToDriverList (
+@@ -896,6 +1543,8 @@ CoreAddToDriverList (
  
    CoreReleaseDispatcherLock ();
  
@@ -972,7 +1014,7 @@ index d7c7147e..fab16910 100644
    return EFI_SUCCESS;
  }
  
-@@ -1309,6 +1916,16 @@ CoreFwVolEventProtocolNotify (
+@@ -1309,6 +1958,16 @@ CoreFwVolEventProtocolNotify (
                                    &Attributes,
                                    &Size
                                    );
@@ -989,7 +1031,7 @@ index d7c7147e..fab16910 100644
          if (!EFI_ERROR (GetNextFileStatus)) {
            if (Type == EFI_FV_FILETYPE_DXE_CORE) {
              //
-@@ -1412,6 +2029,26 @@ CoreFwVolEventProtocolNotify (
+@@ -1412,6 +2071,26 @@ CoreFwVolEventProtocolNotify (
                          );
      if (!EFI_ERROR (Status)) {
        AprioriEntryCount = SizeOfBuffer / sizeof (EFI_GUID);
@@ -1016,7 +1058,7 @@ index d7c7147e..fab16910 100644
      } else {
        AprioriEntryCount = 0;
      }
-@@ -1433,11 +2070,69 @@ CoreFwVolEventProtocolNotify (
+@@ -1433,11 +2112,69 @@ CoreFwVolEventProtocolNotify (
            DriverEntry->Scheduled = TRUE;
            InsertTailList (&mScheduledQueue, &DriverEntry->ScheduledLink);
            CoreReleaseDispatcherLock ();
@@ -1086,7 +1128,7 @@ index d7c7147e..fab16910 100644
      }
  
      //
-@@ -1470,6 +2165,241 @@ CoreInitializeDispatcher (
+@@ -1470,6 +2207,241 @@ CoreInitializeDispatcher (
    PERF_FUNCTION_END ();
  }
  
@@ -1328,7 +1370,7 @@ index d7c7147e..fab16910 100644
  //
  // Function only used in debug builds
  //
-@@ -1486,11 +2416,73 @@ CoreDisplayDiscoveredNotDispatched (
+@@ -1486,11 +2458,73 @@ CoreDisplayDiscoveredNotDispatched (
  {
    LIST_ENTRY             *Link;
    EFI_CORE_DRIVER_ENTRY  *DriverEntry;
@@ -1405,10 +1447,10 @@ index d7c7147e..fab16910 100644
 +  }
  }
 diff --git a/MdeModulePkg/Core/Dxe/DxeMain.h b/MdeModulePkg/Core/Dxe/DxeMain.h
-index 5a8e3804..45d02ecb 100644
+index 5a8e3804..2be2f2d3 100644
 --- a/MdeModulePkg/Core/Dxe/DxeMain.h
 +++ b/MdeModulePkg/Core/Dxe/DxeMain.h
-@@ -523,6 +523,17 @@ CoreTerminateMemoryMap (
+@@ -523,6 +523,29 @@ CoreTerminateMemoryMap (
    IN UINTN  MapKey
    );
  
@@ -1422,6 +1464,18 @@ index 5a8e3804..45d02ecb 100644
 +P2FreeWhyReport (
 +  VOID
 +  );
++
++//
++// P2BRINGUP: TRUE only while P2LargestAlloc (Dispatcher.c) is walking its ladder.
++// The ladder is up to seven CoreAllocatePages calls of its own, every failed rung of
++// which is a terminal page failure and therefore lands in P2FreeWhy - so without this
++// the census would count the instrument along with the run, and, worse, a 4096-page
++// EfiBootServicesData probe taken at the very first P2Tick would become the
++// *described* first failure, eighteen slots before any image failed to load. It is
++// declared here because Mem/Page.c is where the record is taken and Dispatcher.c is
++// where the ladder is.
++//
++extern BOOLEAN  mP2FwProbe;
 +
  /**
    Signals all events in the EventGroup.
@@ -1491,10 +1545,10 @@ index 84b1ee80..474fbd60 100644
    return EFI_SUCCESS;
  
 diff --git a/MdeModulePkg/Core/Dxe/Mem/Page.c b/MdeModulePkg/Core/Dxe/Mem/Page.c
-index 928fecb2..cb025f61 100644
+index 928fecb2..554ca91f 100644
 --- a/MdeModulePkg/Core/Dxe/Mem/Page.c
 +++ b/MdeModulePkg/Core/Dxe/Mem/Page.c
-@@ -1042,6 +1042,208 @@ CoreFindFreePagesI (
+@@ -1042,6 +1042,259 @@ CoreFindFreePagesI (
    return Target;
  }
  
@@ -1506,12 +1560,12 @@ index 928fecb2..cb025f61 100644
 +// 46 promoted modules has PcdLoadModuleAtFixAddressEnable 0 and RelocationsStripped
 +// clear, so Image.c:700-741 leaves that one call and its status is what :741
 +// returns. CoreInternalAllocatePages turns AllocateAnyPages into MaxAddress =
-+// MAX_ALLOC_ADDRESS (:1305), and that rung is CoreFindFreePagesI (MaxAddress, 0, ...)
++// MAX_ALLOC_ADDRESS (:1489), and that rung is CoreFindFreePagesI (MaxAddress, 0, ...)
 +// over every descriptor in gMemoryMap. So a terminal failure is not a statement
 +// about a bin or a window: it says this map holds no EfiConventionalMemory
 +// descriptor of NumberOfPages at or below MAX_ALLOC_ADDRESS.
 +//
-+// The `Target & EFI_PAGE_MASK` test at :1033 does not weaken that. Target is
++// The `Target & EFI_PAGE_MASK` test at :1038 does not weaken that. Target is
 +// DescEnd - (NumberOfBytes - 1) with DescEnd + 1 a multiple of the alignment, hence
 +// of EFI_PAGE_SIZE, so for a 4-KiB or 64-KiB alignment Target is always a multiple
 +// of 4096; the test can only fire in the one case where no descriptor matched, and
@@ -1531,11 +1585,17 @@ index 928fecb2..cb025f61 100644
 +//                      big < np is a statement about the map and big >= np is a
 +//                      statement about this census.
 +//   raw against big -- if none was big enough, whether the alignment clip ate one.
-+//                      `raw` is the largest descriptor before the clip. For
-+//                      EfiBootServicesCode the clip is one page and the two are
-+//                      equal, which is itself the evidence that alignment is not
-+//                      the factor for the 27; for the runtime types it is 16 pages
-+//                      and the difference is the loss.
++//                      `raw` is the largest descriptor before the clip. On this
++//                      build every one of the 46 requests is clipped by the same
++//                      one page, because RUNTIME_PAGE_ALLOCATION_GRANULARITY is
++//                      0x1000 here and so Alignment is one page for all four
++//                      memory types - an earlier revision of this comment said the
++//                      runtime types are clipped by 16 pages, which is the #else
++//                      arm of ProcessorBind.h:163-170 and is not compiled. The
++//                      field stays because it is what would make raw > big
++//                      readable the day the granularity changes, and because
++//                      raw == big on every line is itself the evidence that
++//                      alignment is not the factor.
 +//
 +// `free` is every conventional page in the map, and it is the number that separates
 +// a heap that is full from a heap that is a sieve: the same `free` beside a small
@@ -1543,11 +1603,26 @@ index 928fecb2..cb025f61 100644
 +// bin question P2 BIN was built for. `c`, the descriptor count, is what makes
 +// "fragmentation" a measurement rather than an adjective.
 +//
-+// The tally by type exists to falsify one assumption cheaply. Every one of the 27 is
-+// believed to be an EfiBootServicesCode request, on the grounds that the memory type
-+// comes from the PE subsystem and not from the relocation fallback (Image.c:629-646)
-+// and only 10 of the 46 promoted images are subsystem-12. `bc` against `bd` and `rt`
-+// prints that belief as a count instead of leaving it to a reading of the source.
++// The tally by type was built to falsify one assumption cheaply: that every one of
++// the 27 is an EfiBootServicesCode request, on the grounds that the memory type comes
++// from the PE subsystem and not from the relocation fallback (Image.c:629-646) while
++// only 10 of the 46 promoted images are subsystem-12. That assumption is now measured
++// and it is false, and it was measured without the phone: tools/pe-facts.py joins the
++// recorded 46-character P2 SEQ against each Apriori entry's PE header, and 21 of the
++// 27 are subsystem-11 (EfiBootServicesCode) against 6 that are subsystem-12
++// (EfiRuntimeServicesCode) -- SdccDxe, VariableRuntimeDxe, ResetSystemRuntimeDxe,
++// EmbeddedMonotonicCounter, RealTimeClock and CapsuleRuntimeDxe. The four subsystem-12
++// images that succeed (EnvDxe, ReportStatusCodeRouterRuntimeDxe,
++// StatusCodeHandlerRuntimeDxe, RuntimeDxe) are what keeps that from being a category
++// error: being runtime-typed is what puts a request in the 150-page RuntimeServicesCode
++// bin, and those four ask for 335 pages between them - 15, 112, 96 and 112 - so that bin
++// is empty by slot 5, fourteen slots before the first failure, after which the runtime
++// requests fall to the same default window the 21 boot-service ones use - so the type is
++// a real difference that does not survive to the failure. `bc` against `bd` and `rt`
++// now confirms the split on the device rather than establishing it - and `n` is every
++// terminal page failure since boot with the ladder's own excluded, so `n` is not 27
++// either: a pool chunk below four pages failing is counted here and not described,
++// which is what the filter below the tally is for.
 +//
 +// Only the first image-sized failure is described. A pool chunk below four pages
 +// failing is a different event and the wrong one to describe, and after the first
@@ -1564,6 +1639,7 @@ index 928fecb2..cb025f61 100644
 +STATIC UINT64   mP2FwRaw   = 0;
 +STATIC UINT64   mP2FwFree  = 0;
 +STATIC UINTN    mP2FwDesc  = 0;
++STATIC UINTN    mP2FwSkip  = 0;
 +
 +STATIC
 +VOID
@@ -1581,6 +1657,27 @@ index 928fecb2..cb025f61 100644
 +  UINT64      DescEnd;
 +  UINT64      DescBytes;
 +  UINTN       Slot;
++
++  //
++  // P2BRINGUP: the digest's own `free=` ladder (Dispatcher.c's P2LargestAlloc) runs
++  // inside the dispatch loop, once per attempted driver, and every rung it fails is a
++  // terminal page failure that arrives here. Its requests are AllocateAnyPages for
++  // EfiBootServicesData in powers of four, which is a shape no image load has and
++  // which a pool chunk can have by accident, so it is excluded by a flag and not by
++  // its arguments. `P2 FREE largest=` at the end of the run walks the same ladder
++  // before this report is printed, which is the second reason the flag is set inside
++  // P2LargestAlloc rather than at its call sites: there are three of them.
++  //
++  // The count is kept rather than thrown away. It is the one number that says how
++  // often a ladder rung found no run that big - each `free=` of 1024 beside a `g` of
++  // one per tick is the 4096-page rung failing every time - and it is also how a
++  // reader can tell this build's `P2 FWHY` row from the previous build's, which was
++  // the same row without the field.
++  //
++  if (mP2FwProbe) {
++    mP2FwSkip++;
++    return;
++  }
 +
 +  if (NewType == EfiBootServicesCode) {
 +    Slot = 0;
@@ -1668,6 +1765,13 @@ index 928fecb2..cb025f61 100644
 +// terminal failures that were all smaller than four pages, which is a different
 +// answer again. Both cost nothing to say.
 +//
++// What the second line describes is now guaranteed to be a real request. It was not
++// before: the ladder's own failed rungs reached P2FreeWhy too, and the first of them
++// is taken at the first P2Tick - after the first driver starts, eighteen slots before
++// the first one fails to load - so `t=4 np=4096` would have been a ladder probe
++// described as the run's first image-sized refusal. `g=` is what that guard counted,
++// and it is the only field on either line that measures the instrument.
++//
 +VOID
 +P2FreeWhyReport (
 +  VOID
@@ -1689,21 +1793,22 @@ index 928fecb2..cb025f61 100644
 +
 +  DEBUG ((
 +    DEBUG_ERROR,
-+    "P2 FWHY t=%d np=%ld a=%d big=%ld raw=%ld free=%ld c=%d\n",
++    "P2 FWHY t=%d np=%ld a=%d big=%ld raw=%ld free=%ld c=%d g=%d\n",
 +    mP2FwType,
 +    mP2FwPages,
 +    mP2FwAlign >> EFI_PAGE_SHIFT,
 +    RShiftU64 (mP2FwBig, EFI_PAGE_SHIFT),
 +    RShiftU64 (mP2FwRaw, EFI_PAGE_SHIFT),
 +    mP2FwFree,
-+    mP2FwDesc
++    mP2FwDesc,
++    mP2FwSkip
 +    ));
 +}
 +
  /**
    Internal function.  Finds a consecutive free page range below
    the requested address
-@@ -1127,6 +1329,14 @@ FindFreePages (
+@@ -1127,6 +1380,14 @@ FindFreePages (
    // If allocations from the preferred bins fail, then attempt to promote memory resources.
    //
    if (!PromoteMemoryResource ()) {
