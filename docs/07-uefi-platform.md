@@ -2781,6 +2781,61 @@ for the CPU skeleton at `Silicon/Qualcomm/Moorea/DSDT_Minimal.asl`, and 20 platf
 > is deliberate and its cost is stated in Step 4.64. `docs/08-device-session.md` carries
 > the measurements and the three members the corpus supplied that were not ported.
 >
+> **A sixth build, also 2026-09-25, corrects the one `_HID` that had been inherited rather
+> than derived, and makes the `GIO0` node answer the driver that binds to it.** Step 4.65
+> changes `URS0` from `QCOM0497` — bitra's family-`04` id, which is what a copy of bitra's
+> table puts there — to `QCOM0A8B`, the family-`0A` id both of gauguin's family-mates carry
+> (`QCOM0497` is named by no file in the shipped 7280 driver set at all, and `QCOM0A8B` is
+> what `QcXhciFilter7280.inf` and `QcUsbFnSsFilter7280.inf` bind as `URS\QCOM0A8B&HOST` and
+> `URS\QCOM0A8B&FUNCTION`), and deletes the two dead members that made that node's id look
+> plausible (`Method (URSI)` and `Name (QUFN)`, whose `QUFN == 0` branch returned the
+> *board's own* family byte, so a copy of it can only ever agree with itself). It then adds
+> `GIO0.OFNI`, which returns the TLMM's GPIO count, because that name — and not `_DSM` or
+> `_AEI` — is the one ACPI method `qcgpio7280/qcgpio.sys` actually evaluates: `qcgpio7280.inf`
+> binds `ACPI\QCOM0A0C`, this node's `_HID`; `OFNI` is the only string in that image that can
+> be a method name; and the image's imports (`RtlInitializeBitMap`, `RtlSetBits`,
+> `RtlFindSetBits`, `RtlNumberOfSetBits`) are a bitmap API, the shape of a driver sizing one
+> bit per pin. `URS0`'s `USB0` loses `DPM0` and `HSEN`, bitra-only members that no shipped
+> driver references in any file. **The DSDT goes 2,275 → 2,230 → 2,228 bytes** across the
+> two halves of the step, the `FVMAIN` content 0x703000 → 0x702fd0, and the tables after
+> the `AcpiTables` file shift down by 0x30: `APIC 0x54dd80`, `FACP 0x54e058`, `FACS
+> 0x54e170`, `GTDT 0x54e1b4`, with `DSDT` unchanged at `0x54d4c8`, read back out of
+> `work/out/p2-4.65/Mu-gauguin-silicon-gzip.img`. The last two bytes are absorbed by FFS
+> padding, so the free count does not move for them: **48 bytes free**, against the previous
+> build's zero, and the page the earlier note predicted the next node would cost was instead
+> given back by the two deleted methods.
+>
+> **This build's `FVMAIN.Fv` fingerprint is `4b71843d…0f544802`**, against Step 4.64's
+> `80f30e19…6a845a65`. The `DSDT` was again disassembled out of the volume rather than read
+> in the source: `GIO0` carries `Method (OFNI)` returning `Buffer (0x02) { 0x9C, 0x00 }` =
+> **156**, `URS0` reads `_HID "QCOM0A8B"`, and neither `Method (DPM0)` nor `Method (HSEN)`
+> exists anywhere in the table. **`OFNI` was built once as 157 and then corrected**, which is
+> why the fingerprint above has a superseded sibling: `0x9D` came from gauguin's own firmware
+> device tree (`gpio-ranges = <&tlmm 0 0 0x9d>`, against 156 in the mainline
+> `pinctrl-sm6350.c` descriptor list), and that is a reading of the wrong quantity. `OFNI` is
+> the number of *gpios*, which the corpus answers where a corpus table, the mainline driver
+> and the SoC dtsi can all be read: sm8150 175, sm8250 180, sm8350 203, sc7280 175 — the
+> driver's `gpio_groups[]` size, not the dtsi's `gpio-ranges` (176/181/204/175) and not the
+> driver's declared `.ngpios` (176/181/204/**176**). But the corpus is not unanimous, and this
+> is the part the first write-up of this step got wrong: two SM8350 tables answer the chip
+> width instead of the gpio count (venus and vili **204**, against lemonade and the Qualcomm
+> reference MTP at **203** on the same silicon), so the value is a per-board choice and the
+> corroboration has to come from the tables closest to gauguin rather than from a headcount —
+> the two that carry `GIO0._HID = "QCOM0A0C"`, lisa and a52sxq, are both on the gpio-count
+> side. An earlier draft of this passage called the 204 group "three Cape tables and Cedros",
+> which is wrong twice: renoir and Cedros are SDM7350 boards, not Cape, and the 204 cluster is
+> the counterexample rather than evidence of consistency. sm6350 is the chip where the
+> distinction bites — its `gpio_groups[]` is 156 while its `.ngpios` and its dtsi range are
+> both 157 — and its descriptor list runs to `PINCTRL_PIN(163)` of which `0..155` are gpios,
+> `156` is `ufs_reset` (no gpio function, absent from `gpio_groups[]`, but still gpio line 156
+> in Linux, which is why gauguin's board dts carries `reset-gpios = <&tlmm 156 …>` under
+> `&ufs_mem_hc`), and `157..163` are the SDC lines. So both of the 157s count one pin that is
+> not a gpio, and gauguin's vendor dtb carries the same quirk. So the answer is 156 — while no
+> ACPI resource on the board names a pin above 155, which none does today; giving the UFS node
+> its pad-156 reset line through ACPI would require `0x9D`. `docs/08-device-session.md`
+> carries the derivation, the two-axis test that replaces the corpus-only test, and the
+> `UCS0` node this step found missing.
+>
 > **And a payload hash from here on is a fingerprint of a build, not of the source.**
 > `Silicon/Silicium/SiliciumPkg/Sec/Sec.c:48` compiles `__TIME__` and `__DATE__` into
 > `Sec.efi`, which lives in the outer volume and not in `FVMAIN`; two consecutive `-c`
@@ -2833,4 +2888,4 @@ table above is the corrected one.
 | set `Platforms/Realme/bitra` uses | Kona — matches nothing |
 | DSDT | authored for gauguin, but its UFS and USB values are verified equal to bitra's |
 | next step | **done as of 2026-09-25** — `gauguin/AcpiTables.inf` and the DSDT exist, are wired into `gauguin.fdf`/`gauguin.dsc`, and are in the built payload with every GICC field read back correct (see the superseded note above). What remains for P3 is USB host and input, not ACPI |
-| where ACPI got to | the DSDT now carries UFS, USB (with the PHY wake lines), the eight CPUs, **the PMIC family** — `SPMI`, `PMIC` and `PM01`, Step 4.63 — **and the TLMM pin controller `GIO0` at `QCOM0A0C`**, Step 4.64 — and the AML is **2,275 bytes** in the `work/out/p2-gio0/` payload. `GIO0` declares its own nine level-`0xF0`–`0xF8` interrupts and *not* the corpus's per-pin catalogue, which is board data gauguin's device tree does not carry. The `FVMAIN` "[100%Full], 0 free" reading is a real zero on a volume whose total is `align_up(content, 0x1000)`; the next node costs a 4 KiB page there. The volume with a limit is the outer `FVMAIN_COMPACT`, `2,052,944` bytes free after compression. Payload hashes are per-build (`__TIME__` in `Sec.efi`); the reproducible fingerprint is `FVMAIN.Fv` `80f30e19…6a845a65` |
+| where ACPI got to | the DSDT now carries UFS, USB (with the PHY wake lines), the eight CPUs, **the PMIC family** — `SPMI`, `PMIC` and `PM01`, Step 4.63 — **the TLMM pin controller `GIO0` at `QCOM0A0C`**, Step 4.64 — and, Step 4.65, **`GIO0.OFNI` (156 gpios) and the corrected `URS0` id `QCOM0A8B`** — and the AML is **2,228 bytes** in the `work/out/p2-4.65/` payload, whose 48 bytes of `FVMAIN` headroom is what the two removed dead methods bought back. `GIO0` declares its own nine level-`0xF0`–`0xF8` interrupts and *not* the corpus's per-pin catalogue, which is board data gauguin's device tree does not carry. The volume with a limit is the outer `FVMAIN_COMPACT`, `2,053,016` bytes free after compression; `FVMAIN` itself is at 99% with 48 free because its total is `align_up(content, 0x1000)`. Payload hashes are per-build (`__TIME__` in `Sec.efi`); the reproducible fingerprint is `FVMAIN.Fv` `4b71843d…0f544802` |

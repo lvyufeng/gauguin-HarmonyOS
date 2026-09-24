@@ -17,6 +17,15 @@
  *   USB pwr_event    162 (0xA2)             dts interrupts-extended  SPI 130
  *   USB hs_phy_irq   163 (0xA3)             dts interrupts-extended  SPI 131
  *
+ * One id was inherited rather than checked, and Step 4.65 corrected it. URS0's
+ * _HID read "QCOM0497" for several steps - bitra's, and bitra is family 04,
+ * while gauguin is 0A and both of that family's tables say "QCOM0A8B". It was
+ * invisible because the URS index moves with the generator group and 0497 sits
+ * inside the same plausible-looking QCOM range. The node comment below carries
+ * the three angles it was re-derived from. UFS0's QCOM24A5 is the contrast and
+ * is correct: it is 19 of 19 tables across every family, so the driver set not
+ * claiming it is the set's gap rather than this file's error.
+ *
  * Three interrupts bitra's node also carries were left out of this table until
  * Step 4.62, as GSIs 526, 527 and 529: the dts reaches them through the PDC
  * (phandle 0x62) on pins 14, 15 and 17, and they are the dp_hs / dm_hs / ss PHY
@@ -154,7 +163,6 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
             }
         }
 
-        Name (QUFN, Zero)
         Name (DPP0, Buffer (One)
         {
              0x00                                             // .
@@ -204,19 +212,26 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
         })
         Device (URS0)
         {
-            Method (URSI, 0, NotSerialized)
-            {
-                If ((QUFN == Zero))
-                {
-                    Return ("QCOM0497")
-                }
-                Else
-                {
-                    Return ("QCOM0498")
-                }
-            }
-
-            Name (_HID, "QCOM0497")  // _HID: Hardware ID
+            /*
+             * `_HID` was "QCOM0497" until Step 4.65 - bitra's, and bitra is
+             * family 04. The URS index is not fixed across tables the way UFS's
+             * is: it moves with the generator group, exactly as GIO0's and SPMI's
+             * do. Across the corpus, URS0 is 97 under families 04, 08 and 14 and
+             * 8B under 09, 0A, 0C, 1A and 25 - and gauguin is 0A, with both of
+             * that family's tables, lisa's and a52sxq's, reading "QCOM0A8B".
+             *
+             * Three angles agree, and none of them is bitra. lisa and a52sxq
+             * both carry Name (_HID, "QCOM0A8B") on a node that is otherwise
+             * identical to this one down to the _CID, the window and the _UID.
+             * UFS0 above is the opposite case and is why the two are worth
+             * separating: QCOM24A5 is 19 of 19 tables across every family, so
+             * its absence from a driver set is the set's gap, while QCOM0497 was
+             * this port's error. And where a table computes the id instead of
+             * naming it - Method (URSI), aliased to _HID on vayu, cepheus and
+             * caymanslm - the value it returns when its QUFN switch is zero is
+             * always that board's own family id, which for gauguin is 0A8B too.
+             */
+            Name (_HID, "QCOM0A8B")  // _HID: Hardware ID
             Name (_CID, "PNP0CA1")  // _CID: Compatible ID
             Alias (PSUB, _SUB)
             Name (_UID, Zero)  // _UID: Unique ID
@@ -306,20 +321,41 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
                     Return (0x0F)
                 }
 
-                Method (DPM0, 1, NotSerialized)
-                {
-                    DPP0 = Arg0
-                }
-
                 Method (CCVL, 0, NotSerialized)
                 {
                     Return (CCST) /* \_SB_.CCST */
                 }
 
-                Method (HSEN, 0, NotSerialized)
-                {
-                    Return (HSFL) /* \_SB_.HSFL */
-                }
+                // `DPM0` and `HSEN` stood here and are gone. Both were bitra's -
+                // lisa, a52sxq and the 7280 CRD have neither, and the CRD has no
+                // URS0 at all - both were definition-only in this table, and the
+                // shipped 7280 driver set references neither in any file: the
+                // only occurrences of `HSEN` in 770 extracted files are inside
+                // the Adreno shader compiler's own symbol,
+                // _ZNK4llvm18QGPUTargetLowering10LowerMULHSENS_..., and `DPM0`
+                // has none at all. CCVL is kept for the opposite reason: the
+                // UCSI driver does ask for it, as the string QUCSAeiBCCVL in
+                // qcusbcucsi7280.sys, and asks for it by that name.
+                //
+                // CCVL's home is not here, though, and that is the next thing
+                // this table owes. In the family-0A shape - lisa, a52sxq and the
+                // CRD agree on all five - MUXV, CCVL, DPVL, HPDM and HPDI all
+                // hang off UCS0, a `QCOM0AA4` device that this table has no node
+                // for, and UFN0 has no CCVL at all. UFN0 carries one here (and
+                // this USB0 carries another), because both were copied from
+                // bitra. Writing UCS0 means moving these methods to it, and UCS0
+                // declares `_DEP` on PEP0, which this table also lacks. That is
+                // why the correction is not in this step: the node cannot be
+                // written correctly before the node it depends on exists.
+                //
+                // `HSFL`, which HSEN used to read, is now read by nothing. It
+                // stays, with `PINA`, rather than being removed alongside the
+                // method: those two are the only members of the `_SB` value
+                // cluster around this device that lisa, a52sxq and the CRD all
+                // lack - every other member is in all three - and the cluster as
+                // a whole is definition-only here, which makes it inert.
+                // Removing half of it would leave a data block whose shape no
+                // longer says which table it was copied from.
 
                 Method (_DSM, 4, Serialized)  // _DSM: Device-Specific Method
                 {
@@ -907,11 +943,79 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
         //     the usual one and it is stated: a per-pin line that only the
         //     catalogue would advertise is not advertised, until the device
         //     that needs it is added with its own GpioInt.
-        //   - OFNI. 18 of the 21 tables define it and nothing calls it: each of
-        //     those 18 has exactly two occurrences of the name, its definition
-        //     and that definition's own Return. Kailua's GPIV, GPIC, GPIW and
-        //     GPIB pass the same test on a table that has no _CRS either. Dead
-        //     code is not ported.
+        //   - OFNI is written, and the reason is worth recording twice, because
+        //     an earlier pass of this file omitted it for the wrong reason and
+        //     the pass that restored it then gave it the wrong value.
+        //     The omission: it counted occurrences of the name *in the 21 tables
+        //     that have a GIO0*. 19 of those 21 define it - 18 as a Method, one
+        //     on Blackbolt as a Name - and none of the 18 contains a third
+        //     occurrence, so the rule "dead code is not ported" dropped it. The
+        //     rule was right and the caller set was wrong: the caller is not in
+        //     any table, it is qcgpio7280/qcgpio.sys, and qcgpio7280.inf proves
+        //     the pairing - `GPIO_Inst,ACPI\QCOM0A0C` and `ServiceBinary =
+        //     qcgpio.sys`, against this node's own _HID. The image carries
+        //     exactly one string that can be an ACPI method name, and it is
+        //     `OFNI`. (Its other four-character uppercase runs are `PAGE`,
+        //     `INIT`, `RSDS` and `GCTL` - section names and a debug directory
+        //     signature, consecutive with the build's own pdb path - plus
+        //     register-scan fragments.) Its imports agree: ntoskrnl.exe and
+        //     WDFLDR.SYS only, and of those, RtlInitializeBitMap, RtlSetBits,
+        //     RtlFindSetBits and RtlNumberOfSetBits are a bitmap API, the shape
+        //     of a driver sizing one bit per pin; the class extension is bound
+        //     through WdfVersionBindClass rather than imported by name, which is
+        //     why GpioClx appears nowhere in this image - the only file in the
+        //     shipped set that imports it by name is qcpmicgpio7280.sys, the
+        //     PMIC GPIO miniport.
+        //     The value: OFNI is the TLMM's GPIO count, and the corpus settles
+        //     what "count" means - most of the way, and the part it does not
+        //     settle is worth as much as the part it does. Two numbers are
+        //     available on any Qualcomm TLMM: the count of pins that have a gpio
+        //     function (the driver's gpio_groups[] list) and the width Linux
+        //     gives the gpiochip (.ngpios, which on all five SoCs below is
+        //     gpio_groups + 1 and which the SoC dtsi's gpio-ranges copies
+        //     wherever it is not one less). Where a corpus table, the mainline
+        //     driver and the SoC dtsi can all be read:
+        //                     corpus                    gpio_groups .ngpios dtsi
+        //         sm8150  175 x4 cepheus nabu vayu mh2      175      176    176
+        //         sm8250  180 x2 alioth pipa                 180      181    181
+        //         sm8350  203 x2 lemonade Lahaina_MTP        203      204    204
+        //         sm8350  204 x2 venus vili                  203      204    204
+        //         sc7280  175 x2 lisa a52sxq                 175      176    175
+        //     Ten of these fourteen tables answer the gpio count. The minority
+        //     are SM8350 boards, and they are not consistent among themselves -
+        //     venus and vili say 204 while lemonade and the Qualcomm reference
+        //     MTP say 203, on the same silicon - so the minority is a per-board
+        //     choice and not a platform generation. (Two further 204s, renoir
+        //     and Cedros_IDP, are SDM7350 tables; this tree has no sm7350
+        //     pinctrl driver, so they can be counted but not placed.)
+        //     The evidence that bears on gauguin directly is lisa and a52sxq.
+        //     Their GIO0 carries this node's own _HID, QCOM0A0C - the id
+        //     qcgpio7280.inf binds qcgpio.sys to - where the SM8350 tables use
+        //     QCOM1A0C and the SM8250 tables QCOM250C. Same driver, same idiom,
+        //     same TLMM generation as gauguin, and both answer the gpio count
+        //     (175, against a chip width of 176).
+        //     The pin the two numbers differ by is real and is not a gpio:
+        //     pinctrl-sm6350.c's descriptor list runs to PINCTRL_PIN(163), of
+        //     which 0..155 are `GPIO_n`, 156 is `UFS_RESET` and 157..163 are the
+        //     SDC lines. UFS_RESET has no gpio function - it is absent from
+        //     gpio_groups[] - but Linux still numbers it line 156, which is why
+        //     `.ngpios` is 157 and why gauguin's own board dts says
+        //     `reset-gpios = <&tlmm 156 GPIO_ACTIVE_LOW>` under `&ufs_mem_hc`:
+        //     the one tlmm reference on this board outside 0..94, and it is the
+        //     line the two candidate counts disagree about. The vendor dtb's
+        //     `gpio-ranges = <&tlmm 0 0 0x9D>` is that same chip width, and one
+        //     build of this node answered 0x009D on the strength of it. It is
+        //     0x009C = 156.
+        //     What would change it, and the reason this is not a coin flip to
+        //     revisit later: 156 is inert while nothing on this board names a
+        //     pin above 155 through ACPI, and nothing does - there is no GpioIo
+        //     or GpioInt on GIO0 at all yet. If a later step gives the UFS node
+        //     the reset line the Linux side actually drives through pad 156,
+        //     this must become 0x9D, because the class extension cannot hand a
+        //     client a line the count excludes. One byte, one rebuild.
+        //   - Kailua's GPIV, GPIC, GPIW and GPIB are not written. They are
+        //     defined on a table with no _CRS, no other table has them, and the
+        //     shipped driver set contains no reference to any of the four.
         //   - _AEI. Eight of the 21 tables have none at all. Nothing in this
         //     table declares a GpioInt on GIO0 yet, so there are no event pins
         //     to list; when a node is added that has one, its pin goes here.
@@ -931,12 +1035,21 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
         // the same way PM01's does and for the reason its note gives; the
         // corpus reaches that result through a BreakPoint, which is not carried.
         //
-        // That the miniport is not what evaluates this is worth recording: the
-        // shipped qcgpio.sys contains no ACPI method name at all, and its only
-        // GPIO-related import is GPIOClx. The _DSM and _AEI are the class
-        // extension's, on the Windows side, which is why the ids and the shapes
-        // below have to match what that extension expects rather than what
-        // qcgpio.sys says.
+        // That the miniport is not what evaluates _DSM is worth recording, and
+        // it is the one place where this file's earlier reading of qcgpio.sys
+        // was wrong: the claim was that the image contains no ACPI method name
+        // at all and imports nothing GPIO-related but the class extension. The
+        // image does contain a method name - OFNI, above - and finding it took
+        // testing the strings rather than counting them in the tables, because
+        // a four-character name is short enough to appear inside compiler
+        // symbols by accident: the shipped set's HSEN hits are all one mangled
+        // LLVM symbol, _ZNK4llvm18QGPUTargetLowering10LowerMULHSENS_..., and
+        // its URSI hits are all RECURSIVE_TILING and RECURSION_DEPTH. OFNI has
+        // no such competitor, and it is the only such string in the driver.
+        // _DSM and _AEI remain the class extension's, on the Windows side,
+        // which is why the ids and the shapes below have to match what that
+        // extension expects rather than what qcgpio.sys says - and it is also
+        // why OFNI, which qcgpio.sys does say, has to be here.
         //
         // _REG and GABL are carried because 19 of the 21 have the pair. Its
         // reader set is empty here: the only nodes in the corpus that read it
@@ -1002,6 +1115,18 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
                     // not reproducible from gauguin's device tree - see above.
                 })
                 Return (RBUF) /* \_SB_.GIO0._CRS.RBUF */
+            }
+
+            // 156 = gauguin's TLMM GPIO count. The reader is qcgpio.sys, not a
+            // table, and the value's derivation is in the header - see the OFNI
+            // bullet above this node.
+            Method (OFNI, 0, NotSerialized)
+            {
+                Name (RBUF, Buffer (0x02)
+                {
+                     0x9C, 0x00                                       // ..
+                })
+                Return (RBUF) /* \_SB_.GIO0.OFNI.RBUF */
             }
 
             Name (GABL, Zero)

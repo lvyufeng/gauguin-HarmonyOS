@@ -313,22 +313,29 @@ Work:
 **Gate:** a Windows 11 ARM64 installer boots off a USB stick and sees the internal UFS.
 
 **Status (2026-09-25): item 1 is done for UFS, USB and the PMIC family, and the GPIO
-controller is declared; it is still blocked for I2C, buttons and thermal zones.
-2–4 are not started, and none of them can be assessed until P2 hands off to BDS.**
+controller is declared and answers the driver that binds to it — `qcgpio7280.inf` binds
+`ACPI\QCOM0A0C`, which is `GIO0`'s `_HID` — and the USB role-switch id is the one the
+shipped filters bind (`URS0` = `QCOM0A8B`, Step 4.65); it is still blocked for I2C,
+buttons and thermal zones. 2–4 are not started, and none of them can be assessed
+until P2 hands off to BDS.**
 The tables exist, are wired into `gauguin.fdf`
 and `gauguin.dsc`, and are in the firmware volume of the build behind the staged P2
-payload — `DSDT` (2,275 bytes, gauguin's own, `SM7225`, eight `ACPI0007` CPU devices,
-the UFS and USB nodes, `SPMI`/`PMIC`/`PM01` and `GIO0`), `APIC`, `FACP`, `FACS`, `GTDT`,
-plus the shared `SSDT`. The tables were read back out of the built artifact, the `APIC`
+payload — `DSDT` (2,228 bytes, gauguin's own, `SM7225`, eight `ACPI0007` CPU devices,
+the UFS and USB nodes, `SPMI`/`PMIC`/`PM01` and `GIO0` with its `OFNI` gpio count of 156),
+`APIC`, `FACP`, `FACS`, `GTDT`, plus the shared `SSDT`. The tables were read back out of
+the built artifact, the `APIC`
 parsed subtable by subtable — its two INTIDs and its redistributor base match this
 board's device tree — and the `DSDT` decompiled back out of the volume so that `GIO0`
 could be read as the firmware will see it rather than as it was written.
 `docs/07`'s P3 groundwork section carries the detail. Note that the DSDT here is
 smaller in scope than the list above — I2C, buttons and thermal zones are not
-in it yet, and the `GIO0` controller is declared without the corpus's per-pin
+in it yet, the `GIO0` controller is declared without the corpus's per-pin
 interrupt catalogue because that catalogue is board data and this board's device
-tree does not carry it — so item 1 is done for UFS, USB and the PMIC family and *not*
-done for the rest.
+tree does not carry it, and **the Type-C/UCSI node `UCS0` is missing entirely**, so
+`CCVL` sits on `USB0` and `UFN0` where the family-`0A` shape puts it on `UCS0` — so
+item 1 is done for UFS, USB and the PMIC family and *not* done for the rest.
+`UCS0` cannot be written before `PEP0` (`QCOM0A17`), which this table also lacks and
+which `UCS0._DEP` names; that ordering is the reason the correction is not in Step 4.65.
 
 **And the rest is blocked on an input, not on effort.** Every one of those nodes
 needs an ACPI `_HID`, and a device tree does not carry ACPI names: it has registers

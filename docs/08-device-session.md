@@ -10678,6 +10678,16 @@ these tables emits a fixed preamble, and some of that preamble was never wired u
 devices it shipped to. A member's frequency across a corpus is not evidence that it is
 used; only its callers are. Dead code is not ported.
 
+> **The reasoning above is right and its answer here was wrong.** "Only its callers are" is
+> the correct test, and it was then run over the wrong caller set: the **tables**. The caller
+> of `OFNI` is not in any table — it is `qcgpio.sys`, the shipped driver for this exact node
+> (`qcgpio7280.inf` matches `ACPI\QCOM0A0C`, which is this node's `_HID`). Step 4.65 ran the
+> same test over the 770 files of the shipped 7280 driver set and got the opposite answer for
+> `OFNI` and the same answer for `GPIV`, `GPIC`, `GPIW`, `GPIB`. `OFNI` is carried now; the
+> other four still are not. The lesson survives, sharpened: a member's frequency across a
+> corpus is not evidence that it is used, and neither is its caller count *within that
+> corpus* — an interface with a driver on the other side has callers that no table contains.
+
 ### `_AEI`, and the third
 
 `_AEI` is the Windows mechanism for a controller to hand the class extension a set of
@@ -10689,19 +10699,35 @@ buttons are the obvious candidate and they are not candidates: they hang off **p
 
 ### What the shipped driver turned out to be, which is why the shapes had to come from the corpus
 
-`qcgpio.sys` — 56,448 bytes, PE32+ AArch64 — **contains no ACPI method name at all**. Its
-only ASCII `_XXX` tokens are `_201`, `_BIN`, `_END`, `_STA`, `__KM`, and its imports are
-`GPIOClx`, `KmdfLibrary`, `PsGetVersion`, `WmiTraceMessage`, `WmiQueryTraceInformation`,
-`EtwRegisterClassicProvider`, `EtwUnregister`. The `_UIDAeiBQGPI` literal a string scan
-finds lives in **`qcgpi7280.sys`**, a different device entirely (`qcgpi7280.inf`,
-`ACPI\QCOM0A88`, "Qualcomm(R) GPI Bus Device").
+`qcgpio.sys` — 56,448 bytes, PE32+ AArch64 — **is the driver for this node**: its `inf`
+matches `ACPI\QCOM0A0C`, which is the `_HID` written above, and it is one of only two GPIO
+drivers in the shipped 7280 set. Its `_UIDAeiBQGPI`-shaped literal is absent; the literal a
+string scan finds for that name lives in `qcgpi7280.sys`, a different device entirely
+(`qcgpi7280.inf`, `ACPI\QCOM0A88`, "Qualcomm(R) GPI Bus Device"), and no table in the
+corpus defines `QCOM0A88`.
+
+> **Two claims in that passage were wrong and are corrected by Step 4.65.** The scan behind
+> "contains no ACPI method name at all" searched `_XXX`-shaped tokens — `_201`, `_BIN`,
+> `_END`, `_STA`, `__KM` — which is structurally blind to every name ACPI's four-character
+> namespace actually allows: `OFNI` has no underscore. Run properly, the image contains one
+> candidate method name and it is `OFNI`. And the import list given here — `GPIOClx`,
+> `KmdfLibrary`, `PsGetVersion`, `WmiTraceMessage`, `WmiQueryTraceInformation`,
+> `EtwRegisterClassicProvider`, `EtwUnregister` — is not `qcgpio.sys`'s: none of those seven
+> strings occurs in the image at all. `GPIOClx` is imported by **`qcpmicgpio7280.sys`**, the
+> PMIC GPIO driver, and `PsGetVersion`/`EtwUnregister` by a dozen unrelated Qualcomm drivers.
 
 That matters because it relocates the contract. The `_DSM`/`_AEI` handshake is not
-`qcgpio.sys`'s; it belongs to the **Windows GPIO class extension** the miniport plugs into
-via `GPIOClx`. So the id had to come from the `inf` and the membership shapes had to come
-from tables the class extension accepts — which is exactly the split this node was built
-on, and it is why the corpus is evidence for *shape* even where it is not evidence for
-*this board*.
+`qcgpio.sys`'s; it belongs to the **Windows GPIO class extension** the miniport plugs into.
+So the id had to come from the `inf` and the membership shapes had to come from tables the
+class extension accepts — which is exactly the split this node was built on, and it is why
+the corpus is evidence for *shape* even where it is not evidence for *this board*.
+
+The earlier phrasing named `GPIOClx` as the import that does this plugging. It is done, but
+not by a named import: `qcgpio.sys` imports `WDFLDR.SYS` — `WdfVersionBind`,
+`WdfVersionUnbind`, **`WdfVersionBindClass`**, `WdfVersionUnbindClass` — which is the
+dynamic form, and it is why the class-extension name appears nowhere in the file. Step 4.65
+found this only because the question being asked had changed from "what does the corpus say"
+to "what does this driver actually ask for".
 
 The `_DSM` itself is Microsoft's GPIO Controller method, UUID `4f248f40-d5e2-499f-834c-27758ea1cd3f`
 — the same string in all 21 tables. Revision `0x03` for function 0 and, for function 1,
@@ -10806,3 +10832,324 @@ It was one node added to `tools/acpi/gauguin.asl`, one guard added to
 same payload), and the payload hashes themselves are per-build because `Sec.efi` carries
 `__TIME__` — which is why the fingerprint recorded here is the volume's and not the
 image's.
+
+## Step 4.65 — the id that was inherited, and the member the caller test dropped
+
+Step 4.64 closed by asking whether `DPM0` and `HSEN` — bitra-only, definition-only, and
+called by nothing — should get the "dead code is not ported" treatment, and the answer it
+settled on was yes. Applying that test consistently meant running it over the whole member
+set rather than over the ones already deleted, and running it over the right caller set
+instead of the corpus. Both halves of this step are that rerun. The first half confirms a
+Step 4.64 decision; the second half reverses one, and the reversal is worth more than the
+confirmation. A third finding arrived the same way and then had to be applied against the
+first two: the member that came back carries a *value*, and the value was read off the wrong
+quantity before it was read off the right one.
+
+### The two-axis test, which replaces the corpus-count test
+
+A member is ported only if **both** hold:
+
+- **(a) family axis** — a table on the family-`0A` axis carries it, i.e. lisa or a52sxq, the
+  two shipping SM7325 tables, rather than only bitra (family `04`, and this board's own
+  name) or a table from an unrelated generation;
+- **(b) driver axis** — some file of the shipped 7280 driver set actually asks for it.
+
+Every member this step moved falls out of the pair:
+
+| member | family-`0A` table has it | shipped driver asks | verdict |
+|---|---|---|---|
+| `OFNI` | yes (19 of 66 cached tables, incl. lisa and a52sxq) | **yes** — `qcgpio7280/qcgpio.sys`, which its `inf` proves is `GIO0`'s driver | **carried, = 156** (step 4.65) |
+| `CCVL` | yes | **yes** — `qcusbcucsi7280.sys`, as `QUCSAeiBCCVL` | kept |
+| `PHYC` | yes | **yes** — both USB filters | kept |
+| `DPM0` | no (bitra only) | no — 0 of 770 files | **removed** (step 4.65) |
+| `HSEN` | no (bitra only) | no — 3 hits, all `LowerMULHSEN` in `qcdx7280` compiler libraries | **removed** (step 4.65) |
+| `GPIV` `GPIC` `GPIW` `GPIB` | no (the generator's table only) | no — 0 of 770 | not carried |
+
+The negative column is the one that had to be re-measured, because the Step 4.64 version of
+it was "nothing in the corpus calls it" and that is not the same question. `OFNI` passes (b)
+with a driver that is provably this node's: `qcgpio7280.inf` declares
+`GPIO_Inst,ACPI\QCOM0A0C` and `ServiceBinary = qcgpio.sys`, and `QCOM0A0C` is `GIO0`'s
+`_HID` as written above. There are two GPIO drivers in the set and they are not
+interchangeable: the other, `qcgpi7280.sys`, binds `ACPI\QCOM0A88` — a "Qualcomm(R) GPI Bus
+Device" that no table in the corpus defines.
+
+### The encoding that decided the id
+
+The first pass of the driver scan read every file as bytes and matched ASCII patterns. It
+found `QCOM0A8B` in three `.cap` firmware containers and `QCOM0497` nowhere, which reads as
+"the driver set does not discriminate" and would have left `URS0._HID` resting on the family
+axis alone. `.inf` files in this set are **UTF-16LE**, so a `_HID` in one is stored as
+`Q\0C\0O\0M\0…` and no ASCII scan can see it. Searching each name in UTF-16LE and UTF-16BE
+as well turns the same 770 files into a definite answer:
+
+| id | files naming it | which |
+|---|---|---|
+| `QCOM0A8B` | **2** | `QcXhciFilter7280.inf`, `QcUsbFnSsFilter7280.inf` |
+| `QCOM0497` | **0** | — |
+| `QCOM0A0C` | 1 (+3 `.cap`) | `qcgpio7280.inf` |
+| `QCOM0A88` | 1 (+3 `.cap`) | `qcgpi7280.inf` |
+| `PNP0CA1` | 0 | (nothing: `inf` files declare `_HID`-style ids only, so this absence means nothing) |
+
+The two hits are the decisive part, and they say more than the id correction does. Both are
+USB role-switch filters, and both bind to a **child** of the `URS0` node, not to `URS0`:
+
+```
+QcXhciFilter7280.inf      %Standard.DeviceDesc%=QcXhciFilter.NT, URS\QCOM0A8B&HOST      ;URS0 mode MSFT XHCI stack
+QcUsbFnSsFilter7280.inf   ...=QcUsbFnSSFilter_urs0_ufn0, URS\QCOM0A8B&FUNCTION          ;URS MSFT Function mode
+QcUsbFnSsFilter7280.inf   ...=QcUsbFnSSFilter_urs1_ufn1, URS\QCOM0A8C&FUNCTION          ;URS MSFT Function mode
+```
+
+`URS\<parentHID>&<role>` is a device created by a role-switch driver on top of the ACPI node
+whose `_HID` is that parent id. So `QCOM0A8B` is not merely the more plausible id: it is the
+string that makes the host stack and the function stack load, and `QCOM0497` is a value that
+**no file in the driver set mentions at all**. With the old id the port had no USB on the
+Type-C port and nothing in the build would have said why.
+
+The two dead members deleted alongside it are why this survived three steps of review.
+`URS0` carried a `Method (URSI)` that nothing called and a `Name (QUFN, Zero)` that nothing
+read — the shape of a table that references its own id, which is what a correct table looks
+like from the inside. Consistency inside a table is not evidence; a caller outside it is.
+`URSI` and `QUFN` are gone, `_HID` is `QCOM0A8B`, and the node now has exactly the members
+the family-`0A` tables have and the drivers ask for.
+
+### `OFNI`, and why 156 rather than 157 — a value this step got wrong first
+
+`OFNI` is the TLMM's GPIO count, read by the GPIO miniport. The first build of this step
+answered `0x9D` = **157**, on the strength of the device's own firmware: `gauguin.dtb` states
+`gpio-ranges = <&tlmm 0 0 0x9d>`. That number is a real reading of the dtb and it is the
+wrong answer, because "the TLMM's GPIO count" and "the number in `gpio-ranges`" are not the
+same quantity, and the corpus says which one `OFNI` is.
+
+Three numbers are in play, not two, and on four SoCs where a corpus table, the mainline
+pinctrl driver and the SoC dtsi can all be read, all three can be measured: the count of pins
+that have a gpio function (the driver's `gpio_groups[]` list), the width Linux gives the
+gpiochip (`.ngpios`) and the dtsi's `gpio-ranges`.
+
+| SoC | corpus `OFNI` | driver's `gpio_groups[]` | driver's `.ngpios` | dtsi `gpio-ranges` | corpus says |
+|---|---|---|---|---|---|
+| sm8150 | 175 (cepheus, nabu, vayu, mh2) | 175 | 176 | 176 | the gpio count |
+| sm8250 | 180 (alioth, pipa) | 180 | 181 | 181 | the gpio count |
+| sm8350 | 203 (lemonade, Lahaina MTP) | 203 | 204 | 204 | the gpio count |
+| sm8350 | **204** (venus, vili) | 203 | 204 | 204 | the chip width |
+| sc7280 | 175 (lisa, a52sxq) | 175 | 176 | 175 | the gpio count |
+| **sm6350** | — | **156** | 157 | 157 | — |
+
+Two things fall out of this table, and the second is the one this step had to add after
+already having written the first.
+
+*The corpus is not unanimous.* Ten of the fourteen readable tables answer the gpio count; the
+minority answer the chip width, and venus and lemonade are **both SM8350** and disagree with
+each other — venus 204, lemonade 203, same silicon, two different answers. So this is a
+per-board choice, not a function of the chip and not a marker of platform generation, and the
+majority convention is the gpio-capable count. That distinction is easy to state now and was
+easy to get wrong: an earlier pass of this section called the 204s "three Cape tables
+(renoir, venus, vili) and Cedros" and used them as evidence of internal consistency, which is
+backwards — renoir and Cedros are not Cape at all but SDM7350 boards (their own DSDTs say
+`SDM7350`), this tree has no sm7350 pinctrl driver to measure them against, and venus/vili
+are the SM8350 boards that make the corpus inconsistent rather than consistent. Read
+carefully, the 204 cluster is the counterexample, not the corroboration.
+
+*The nearest analogues in the corpus are on the majority side, and they are near.* lisa and
+a52sxq carry `GIO0._HID = "QCOM0A0C"` — the same `_HID` as gauguin's, and the id
+`qcgpio7280.inf` binds `qcgpio.sys` to — where the SM8350 tables use `QCOM1A0C` and the
+SM8250 tables `QCOM250C`. So the two tables that answer the gpio count on this question are
+also the only two in the corpus that are the same generation of TLMM, the same ACPI idiom and
+the same gpio miniport as gauguin. Both say 175 against a chip width of 176.
+
+And the pin the two candidate numbers differ by is not a gpio at all: `pinctrl-sm6350.c`'s
+descriptor list runs to `PINCTRL_PIN(163)`, of which `0..155` are `PINGROUP` gpios, `156` is
+`ufs_reset` and `157..163` are the eight SDC lines — 156 gpios in 164 descriptors. `ufs_reset`
+has no gpio function and is absent from `gpio_groups[]`, but Linux still numbers it line 156,
+which is why `.ngpios` is 157 and why gauguin's own board dts can carry
+`reset-gpios = <&tlmm 156 GPIO_ACTIVE_LOW>` under `&ufs_mem_hc`. That is worth naming
+precisely, because the earlier phrasing of this section said gauguin "references no GPIO above
+94": it references five pins below that — 58, 59, 64, 69, 94 — and then pad **156**, the UFS
+reset line, which is exactly the pin the two counts disagree about. The dtsi's `gpio-ranges`
+and the driver's `.ngpios` agree with each other because both count that pin as a line;
+`OFNI` is the number of pins the class extension will actually be given, which is the gpio
+count. gauguin's vendor dtb says 157 for the same reason the mainline dtsi does, which is why
+the first reading looked authoritative — two sources for this exact chip, agreeing, and both
+answering a different question than the one asked.
+
+That leaves the escape hatch, which is why this is a judgement and not a gamble: 156 is inert
+only for as long as nothing on the board names a pin above 155 through ACPI, and today nothing
+does — there is no `GpioIo` and no `GpioInt` on `GIO0` anywhere in this table, so no client can
+be handed line 156 or fail to be handed it. The Linux side of this same board does drive pad
+156, as the UFS reset. If a later step gives the UFS node that reset line through ACPI, this
+value must become `0x9D`, because a client cannot reference a line the count excludes. One
+byte and one rebuild, and the condition that would trigger it is written down here rather than
+left to be rediscovered.
+
+`GIO0` now answers:
+
+```asl
+Method (OFNI, 0, NotSerialized)
+{
+    Name (RBUF, Buffer (0x02) { 0x9C, 0x00 })
+    Return (RBUF)
+}
+```
+
+which is 156. The superseded build — `FVMAIN` `abb65480…139d7eb6`, `DSDT` `d88a5af5…` —
+carried `0x9D`, and it is recorded here rather than deleted because the reversal is the part
+of this step worth keeping: the number that two independent sources for *this exact chip*
+agreed on was still the number to overrule, because they were both answering a different
+question. Being wrong costs one bit in a bitmap and one line at the end of the range, and the
+line the two counts disagree about is one the board's Linux device tree does use — as the UFS
+reset — which is why the wrong answer here is bounded but not free, and why the condition that
+would make `0x9D` correct again is written into both this file and the ASL header rather than
+left in a scratch note.
+
+### What `qcgpio.sys` turned out to be, read properly this time
+
+Step 4.64 reported this image as containing no ACPI method name at all and listed its
+imports; both were wrong, and the reason is instructive enough to keep. The scan behind the
+first claim searched `_XXX`-shaped tokens — `_201`, `_BIN`, `_END`, `_STA`, `__KM` — and ACPI
+namespace names are four characters that need no underscore. `OFNI` has none, so the pattern
+that was supposed to find method names could not have found this one.
+
+Parsed as a PE32+ AArch64 image (56,448 bytes, 8 sections, 18 relocations, and — the point
+that took two attempts — 8-byte thunks with the high bit marking an ordinal), its imports
+are:
+
+```
+ntoskrnl.exe   IoWMIRegistrationControl  RtlFindSetBits  RtlInitializeBitMap
+               MmGetSystemRoutineAddress RtlSetBits      RtlInitUnicodeString
+               RtlCopyUnicodeString      DbgPrintEx      ExFreePoolWithTag
+               MmMapIoSpaceEx            RtlNumberOfSetBits  MmUnmapIoSpace
+WDFLDR.SYS     WdfVersionBind  WdfVersionUnbind  WdfVersionBindClass  WdfVersionUnbindClass
+```
+
+Four `Rtl*Bitmap`/`RtlSetBits` routines and `MmMapIoSpaceEx` is the shape of a driver that
+sizes one bit per pin and maps its own register window — which is what `OFNI`'s caller does
+with the number. There is no `GpioClx` import: `GpioClx` occurs nowhere in the file, and it
+does occur in `qcpmicgpio7280.sys`, the PMIC GPIO driver. `qcgpio.sys` joins the class
+extension **dynamically**, through `WdfVersionBindClass` in `WDFLDR.SYS`, which is why the
+class-extension name is absent and why the earlier import list — `GPIOClx`, `KmdfLibrary`,
+`PsGetVersion`, `WmiTraceMessage`, `WmiQueryTraceInformation`,
+`EtwRegisterClassicProvider`, `EtwUnregister` — was not this image's. None of those seven
+strings occurs in it; `PsGetVersion` and `EtwUnregister` belong to a dozen unrelated
+Qualcomm drivers in the same set.
+
+The single candidate method name in the image is `OFNI`, and the same name occurs in exactly
+one driver of 770 files. `DPM0` occurs in none. `HSEN`'s three occurrences are all inside
+`_ZNK4llvm18QGPUTargetLowering10LowerMULHSENS_...` in the `qcdx7280` compiler libraries —
+the name-coincidence class this port has now hit four times, and the reason a four-character
+scan is never evidence by itself.
+
+### Read back out of the payload, not out of the source
+
+```
+tools/acpi/gauguin.asl     47,545 -> 55,891 bytes        (+137 / -34 lines)
+DSDT.aml                    2,275 ->  2,228 bytes        (-47)
+AcpiTables FFS file         3,634 ->  3,586 bytes        (-48, the 8-byte alignment)
+FVMAIN              content 0x703000 -> 0x702FD0, free 0 -> 48
+FVMAIN_COMPACT               1,092,712 of 3,145,728 used, 2,053,016 free
+```
+
+and the readback, from the payload rather than from the tree:
+
+```
+work/out/p2-4.65/Mu-gauguin-silicon-gzip.img   sha256 1a0d06b1…f349780f
+  FVMAIN inside it                             sha256 4b71843d4e4335685970e7585e97064367ed067108c8234ae29bb54e0f544802
+  ACPI tables: SSDT 0x54d484 (61), DSDT 0x54d4c8 (2,228, valid),
+               APIC 0x54dd80 (724), FACP 0x54e058 (276), FACS 0x54e170 (64), GTDT 0x54e1b4 (156)
+```
+
+`DSDT` holds its offset — the `SSDT` precedes it in the same FFS file and the file shrank
+from the end — and the tables after it moved back by 48 (`APIC` was `0x54ddb0`, now
+`0x54dd80`, and so on). `FACP` and `FACS` not checksumming is the expected pair before
+`AcpiTableDxe` runs, and only those two.
+
+The DSDT sliced out of that volume decompiles to `sha256 63383ce2…825fb95`, which is
+byte-identical to the `DSDT.aml` the build wrote, and reads back as written: `Method (OFNI)`
+returning `0x9C, 0x00`, `URS0._HID` `"QCOM0A8B"`, `CCVL` and `PHYC` still present on both
+`USB0` and `UFN0`, and no `DPM0`, `HSEN`, `URSI` or `QUFN` anywhere in the table. `GABL`,
+`_REG`, the `_DSM` and the `_CRS` are untouched by this step — the shapes did not change,
+only the membership.
+
+`FVMAIN.Fv` was then compared against GenFv's own map of the volume it laid out: 123 offsets
+and GUIDs, zero mismatches.
+
+### The gap this step found and did not fix
+
+The `URS\QCOM0A8B&HOST` binding makes the Type-C story concrete, and concrete is worse than
+vague here, because it names exactly what gauguin is missing:
+
+| node | `_HID` | driver that binds it | on gauguin |
+|---|---|---|---|
+| `UCS0` | `QCOM0AA4` | `qcusbcucsi7280.sys` — "USB Type-C driver (HID_UCS0)" | **absent** |
+| `PEP0` | `QCOM0A17` | `qcpep.wd7280.sys` | **absent** |
+| `URS0` | `QCOM0A8B` | the two filters above, on its children | present (id corrected by this step) |
+
+`CCVL` is a `UCS0` method in the family-`0A` shape and it is sitting on `USB0` and `UFN0`
+here because there is no `UCS0` to put it in, and `MUXV`, `DPVL`, `HPDM` and `HPDI` have no
+home at all. `UCS0` cannot simply be added first: it declares `_DEP` on `PEP0`, which is a
+separate node with its own driver and its own device id, and a `_DEP` naming a node that
+does not exist is worse than an absent node. This is the next substantial piece of P3 item 1
+and it is the reason the `CCVL` placement is still wrong.
+
+One open question found on the way: **nothing in the 112-cab driver set creates the `URS\`
+children the two filters bind to.** The role-switch driver that would enumerate them is not
+in these cabs. Either it ships outside this component set, or the filters are for a
+configuration the cabs do not cover — and until that is settled, `URS0`'s id being right is
+a necessary condition rather than a demonstrated one.
+
+`tools/acpi-hid-census.py --asl tools/acpi/gauguin.asl --drivers /tmp/7280all` reports
+`QCOM0A8B` as **not claimed by any `.inf` in this set**, which looks like it contradicts the
+two hits above and does not. The census matches `ACPI\<id>`, the form an inf uses to claim an
+enumerator's device; these two declare `URS\QCOM0A8B&HOST` and `URS\QCOM0A8B&FUNCTION`, which
+are children *of* the ACPI node rather than the node itself. The same run reports the same
+thing for `QCOM24A5` (`UFS0`). Both readings are true at once, and the pair is the honest
+summary of where `URS0` stands: the id is the one the family uses and the one two shipped
+filters name, and the node it sits on has no driver in this set that attaches to it directly.
+
+### The honest limits
+
+- **The device was not touched.** Nothing was flashed, nothing was written to `boot`, and
+  the restore net is unchanged. `p2-variants` is still the payload of record on the phone,
+  and its panel reading is still owed — **read the panel first, then flash.**
+- **The value was wrong once in this step and is now 156 by rule, not by measurement of this
+  chip.** The rule — `OFNI` is the driver's gpio count, not the dtsi's range and not the
+  driver's declared `.ngpios` — is confirmed on four SoCs, and the descriptor-level reading of
+  what counts as a gpio is confirmed on sm6350 itself. What is *not* measurable is a Windows
+  table for an SM6350-family part to check 156 against directly, and the corpus does not make
+  the rule unanimous: two SM8350 boards answer the chip width instead. The nearest tables to
+  gauguin by generation, idiom and driver — lisa and a52sxq, `GIO0._HID = "QCOM0A0C"` — are on
+  the gpio-count side, which is why 156 rather than 157, but the residue of judgement is real
+  and the condition that would reverse it is recorded in the ASL header.
+- **`OFNI`'s caller-side semantics are inferred from imports.** That `qcgpio.sys` reads the
+  count, sizes a bitmap from it and maps its own window follows from
+  `RtlInitializeBitMap`/`MmMapIoSpaceEx`; what it does with a count one too large or one too
+  small is not established here, and cannot be until it runs. The one line the two candidate
+  counts disagree about is pad 156, the UFS reset — the board's Linux device tree drives it
+  through `&tlmm`, so a Windows UFS driver that wanted the same line would need `0x9D`.
+- **The driver-set scan is evidence about the set, not about the phone.** It says what these
+  112 cabs ask for. The URS parent driver's absence shows the set is not the whole picture.
+- **Axis (b) is necessary and not sufficient.** A driver asking for a method does not prove
+  the node carrying it is otherwise correct; `URS0`'s `_CRS` window is still unverified
+  against hardware and its `_DSM` still copied.
+
+### What this step was, and what it was not
+
+It was three edits to `tools/acpi/gauguin.asl`, two rebuilds and the reading of a shipped
+driver: one inherited id corrected, one member added whose caller is a driver rather than a
+table, two members removed for the same reason, one value corrected after the first rebuild
+had already shipped it wrong, one more pass over that value after the corpus stopped looking
+unanimous, and the comments that said otherwise corrected in place. **No
+firmware source and no driver changed**, no `.c` or `.inf` was touched, and no device storage
+was written. The build is `work/out/p2-4.65/`, the reproducible fingerprint is `FVMAIN.Fv`
+`4b71843d…0f544802` — against Step 4.64's `80f30e19…6a845a65` and this step's own superseded
+`abb65480…139d7eb6`, all three measured the same way on the same payload — and the payload
+hashes themselves are per-build because `Sec.efi` carries `__TIME__`, which is why the
+fingerprint recorded here is the volume's and not the image's.
+
+The last pass over this step changed only comments — the `OFNI` header bullet in
+`tools/acpi/gauguin.asl` and the two passages above that had inherited its phrasing — and it
+was checked rather than assumed: `tools/make_uefi_platform.py` then
+`tools/sync-uefi-platform.sh` recompiled the table, and the resulting `DSDT.aml` is `63383ce2…`
+— byte-identical to the one sliced out of `work/out/p2-4.65/Mu-gauguin-silicon-gzip.img`. A
+comment cannot reach `iasl`'s output, so the build in hand is still the artifact of the source
+in hand and the `4b71843d…0f544802` fingerprint above did not move. That is worth one sentence
+of record because the alternative is a step that says "comments only" and quietly ships a
+payload nobody re-derived.

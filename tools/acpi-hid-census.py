@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 """Can gauguin's ACPI device names be taken from another Qualcomm DSDT?
 
-`tools/acpi/gauguin.asl` describes exactly five things: UFS, the USB controller
+`tools/acpi/gauguin.asl` began as exactly five things: UFS, the USB controller
 and its two children, and the eight CPUs. P3 item 1 asks for I2C, SPI, GPIO,
-buttons and thermal zones on top of that, and none of those nodes is in the
+buttons and thermal zones on top of that, and none of those nodes was in the
 file. The device tree supplies every one of their *addressing* facts - register
 windows, interrupt numbers, pin numbers - so the obvious next move is to lift
 the nodes out of a platform that already has them and substitute the addresses.
+(GPIO and the PMIC family have since gone in that way; this docstring describes
+the question the tool was written to answer, and its answer is why they could.)
 
 That move is only sound if the names travel. A Qualcomm DSDT block carries a
 `_HID` like `QCOM1A0C`, an `_AEI` template, a `_REG` hook and a `_DSM` whose
@@ -253,6 +255,46 @@ ASL_HID = re.compile(r'Name \(_([HC]ID), (?:"(?:EisaId \(")?|EisaId \(")'
 ASL_DEVICE = re.compile(r"^\s*Device \(([A-Z0-9_]{4})\)")
 
 
+def strip_asl_comments(lines):
+    """Blank out `/* ... */` and `// ...`, keeping every line's number.
+
+    The scan below is line-based, and a declaration is a `Name (...)`, so a
+    comment that quotes one reads as one. This file's own header does exactly
+    that - it lists the ids it corrected, in prose - and the first run of the
+    sweep after that prose was added reported `QCOM0A8B` twice, once from the
+    node and once from the sentence describing it.
+
+    That is cosmetic. What is not is the shape behind it: a commented-out
+    `_HID` would be cleared rather than reported, and this tool's whole job is
+    to clear names before a commit. Stripping first makes the count mean
+    declarations, which is what the reader assumes it already means. Each
+    input line still yields exactly one output line, so the line numbers the
+    report prints stay right.
+    """
+    out, in_block = [], False
+    for line in lines:
+        buf = []
+        i = 0
+        while i < len(line):
+            two = line[i:i + 2]
+            if in_block:
+                if two == "*/":
+                    in_block = False
+                    i += 2
+                else:
+                    i += 1
+            elif two == "/*":
+                in_block = True
+                i += 2
+            elif two == "//":
+                break
+            else:
+                buf.append(line[i])
+                i += 1
+        out.append("".join(buf))
+    return out
+
+
 def short(path):
     """A path relative to the repo when it is inside it, absolute when it is not.
 
@@ -290,10 +332,11 @@ def cmd_bind(args):
 def bind_asl(args, hids):
     """Every `_HID` in a file, against the set. Returns 1 if any QCOM one misses."""
     try:
-        lines = open(args.asl, encoding="utf-8", errors="replace").read().splitlines()
+        raw = open(args.asl, encoding="utf-8", errors="replace").read()
     except OSError as e:
         print(f"cannot read {args.asl}: {e}")
         return 1
+    lines = strip_asl_comments(raw.splitlines())
     device = "?"
     found = []            # (line number, device, hid)
     for n, line in enumerate(lines, 1):
