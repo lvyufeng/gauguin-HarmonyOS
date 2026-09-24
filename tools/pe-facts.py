@@ -536,7 +536,50 @@ def main():
     # is the only row that is both SYS_MEM/SYS_MEM_CAP and Conv.
     print("against the DXE heap, which is the only EfiConventionalMemory region "
           "on this\nplatform: {\"DXE Heap\", 0x9B800000, 0x02360000, AddMem, "
-          "SYS_MEM, SYS_MEM_CAP, Conv,\nWRITE_BACK_XN} = 35.4 MiB")
+          "SYS_MEM, SYS_MEM_CAP, Conv,\nWRITE_BACK_XN}")
+
+    # The declared extent of that row is not what DxeCore ends up with, and the
+    # difference is measurable on the host rather than a guess:
+    #
+    #   * Sec.c:64-78 locates "DXE Heap" *by name* and hands it to HobConstructor
+    #     as both the memory range and the PHIT's free range, so EfiMemoryTop and
+    #     EfiFreeMemoryTop both start at 0x9DB60000 and EfiMemoryBottom at
+    #     0x9B800000.
+    #   * PrePi then allocates downward from EfiFreeMemoryTop
+    #     (PrePiMemoryAllocationLib.c:30-54), and the biggest thing it takes is the
+    #     decompressed FVMAIN, which is exactly FVMAIN.Fv on disk.
+    #   * Gcd.c:2384-2405 therefore computes Length = 0 on the range above
+    #     EfiMemoryTop and takes its second branch: BaseAddress =
+    #     EfiFreeMemoryBottom, Length = EfiFreeMemoryTop - BaseAddress. That is the
+    #     one EfiConventionalMemory descriptor DxeCore gets.
+    #
+    # So the number to compare the demand against is the heap minus what PrePi
+    # took, and the demand is 1562 pages of it. Print both rather than the
+    # declared one alone, because "35.4 MiB" invites the reader to think the whole
+    # row is available.
+    heap_pages = 0x02360000 // 0x1000
+    fv_bytes = None
+    for cand in (DEFAULT_FV,):
+        if os.path.exists(cand):
+            fv_bytes = os.path.getsize(cand)
+    if fv_bytes is None:
+        print(f"  declared extent: {heap_pages} pages, "
+              f"{heap_pages * 0x1000 / (1 << 20):.1f} MiB")
+        print("  (FVMAIN.Fv not found, so the PrePi carve cannot be measured here;")
+        print("   build the payload and re-run to see what DxeCore actually gets)")
+    else:
+        fv_pages = (fv_bytes + 0xFFF) // 0x1000
+        left = heap_pages - fv_pages
+        print(f"  declared extent: {heap_pages} pages, "
+              f"{heap_pages * 0x1000 / (1 << 20):.1f} MiB")
+        print(f"  PrePi takes the decompressed FVMAIN off the top: "
+              f"{fv_pages} pages\n    (FVMAIN.Fv = {fv_bytes} B = "
+              f"{fv_bytes / (1 << 20):.2f} MiB), plus a page or two of HOB list and")
+        print(f"    DxeCore's own image, so DxeCore's conventional region is")
+        print(f"    about {left} pages = {left * 0x1000 / (1 << 20):.1f} MiB "
+              f"- and the whole run asks for {cum}.")
+        print(f"  ratio: {left / cum:.1f}x. A 9-page request cannot be refused for "
+              f"want of room.")
 
 
 if __name__ == "__main__":

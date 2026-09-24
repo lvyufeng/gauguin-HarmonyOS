@@ -4620,6 +4620,86 @@ before any time is spent reading a panel for it.
 | action | read `init=` and `used=../..`; fix `P2Bins` to walk `.Type` only in a build that is happening anyway |
 
 
+## Step 4.28 — The heap DxeCore gets is 28.4 MiB, not 35.4, and the 24.6 MiB beside it is not ours
+
+The question carried since step 4.14 — whether the DXE heap can be enlarged —
+closes here, and not in the direction it was asked. The row can be converted into
+the number that matters, the room beside it turns out to belong to something else,
+and the conversion shows enlargement is not needed.
+
+**The heap DxeCore gets is not the extent the row declares.** `InitializeMemory`
+(`Sec/Sec.c:64-78`) locates `"DXE Heap"` **by name** and hands it to
+
+```c
+HobList = HobConstructor ((VOID *)UefiMemoryBase, UefiMemorySize,
+                          (VOID *)UefiMemoryBase, (VOID *)(UefiMemoryBase + UefiMemorySize));
+```
+
+so `EfiMemoryTop` and `EfiFreeMemoryTop` are both 0x9DB60000 and the whole PHIT
+lives inside that one row. PrePi then allocates **downward** from
+`EfiFreeMemoryTop` (`PrePiMemoryAllocationLib.c:30-54`: `NewTop = …EfiFreeMemoryTop
+& ~EFI_PAGE_MASK; … EfiFreeMemoryTop = NewTop;`). By the time DxeCore runs, the
+first range `CoreInitializeMemoryServices` computes is `EfiMemoryTop` to the end of
+the PHIT's resource HOB — the same address, so `Length` is **0** (`Gcd.c:2385-2387`)
+— and the second branch is what is taken (`Gcd.c:2393-2394`):
+
+```c
+BaseAddress = PageAlignAddress (PhitHob->EfiFreeMemoryBottom);
+Length      = PageAlignLength (PhitHob->EfiFreeMemoryTop - BaseAddress);
+```
+
+That one descriptor is the entire `EfiConventionalMemory` world, and it is the row
+**minus what PrePi took**.
+
+**What PrePi took is on disk, so this is measured and not estimated.**
+`Build/gauguinPkg/DEBUG_CLANGPDB/FV/FVMAIN.Fv` is 7,352,320 B = 7.01 MiB = 1795
+pages, and that is exactly the buffer `DecompressFirstFv` allocates: `FfsProcessFvFile`
+(`PrePiLib/FwVol.c:925-958`) extracts the `EFI_SECTION_FIRMWARE_VOLUME_IMAGE`
+section, which decompresses into its own allocation, and only copies again if the
+result landed unaligned. 9056 − 1795 = **7261 pages = 28.4 MiB**, before the HOB
+list's few pages and DxeCore's own image.
+
+**28.4 MiB against 1562 pages is 4.6×.** A 9-page request cannot be refused for
+want of room, which is the prediction step 4.26 reached from the other end
+(9056 pages, bins costing nothing). `bs9=Success` stands.
+
+**The lever was wrong twice over, and both halves matter.**
+
+- *The FD cannot grow into the heap.* The FD is the `UEFI FD` row (0x9FC00000,
+  3 MiB) and the heap is the `DXE Heap` row (0x9B800000) — different rows in
+  different places, and `Sec.c` selects the heap row by name, so only that row's
+  length decides anything. Growing the FD would move the decompressed volume's
+  address, not the heap's size.
+- *The room beside the heap is not free.* gauguin leaves **24.625 MiB unlisted**
+  between `Sched Heap`'s end (0x9DF60000) and `FV Region` (0x9F800000). Every
+  sibling platform in the tree whose heap base is also 0x9B800000 — `i005d`,
+  `lemonade`, `q2q`, `r9qb2`, `vili` — declares **60.0 MiB** of heap there and
+  covers 0x9B800000..0x9F800000 with heap + `Sched Heap` and nothing in between.
+  gauguin covers the *same span* with the *same two rows* and leaves 24.625 MiB
+  blank in the middle. So this is not a row someone forgot to extend; it is a
+  carveout for this device. Nothing builds a HOB for an address the config never
+  mentions, so the hole has no GCD descriptor and no memory map entry — it is
+  invisible to the allocator, and claiming it would mean running on RAM the
+  device's own XBL deliberately left out.
+
+**So nothing is changed and nothing is flashed.** If `bs9` names an error it is not
+a capacity fact, and step 4.26's fork applies: the next instrument goes on the pool
+side, not on the heap size. `tools/heap-compare.py` is the instrument — it reads
+this device's config against the siblings' and prints both the extents and the
+holes, so "can this be enlarged" is answered from `uefiplat.cfg` rather than from
+the row in the generated C. `tools/pe-facts.py` now prints the declared extent
+*and* the post-PrePi figure, because printing only "35.4 MiB" invites the reader to
+compare the demand against a number DxeCore never has.
+
+| | |
+|---|---|
+| finds | DxeCore's conventional region is `[EfiFreeMemoryBottom, EfiFreeMemoryTop]` (`Gcd.c:2393-2394`) = **7261 pages / 28.4 MiB**, not the row's 9056 / 35.4 MiB; against 1562 pages of demand that is 4.6× |
+| mechanism | `Sec.c:64-78` sizes the PHIT from the `DXE Heap` row **by name**; PrePi allocates down from `EfiFreeMemoryTop`, taking 1795 pages for the decompressed FVMAIN (`FVMAIN.Fv` = 7,352,320 B) |
+| does not change | the prediction: `bs9=Success`, for the reason step 4.26 gave and this step's arithmetic confirms |
+| rules out | enlarging the heap, on both branches — the FD lives in a different row, and the 24.625 MiB beside the heap is a device carveout the five sibling platforms at the same base do not have |
+| instrument | `tools/heap-compare.py` (this config vs the siblings, plus the holes); `tools/pe-facts.py` (declared extent vs post-PrePi extent) |
+
+
 ## Step 5 — Leave it bootable
 
 Whatever the outcome, end the session with the stock image back on `boot`:
