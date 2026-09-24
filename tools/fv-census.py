@@ -52,16 +52,29 @@ stops are refuted at slots 17 and 21. Slot 21 is ShmBridgeDxe: it sits at
 physical 74, no stop below 74 can promote it, and every driver a stop at 49 or
 50 can promote into that slot has an observed `L` while the panel shows `s`.
 
-So the 46 characters are not a stopped discovery walk, and what is left is a
-fork between two readings of `P2 APRI`, both of which produce the observed SEQ
-exactly: the array read whole (`entries=70`, and then 23 names matched nothing,
-which a complete walk forbids) or the array read 368 bytes short (`entries=47`,
-`unhit=1`, the promotion loop never looking past ap46). `mP2ApriSum` is taken
-over `SizeOfBuffer`, so a short read prints the hash of a prefix, and the tool
-prints that hash at every 16-byte boundary: the panel's `sum=` names its own
-length whatever `bytes=` appears to say - `b4ba9d75` is 47 entries, `a998b263`
-is all 70. (The panel prints `%x` without zero-padding, so a short value has to
-be read left-padded.)
+So the 46 characters are not a stopped discovery walk, and the digest was built to
+leave what remains as a fork between two readings of `P2 APRI`, both of which
+produce the observed SEQ exactly: the array read whole (`entries=70`, and then 23
+names matched nothing, which a complete walk forbids) or the array read 368 bytes
+short (`entries=47`, `unhit=1`, the promotion loop never looking past ap46).
+
+**The volume closes that fork, and it closes it against the second reading.**
+`bytes=752` needs `SizeOfBuffer` to come back 752 while the section declares 1124,
+and the path cannot do that: `FvReadFileSection` hands `BufferSize` straight to
+`GetSection` (`MdeModulePkg/Core/Dxe/SectionExtraction/CoreSectionExtraction.c:1245`),
+which takes `SectionSize = CopySize` *before* the `*BufferSize < CopySize` clamp and
+then writes `*BufferSize = SectionSize` after the `CopyMem` - so a successful
+`ReadSection` reports the section's *declared* size and never the bytes the caller
+had room for. The declared size is in the volume, four bytes at `0x90`:
+`64 04 00 19` is 1124, `EFI_SECTION_RAW`, i.e. 1120 bytes of GUIDs, the erased pad
+four bytes past the 70th, and 1124 is exactly the FFS size (1148) less its 24-byte
+header - so no size field anywhere on the path is stale, and `entries=70` is forced.
+The tool still prints the checksum at every 16-byte boundary, because it is what a
+short read *would* have printed and it is what a mis-transcribed `sum=` looks like;
+what it no longer is is a fingerprint of length. `a998b263` over the whole section
+is instead a fingerprint of **identity** - a panel `sum=` that differs says the
+running image is not this image. (The panel prints `%x` without zero-padding, so a
+short value has to be read left-padded.)
 
     tools/fv-census.py                      # the build tree's FVMAIN.Fv
     tools/fv-census.py <FVMAIN.Fv | .img>   # any volume or payload
@@ -296,26 +309,32 @@ print(f"Apriori entries with no file in the volume: {absent}")
 #
 # This is the half of the measurement that the device cannot make about itself:
 # `Fv->ReadSection` hands the dispatcher a buffer and a size, and everything
-# downstream is `size / 16` entries.  So the three numbers below - the section's
-# byte count, an additive checksum over those bytes, and the first and last GUID
-# - are printed here for comparison against the panel's `P2 APRI` lines, which
-# the firmware now prints from exactly these values.  Two readings of the same
-# section out of the same image agree or they do not, and a disagreement is a
-# finding rather than a rounding error: the SEQ line is only `entries`
-# characters long, so "46 characters" has two entirely different explanations -
-# 46 entries scanned with every one matched, or 70 scanned with 46 matched - and
-# only `entries` and `miss` tell them apart.
+# downstream is `size / 16` entries.  So the numbers below - the section's declared
+# size, the FFS size it should agree with, an additive checksum over the bytes, and
+# the first and last GUID - are printed here for comparison against the panel's
+# `P2 APRI` lines, which the firmware prints from exactly these values.  Two
+# readings of the same section out of the same image agree or they do not, and a
+# disagreement is a finding rather than a rounding error: the SEQ line is only
+# `entries` characters long, so "46 characters" has two arithmetically different
+# explanations - 46 entries scanned with every one matched, or 70 scanned with 46
+# matched.
 #
-# The replay below is the prediction for the second explanation: with the volume
-# as this tool just walked it, every one of the 70 GUIDs is present as a type
-# 0x07 file - except entry 0, which is DxeCore and matches nothing by
-# construction, because the DXE_CORE branch of the walk fills in
-# gDxeCoreLoadedImage->FilePath instead of calling CoreAddToDriverList. The
-# firmware's own replay skips index 0 for exactly that reason, so this does too;
-# otherwise both would report a miss at 0 on every boot and hide the one being
-# looked for. So the prediction is: matched 1..69, miss none. A panel reading of
-# fewer entries is a shorter read; entries=70 with a miss is a shorter
-# discovered list.
+# Only the second is reachable, and the header line above is why: `entries` is
+# `SizeOfBuffer / 16`, `SizeOfBuffer` is what `GetSection` reports, and `GetSection`
+# reports the section's declared size - so `entries` is a property of the volume and
+# not of the run. It is 70 here and it is 70 on the device, and the live question is
+# instead `miss`, which separates a contiguous tail (miss=47) from a scattered set
+# (miss<47).
+#
+# The replay below is the naive prediction: with the volume as this tool just walked
+# it, every one of the 70 GUIDs is present as a type 0x07 file - except entry 0,
+# which is DxeCore and matches nothing by construction, because the DXE_CORE branch
+# of the walk fills in gDxeCoreLoadedImage->FilePath instead of calling
+# CoreAddToDriverList. The firmware's own replay skips index 0 for exactly that
+# reason, so this does too; otherwise both would report a miss at 0 on every boot
+# and hide the one being looked for. So the replay says matched 1..69, miss none -
+# and the run did not, which is the finding: `miss=` names where the volume and the
+# device's discovered list stop agreeing.
 # ---------------------------------------------------------------------------
 print()
 print("=== The Apriori section, as the device reads it ===")
@@ -333,16 +352,25 @@ def apriori_sum(data, upto=None):
 ap_sum = apriori_sum(payload)
 print(f"  bytes {len(payload)}  entries {len(payload) // 16}  sum {ap_sum:#x}")
 print(f"  first {apriori[0]}  last {apriori[-1]}")
+hdr = fv[o0 + 24:o0 + 28]
+hdr_size = hdr[0] | (hdr[1] << 8) | (hdr[2] << 16)
+print(f"  section header {hdr.hex(' ')} -> declared size {hdr_size} "
+      f"(type {hdr[3]:#04x} = EFI_SECTION_RAW), i.e. {hdr_size - 4} bytes of GUIDs")
+print(f"  FFS size {s0} - 24-byte header - 4-byte section header = {s0 - 28} "
+      f"-> {'agrees' if s0 - 28 == hdr_size - 4 else 'DISAGREES'}")
 
-# The panel's `P2 APRI bytes= entries= sum=` is the only line that says *which* of
-# two failure shapes the run has: an Apriori read that came back short, or a
-# discovered list that came up short. `mP2ApriSum` is taken over `SizeOfBuffer`,
-# so a short read prints the hash of a prefix and not of the whole array - which
-# makes `sum=` a fingerprint of the *length*, and the member of the triple least
-# likely to be misread as its neighbour (a 4 for a 7, a 6 for an 8). Printing
-# every 16-byte prefix turns the panel's value into a lookup: find it in this
-# column and it names its own length, whatever `bytes=` appears to say.
-print("  sum at every 16-byte boundary, so a panel `sum=` names its own length:")
+# The panel's `P2 APRI bytes= entries= sum=` was written to say *which* of two
+# failure shapes a run has: an Apriori read that came back short, or a discovered
+# list that came up short. The first of those is not reachable - see the header
+# above and `GetSection`'s `*BufferSize = SectionSize` - so what the triple says
+# now is whether the running image is this image. `mP2ApriSum` is taken over
+# `SizeOfBuffer`, and `SizeOfBuffer` is the declared size, so `sum=` is a checksum
+# of the whole 1120 bytes and moves the moment any GUID in the array moves.
+# Printing every 16-byte prefix keeps the old reading visible - it is what a short
+# read would have printed, and `b4ba9d75` (47 entries) remains the value that
+# would have meant one - and it is also the lookup for a `sum=` that was
+# transcribed a digit wrong: a 4 for a 7, a 6 for an 8.
+print("  sum at every 16-byte boundary, kept as what a short read would have printed:")
 print("  (the panel prints `%x`, which does NOT zero-pad: read 921dcf9 as 0921dcf9)")
 for start in range(0, len(payload) // 16, 4):
     row = []
@@ -357,10 +385,10 @@ print(f"  replay of the promotion loop over this volume (index 0 skipped): "
       f"matched {matched[0]}..{matched[-1]} of {len(apriori)} entries, "
       f"miss {miss if miss is not None else 'none'}")
 if len(matched) == len(apriori) - 1 and miss is None:
-    print("  -> over THIS volume entries 1..69 all match, so a panel reading of\n"
-          "     fewer entries is a shorter read, and entries=70 with a miss is a\n"
-          "     shorter discovered list - the one thing that would be neither is\n"
-          "     this volume plus a device that sees different GUIDs in it")
+    print("  -> over THIS volume entries 1..69 all match, so a panel `miss=none`\n"
+          "     would mean the array was not this volume's, and any `miss=` value is\n"
+          "     the entry where the device's discovered list stops agreeing with the\n"
+          "     file table above - `miss=47` being where a contiguous tail begins")
 else:
     print(f"  -> {len(apriori) - 1 - len(matched)} entries match no DRIVER file "
           f"here; the first is\n     ap{miss} {apriori[miss]} "
@@ -525,9 +553,14 @@ print("  -> and miss=22 ShmBridgeDxe is closed by the 5-vs-74 result above: a "
 # 49 or 50 *can* promote into that slot has an observed `L`. The string stops
 # matching at two slots, and no other stop produces 46 promotions at all.
 #
-# What is left is not a location but a fork between two readings of `P2 APRI`.
-# Both of them produce the observed SEQ exactly, and `bytes=`/`entries=`/`sum=`
-# on that one line name which of the two the screen is showing.
+# What is left is not a location but the Apriori read itself, and the two readings
+# of it that produce the observed SEQ exactly. Only one of them is reachable: the
+# section header declares 1124 and `GetSection` reports the declared size, so the
+# read cannot come back short and `entries=70` is forced. What the panel can still
+# decide is `miss=` - whether the 23 entries that matched nothing are the array's
+# tail (miss=47, the name tables stand) or scattered through it (miss<47, the
+# tables shift from that index on) - and, if the image on the device is not this
+# one, the `sum=`.
 # ---------------------------------------------------------------------------
 print()
 print(f"=== The join against the `P2 SEQ` line actually read ({len(SEQ)} characters) ===")
@@ -556,23 +589,27 @@ print("     (slot 17 shifts because ap14 PlatformInfoDxeDriver is at physical 52
       "lowest\n     Apriori-named file above the stop - so a stop leaves it out and "
       "every later slot\n     holds the next driver instead.)")
 print()
-print("  Two readings of `P2 APRI` produce the observed SEQ exactly. The length "
-      "fingerprint is\n  what tells them apart, and they point at different code:")
-print(f"    `bytes={len(payload)} entries={len(apriori)} sum={ap_sum:#x}`")
-print(f"       the array was read whole and 23 of its names matched nothing - a "
-      f"premise is wrong,\n       because a complete walk adds every driver it "
-      f"returns to mDiscoveredList.")
+print("  Two readings of `P2 APRI` produce the observed SEQ exactly, and only one of "
+      "them is\n  reachable from the volume:")
 print(f"    `bytes={47 * 16} entries=47 sum={apriori_sum(payload, 47 * 16):#x}`")
-print(f"       the Apriori section came back {len(payload) - 47 * 16} bytes short of its "
-      f"{len(payload)}. `unhit` is then 1,\n       `miss` is none, the promotion loop "
-      f"never looks past ap46, and the observed SEQ\n       is the string it must print.")
-print(f"  `P2 STATS apriori=46/{len(apriori)}` or `apriori=46/47` says the same thing in "
-      f"one number:\n  `mP2AprioriCount` is the largest Apriori file size ever seen, so "
-      f"the second number is\n  the fork, and it is the reason to read that line first.")
-print("  Neither branch explains the 27 failures. Every one of them - ap19, ap20, ap21 "
-      "and\n  ap23..ap46 - is inside the first 46, so it is promoted either way, and "
-      "`P2 ERR` is the\n  line that answers the 27. These 46 characters answer a "
-      "different question: why the\n  batch is 46 long.")
+print(f"       needs the section header at 0x90 to declare {47 * 16 + 4} where it "
+      f"declares\n       {hdr_size}. It does not, and `GetSection` reports what the "
+      f"header declares, so the\n       Apriori section cannot come back "
+      f"{len(payload) - 47 * 16} bytes short. REFUTED.")
+print(f"    `bytes={len(payload)} entries={len(apriori)} sum={ap_sum:#x}`")
+print("       the array was read whole, so 24 of its names matched nothing - index 0 "
+      "(DxeCore,\n       never in mDiscoveredList) and the 23 drivers named at "
+      "ap47..ap69, which must\n       therefore be missing from mDiscoveredList. "
+      "That is the reading the run has.")
+print("  `P2 STATS apriori=46/70` follows: `mP2AprioriCount` is the largest Apriori file "
+      "size ever\n  seen, so the second number is 70 and `apriori=46/47` would mean the "
+      "running image is not\n  this one. `P2 APRI last=` agrees: the whole array ends at "
+      f"{apriori[-1]} (GraphicsConsoleDxe),\n  and D06A77F4-4874-5898-9421-303158ECEA1A "
+      "(I2C, ap46) is where the refuted reading stops.")
+print("  None of this explains the 27 failures. Every one of them - ap19, ap20, ap21 "
+      "and\n  ap23..ap46 - is inside the first 46, so it is promoted under either "
+      "reading, and `P2 ERR`\n  is the line that answers the 27. These 46 characters "
+      "answer a different question: why the\n  batch is 46 long.")
 
 _n07 = sum(1 for f in files if f[1] == 0x07)
 _last07 = max(i for i, f in enumerate(files) if f[1] == 0x07)
@@ -584,13 +621,13 @@ print(f"  -> and `P2 WALK t=0 seen={_n07} iter={_n07 + 1} "
       f"the walk is\n     type-filtered, so the {len(files) - 1 - _last07} "
       f"FREEFORM/PAD/DXE_CORE files after physical {_last07} are never\n     returned "
       f"at t=0 and never update `mP2WalkLast`.")
-print(f"  -> what the step-4.12 tail shape would need: ap1..ap46 promoted and "
-      f"ap47..ap69 not, i.e.\n     `P2 APRI matched=1..46 unhit=24 miss=47`. That is "
-      f"the reading whose SEQ matches by\n     construction - which is exactly why "
-      f"the SEQ cannot be used to support it. It needs\n     the 23 to be missing "
-      f"while the walk is complete, and the missing set to be contiguous in\n     "
-      f"Apriori index ({47}..{69}) and scattered in physical order, which is what "
-      f"makes it\n     unproducible by a stop:")
+print(f"  -> with the second reading refuted, the run's shape is fixed: ap1..ap46 "
+      f"promoted and\n     ap47..ap69 not, i.e. `P2 APRI matched=1..46 unhit=24 "
+      f"miss=47`. The SEQ matches it\n     by construction - which is exactly why the "
+      f"SEQ cannot be used to support it - and what\n     is left to explain is the "
+      f"other end: the 23 must be absent from a walk that this\n     tool predicts "
+      f"reaches all {_n07} DRIVER files, while the absent set is contiguous in\n     "
+      f"Apriori index ({47}..{69}) and scattered in physical order:")
 print("     " + " ".join(f"ap{a}:{ap_phys.get(a)}" for a in range(47, 70)))
 
 # ---------------------------------------------------------------------------

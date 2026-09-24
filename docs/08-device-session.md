@@ -2457,6 +2457,15 @@ The old `discovered ≈ 80` row is therefore not a reading that can come back, a
 `P2 STATS` line reporting it means the SEQ string and the STATS line are from
 different runs.
 
+> **Step 4.47 is what makes that paragraph hold without a condition attached.** The
+> bound needs `it matched 46` to mean 46 out of 70, and the 47-entry reading of the
+> array would have supplied an alternative: 46 matched out of 47, every one it
+> looked at, with a full discovered list of 80 underneath. That alternative is now
+> gone — the section declares 1124 and `GetSection` reports the declared size, so
+> the array is read whole on every boot — and with it the only way `discovered`
+> could have been near 80. The paragraph above was written as an entitlement;
+> it is one now.
+
 | panel says | means | next |
 |---|---|---|
 | `bytes`/`entries`/`sum` short of `1120/70/a998b263` | `Fv->ReadSection` returned a truncated section | the read is the mechanism; the "23 missing drivers" were never in the buffer, and there is no missing-driver puzzle to solve |
@@ -2469,6 +2478,14 @@ different runs.
 | `P2 FREE largest=` ≥ 256 | there is a free run of at least 1 MiB, so the largest single request in the promoted set (112 pages) would have fit | the 27 `L`s are not a single allocation that could not be satisfied, and `P2 WHY` decides what they are instead |
 | `P2 FREE largest=` ≤ 64 | the largest free run is 256 KiB or less, less than the largest request the promoted set makes | the load order's arithmetic was right and the heap really is being consumed by something else; find what |
 | `P2 FREE largest=0` | nothing is allocatable at all at digest time | the `L`s are exhaustion by another name |
+
+> **The first row was struck in step 4.47, and the third row is now unreachable
+> with it.** `bytes=752` needs the Apriori section's *declared* size to be 756; it is
+> 1124, and `GetSection` reports the declared size rather than the bytes the caller
+> had room for, so no run can print a short `bytes=`. `entries=70` is a property of
+> the volume and not of the run, and `miss=none` would now mean the device is not
+> reading this volume at all. Row 2 is the reading the run has, and `miss` — 47 or
+> lower — is the only part of it still open.
 
 **The third and fourth rows above are now answered off the volume, without the
 panel.** Step 4.37 measured every promoted entry's PE `SizeOfImage` and found that
@@ -2910,6 +2927,15 @@ whose size moved from 170544 to 172592.
 
 ### The fork that replaces the stop, and the one number that names it
 
+> **The fork was closed in step 4.47, against the second row of the table below.**
+> `bytes=752` requires the Apriori section to declare 756 where it declares 1124,
+> and `GetSection` hands back the declared size, so the second row is not a reading
+> that can come back from the device. What the step leaves standing from this
+> section is the first row, and with it the *other* half of the question — the 23
+> drivers the run's own replay says are all present. The paragraph below the table
+> that reads the denominator of `P2 STATS` as the fork now reads it as an identity
+> check instead.
+
 With the stop gone, the 23 absent Apriori entries were either never asked for, or
 were asked for by a walk that cannot lose a file it was handed. `P2 APRI` has two
 admissible readings and each produces the observed SEQ exactly; the length
@@ -2920,10 +2946,13 @@ fingerprint is what tells them apart, and they point at different code:
 | `bytes=1120 entries=70 sum=a998b263` | the array was read whole and 23 of its names matched nothing — a premise is wrong, because `CoreAddToDriverList` inserts every driver the walk returns into `mDiscoveredList` unconditionally (`Dispatcher.c:1142-1190`) |
 | `bytes=752 entries=47 sum=b4ba9d75` | the Apriori section came back 368 bytes short of its 1120; `unhit` is then 1, `miss` is none, the promotion loop never looks past ap46, and the observed SEQ is the string it must print |
 
-`P2 STATS apriori=46/70` or `apriori=46/47` says the same thing in one number.
-`mP2AprioriCount` is `MAX (mP2AprioriCount, AprioriEntryCount)` — the largest Apriori
-file size ever *seen* — so the denominator is the fork, and that is the reason to
-read that line first.
+`P2 STATS apriori=46/70` says the same thing in one number. `mP2AprioriCount` is
+`MAX (mP2AprioriCount, AprioriEntryCount)` — the largest Apriori file size ever
+*seen* — so the denominator was going to be the fork. With the fork closed the
+denominator is fixed at 70 by the volume, and what the line buys is an identity
+check instead: `apriori=46/47` is not a reading this image can produce, so it names
+a different image. That is still a reason to read the line, one line earlier than
+it used to be.
 
 Neither branch explains the 27 failures. Every one of them — ap19, ap20, ap21 and
 ap23..ap46 — is inside the first 46, so it is promoted either way. `P2 ERR` is the
@@ -2932,7 +2961,7 @@ batch is 46 long*.
 
 ### The tail shape, which the SEQ cannot argue for or against
 
-The `bytes=1120` branch above is the one reading that fits the SEQ with no stop at
+The `bytes=1120` branch above is the reading that fits the SEQ with no stop at
 all: `ap1..ap46` promoted and `ap47..ap69` not, printed as `P2 APRI matched=1..46
 unhit=24 miss=47`. It is worth recording why the SEQ cannot be used as evidence for
 it — the reason being that a hypothesis stated as "these 46 were promoted" produces
@@ -2987,6 +3016,12 @@ are now a decided pair rather than a range (`entries=70 sum=a998b263` with
 1 or 24 and must satisfy `apriori + unhit = entries`; and the five `P2 WALK` lines
 above are now predictions that can be wrong, which is more than could be said for
 them while the stop was still standing.
+
+> **Corrected in step 4.47.** "Rather than a range" was right and the range was
+> already down to one: `entries=70` and `apriori=46/70` are fixed by the volume, so
+> the parenthesised alternative is a statement that the running image is not this
+> image. `unhit` is 24, not 1-or-24. The line that is left to read is `miss`, and
+> the five `P2 WALK` lines are unchanged predictions.
 
 ## Step 4.18 — The 27 fail on a boundary, not on exhaustion, and the boundary is not the request
 
@@ -6094,6 +6129,15 @@ or `U`, because those four have no mechanism in common with `R`.
     entries, `a998b263` is all 70 — and `KEY`'s `unhit=`/`miss=` corroborates it
     (`unhit=1, miss=none` against `unhit=24, miss=47`).
 
+> **Corrected in step 4.47.** The bullet above is right that the string cannot decide
+> the fork, and wrong that a fork is what is left: the second reading needs a
+> declared section size of 756, the volume declares 1124, and `GetSection` reports
+> what is declared — so `sum=b4ba9d75` and `unhit=1, miss=none` are not readings this
+> image can produce. They are now the signature of a *different* image, which is a
+> more useful thing for them to be: `sum=a998b263` with `apriori=46/70` is what this
+> payload hashes to, so the line identifies the build. `miss` remains the one open
+> number.
+
 The decoder is a host tool and its input is a string; it changes nothing about what
 the phone is doing. **The pending reading is unchanged and is still the bottom of
 the panel** — the `KEY` row and the `P2 WHY` row under it. What has changed is that
@@ -7702,3 +7746,131 @@ python3 tools/probe-fingerprint.py --expect P2FreeWhy \
 ```
 
 The decision procedure above is unchanged. One of its 27 numbers is not.
+
+## Step 4.47 — The section header closes the fork, and `sum=` stops being a length
+
+### The reading that was left open, and the four bytes that end it
+
+Step 4.16 left the Apriori read as a fork between two readings that both produce the
+observed 46-character `SEQ`, on the ground that `mP2ApriSum` is taken over
+`SizeOfBuffer` and so a short read prints the hash of a prefix. Step 4.15 had already
+argued that a short read cannot happen; both were kept, which left the repo asserting
+a reading it had also refuted.
+
+The four bytes at `0x90` of the volume finish it. The Apriori file is the first FFS
+file, at offset `0x78`, `gAprioriGuid`, FFS size 1148, FFS header 24 bytes, type
+`0x02` and state `0xf8`. Its one section starts at `0x90` and reads `64 04 00 19`:
+
+| field | value |
+|---|---|
+| declared size (24-bit LE) | `0x000464` = 1124 |
+| type | `0x19` = `EFI_SECTION_RAW` |
+| body | 1120 bytes = 70 GUIDs, first `D6A2CB7F` (DxeCore), last `CCCB0C28` (GraphicsConsoleDxe) |
+| after the 70th GUID | `FFFFFFFF` — the file's erased tail — then the next file's header at `0x4f8` |
+
+1148 − 24 − 4 = 1120, so the FFS size, the section header and the payload agree in
+three places, and no size field anywhere on the path is stale.
+
+### Why the declared size is the size the code reports
+
+`Fv->ReadSection` is `FvReadFileSection` (`FwVol.c:432`); it reads the file and hands
+the caller's pointer and size to `GetSection`
+(`MdeModulePkg/Core/Dxe/SectionExtraction/CoreSectionExtraction.c:1245`). `GetSection`
+computes
+
+```c
+  CopySize   = SECTION_SIZE (Section) - sizeof (EFI_COMMON_SECTION_HEADER);
+  SectionSize = CopySize;
+  if (*Buffer != NULL) {
+    if (*BufferSize < CopySize) { Status = EFI_WARN_BUFFER_TOO_SMALL; CopySize = *BufferSize; }
+  } else {
+    *Buffer = AllocatePool (CopySize);
+    ...
+  }
+  CopyMem (*Buffer, CopyBuffer, CopySize);
+  *BufferSize = SectionSize;
+```
+
+`SectionSize` is `CopySize` **before** the clamp, and `*BufferSize = SectionSize` is the
+last write on the success path. So the size the dispatcher receives is the section's
+*declared* size and never the bytes the caller had room for, and
+`CoreFwVolEventProtocolNotify`'s `SizeOfBuffer` (`Dispatcher.c:2069`) is 1120 —
+`AprioriFile` is set to `NULL` at `:2062`, so the callee-allocated branch is the one
+taken and there is not even a caller buffer to be too small.
+
+`AprioriEntryCount = SizeOfBuffer / sizeof (EFI_GUID)` is therefore 70, from the
+volume, on every boot. It is not a property of the run.
+
+### What that does to the fork
+
+The `bytes=752` reading needed `SizeOfBuffer` to be 752, i.e. a declared section size
+of 756. The volume declares 1124. So of the two readings step 4.16 left open, the
+second is not reachable, and `b4ba9d75` / `unhit=1` / `miss=none` are not readings this
+image can print — they are the signature of a different image, which is the more
+useful thing for them to be. What survives is the first reading and its own open end:
+
+- `unhit = 24` — index 0, DxeCore, which is never in `mDiscoveredList` by
+  construction, and the 23 names at `ap47..ap69`.
+- `miss` — **the one number the step promotes to load-bearing**, and the job step 4.16
+  gave it. It was already the interesting one and this step does not narrow it: the
+  decoder's legal set for a *cut walk* is `1, 2, 7, 9, 10, 11, 12, 14, 22, none`, and
+  `47` is not in it, because a cut leaves a physical suffix missing and `ap47..ap69`
+  include files at physical 14, 20, 21 and 22. So `miss=47` is what step 4.12's tail
+  assumption wants and would itself say the shortfall is *not* a walk cut, and any
+  value the decoder does not list means the running image's Apriori-named files do not
+  sit where this volume's do. Which of those it is, is what `P2 APRI` is read for.
+- `bytes=1120`, `entries=70`, `sum=a998b263`, `first=D6A2CB7F…`,
+  `last=CCCB0C28-4B24-11D5-9A5A-0090273FC14D` are now **predictions**, and the triple
+  is read as a build identity check rather than as an arbitration: this payload's
+  Apriori section hashes to `a998b263`, so a panel `sum=` that differs says the image
+  running on the phone is not the image on the host. `last=` says the same thing more
+  cheaply — the whole array ends at `CCCB0C28` (GraphicsConsoleDxe); `D06A77F4-…`
+  (I2C, ap46) would mean the array in the running image stops at 46.
+
+### The 23 names, and the one thing they explain for free
+
+With the tail reading now the run's reading rather than a hypothetical, the absent 23
+are the volume's own answer: `AdcDxe`, `UsbPwrCtrlDxe`, `QcomChargerDxeLA`,
+`ChargerExDxe`, `UsbfnDwc3Dxe`, `UsbBusDxe`, `UsbKbDxe`, `UsbMassStorageDxe`,
+`UsbMsdDxe`, `UsbDeviceDxe`, `UsbConfigDxe`, `ButtonsDxe`, `TsensDxe`, `SimpleFbDxe`,
+`LimitsDxe`, `HashDxe`, `CipherDxe`, `RngDxe`, `DDRInfoDxe`, `SimpleTextInOutSerial`,
+`ConPlatformDxe`, `ConSplitterDxe`, `GraphicsConsoleDxe`.
+
+That set is exactly the P3 gate and nothing to do with the P2 assert: **every USB
+driver in the volume is in it** (`UsbfnDwc3Dxe`, `UsbBusDxe`, `UsbKbDxe`,
+`UsbMassStorageDxe`, `UsbMsdDxe`, `UsbDeviceDxe`, `UsbConfigDxe`, `UsbPwrCtrlDxe`), as
+are all four console drivers and `SimpleFbDxe`, and the charger pair
+(`QcomChargerDxeLA`, `ChargerExDxe`). The eight arch protocols the assert names are a
+different and much tighter set, all well inside the 46: `ap31` Variable, `ap34` Reset,
+`ap36` Watchdog, `ap37` Security, `ap38` Monotonic, `ap39` Real Time Clock, `ap42`
+Capsule, `ap44` Bds.
+
+It also makes an already-recorded fact concrete. No display or console driver is among
+the 46 promoted drivers, and the panel shows the `P2` lines anyway — which is
+`SerialPortLib` bound to `FrameBufferSerialPortLib` in a `DEBUG` build
+(`SiliciumPkg.dsc.inc:163`), writing glyphs straight into the framebuffer and needing
+no console at all. Two consequences follow, and the second is new here:
+
+1. text on the panel is not evidence that BDS ran (`docs/00-plan.md` already says so);
+2. **the `USE_CUSTOM_DISPLAY_DRIVER = 0` switch — the `SimpleFbDxe` build — cannot be
+   read off the P2 panel at all.** `SimpleFbDxe` is `ap60`, in the absent 23, so it is
+   not one of the drivers the Apriori walk promotes; whatever it would draw comes
+   after the `P2` lines, from the ordinary FV walk if it comes at all. The panel's text
+   is the serial binding, so it looks the same whichever way that switch is set. That
+   switch can only be judged at BDS.
+
+### What this step did not change
+
+The 27. `P2 ERR` is still the first line to read, and every one of the 27 — `ap19`,
+`ap20`, `ap21` and `ap23..ap46` — is inside the 46 and is promoted under either
+reading, so nothing in this step touches them. The memory findings of steps 4.43–4.46
+are untouched. And nothing was rebuilt or flashed: the change is one tool's output and
+its docstring, four notes in this log, and the payload of record is byte-for-byte what
+it was.
+
+| | |
+|---|---|
+| instrument | the section header at `0x90` of `FVMAIN.Fv`, read from the staged payload (`tools/fv-census.py` now prints it and the FFS-size agreement beside it); `GetSection` at `CoreSectionExtraction.c:1245` |
+| adds | `entries=70` is forced by the volume, so the 47-entry reading is dead and `sum=` becomes a build identity check; the absent 23 are named and are the whole of USB plus the whole console; `miss` is the one open number |
+| prediction | `P2 APRI bytes=1120 entries=70 sum=a998b263 last=CCCB0C28-…`, `P2 STATS apriori=46/70`, `unhit=24` |
+| does not close | the 27, and `miss` — 47 or lower is still what decides whether step 4.12's name tables stand |

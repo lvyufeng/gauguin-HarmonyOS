@@ -329,7 +329,7 @@ index 39668123..8405bc31 100644
  #define  USB_INTERFACE_SIGNATURE  SIGNATURE_32 ('U', 'S', 'B', 'I')
  #define  USB_BUS_SIGNATURE        SIGNATURE_32 ('U', 'S', 'B', 'B')
 diff --git a/MdeModulePkg/Core/Dxe/Dispatcher/Dispatcher.c b/MdeModulePkg/Core/Dxe/Dispatcher/Dispatcher.c
-index d7c7147e..d3c5f7ad 100644
+index d7c7147e..7f9fb868 100644
 --- a/MdeModulePkg/Core/Dxe/Dispatcher/Dispatcher.c
 +++ b/MdeModulePkg/Core/Dxe/Dispatcher/Dispatcher.c
 @@ -60,6 +60,631 @@ EFI_LOCK  mDispatcherLock = EFI_INITIALIZE_LOCK_VARIABLE (TPL_HIGH_LEVEL);
@@ -1058,7 +1058,7 @@ index d7c7147e..d3c5f7ad 100644
      } else {
        AprioriEntryCount = 0;
      }
-@@ -1433,11 +2112,69 @@ CoreFwVolEventProtocolNotify (
+@@ -1433,11 +2112,75 @@ CoreFwVolEventProtocolNotify (
            DriverEntry->Scheduled = TRUE;
            InsertTailList (&mScheduledQueue, &DriverEntry->ScheduledLink);
            CoreReleaseDispatcherLock ();
@@ -1090,21 +1090,27 @@ index d7c7147e..d3c5f7ad 100644
 +      // reading but the check that the three numbers are from the same boot.
 +      // That failure has already cost this project one reading.
 +      //
-+      // With 46 promotions `unhit` can therefore only be 1 or 24. 1 means the
-+      // array that was read held 47 entries and every one past index 0 matched,
-+      // so the promotions stopped where the buffer stopped. 24 means all 70
-+      // entries were read, index 0 matched nothing, and ap47..ap69 did not
-+      // either.
++      // With 46 promotions `unhit` is therefore 24, and the 24 are index 0 plus
++      // ap47..ap69. It cannot be 1: that would need the array that was read to
++      // have held 47 entries, which needs the Apriori section to come back 368
++      // bytes short - and it cannot, because FvReadFileSection hands the
++      // caller's BufferSize straight to GetSection, which takes SectionSize =
++      // CopySize before the *BufferSize < CopySize clamp and then writes
++      // *BufferSize = SectionSize after the CopyMem. The size reported is the
++      // section's declared size, and this section declares 1124. The whole 1120
++      // bytes are read on every boot.
 +      //
 +      // The line that names the shape is `miss`, below, and it needs `entries`
-+      // beside it to be read exactly. `miss=none` says every entry past 0
-+      // matched, so the buffer ended at the last one that did. `miss=47` says
-+      // the first 46 non-core entries matched and the 47th did not; with
-+      // `entries=70` that is the whole array, and the discovered list is the one
-+      // missing its tail. An index of 46 or less says an entry matched nothing
-+      // where a later entry matched something, so the batch has holes and the
-+      // array and the volume disagree about individual GUIDs rather than about
-+      // where the list ends - a different fault with a different fix.
++      // beside it to be read exactly. `miss=47` says the first 46 non-core
++      // entries matched and the 47th did not; with `entries=70` that is the
++      // whole array, and the discovered list is the one missing its tail, which
++      // is what the volume's own layout predicts. An index of 46 or less says an
++      // entry matched nothing where a later entry matched something, so the
++      // batch has holes and the array and the volume disagree about individual
++      // GUIDs rather than about where the list ends - a different fault with a
++      // different fix. `miss=none` now means something else again: with the
++      // array always read whole, every entry matched, so the image running is
++      // not this image.
 +      //
 +      // Index 0 is skipped because it matches nothing by construction: it is
 +      // gDxeCoreFileName, and the DXE_CORE branch of the walk fills in
@@ -1128,7 +1134,7 @@ index d7c7147e..d3c5f7ad 100644
      }
  
      //
-@@ -1470,6 +2207,241 @@ CoreInitializeDispatcher (
+@@ -1470,6 +2213,241 @@ CoreInitializeDispatcher (
    PERF_FUNCTION_END ();
  }
  
@@ -1370,7 +1376,7 @@ index d7c7147e..d3c5f7ad 100644
  //
  // Function only used in debug builds
  //
-@@ -1486,11 +2458,73 @@ CoreDisplayDiscoveredNotDispatched (
+@@ -1486,11 +2464,73 @@ CoreDisplayDiscoveredNotDispatched (
  {
    LIST_ENTRY             *Link;
    EFI_CORE_DRIVER_ENTRY  *DriverEntry;
