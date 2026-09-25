@@ -19174,6 +19174,13 @@ photograph — one row below the line that was transcribed. If the photograph st
 `tools/panel-text.py --decode` reads it without a transcription, which is what that tool was written
 to do after Step 4.39 found the transcription itself to be the lossy part.
 
+> **Withdrawn in Step 4.98.** The paragraph above does not survive measurement. `boot-now-0923`'s
+> `DxeCore` contains no `P2 WHY` literal, so no photograph of that screen could have held a `P2 WHY`
+> row at any framing — which Step 4.39 (`:6347`) had already recorded. The row one line below the
+> transcribed SEQ string is the first of 27 `P2 DIAG L <driver> <status name>` rows, and that row
+> names the status in words without any position table. The enumeration below stands; the premise
+> that the answer was merely unphotographed does not.
+
 ### Nothing was built and nothing was flashed
 
 - `docs/08-device-session.md` is the only file this step changes — **+371 / −0** against `f695591` —
@@ -19207,3 +19214,249 @@ to do after Step 4.39 found the transcription itself to be the lossy part.
   photograph of the **bottom** of the panel, decoded with `tools/panel-text.py --decode`, decides
   between `R`, `N` and `E` with no new build and no flash. Read the screen first; flash second:
   **先读屏，再刷下一次**.
+
+## Step 4.98 — The eight rows that payload printed, and the status it was naming in words
+
+### What was measured, and the instrument Step 4.39 did not have
+
+Step 4.39 (`:6347`) tallied literals across three payloads and concluded that `boot-now-0923`
+"prints `P2 SEQ` and nothing else in that block". Step 4.40 (`:6603`) turned that into a rule:
+
+> **`P2 SEQ` present with no `P2 ERR` anywhere on the panel** ⇒ the payload is `boot-now-0923`,
+> and no reading of that screen can produce a status.
+
+Both tallies were built out of the ladder's ten markers. A census of the payload's own strings is a
+different measurement, and it says the rule is false. The method is `fv-inventory.py`'s walk —
+Android boot header, BootShim, `FVMAIN_COMPACT`, the LZMA GUIDed section — and then every ASCII
+string in `DxeCore`'s FFS body that begins with the four bytes `P2 `:
+
+| payload | bytes | sha256 | `DxeCore` | `P2 ` rows | `KEY`/`K` |
+| --- | --- | --- | --- | --- | --- |
+| `work/out/boot-now-0923.img` | 1,142,784 | `3547fd04…` | 170,032 | **8** | none |
+| `work/out/p2-variants/Mu-gauguin-silicon-gzip.img` | 1,142,784 | `90b21643…` | 172,592 | 24 | both |
+| `work/out/p2-4.94/Mu-gauguin-silicon-gzip.img` | 1,144,832 | `d621f732…` | 172,592 | 24 | both |
+
+The eight in `boot-now-0923`'s `DxeCore`, in the order `P2Digest` prints them, with the two payloads
+of record beside them:
+
+| literal | `boot-now-0923` | `p2-variants` | a ladder entry? |
+| --- | --- | --- | --- |
+| `P2 NOLOAD %g dep=%d sched=%d unt=%d` | present | present | no |
+| `P2 NOLOAD total=%d shown=%d` | present | present | no |
+| `P2 SEQ (no Apriori entries were promoted)` | present | present | no |
+| `P2 SEQ [%a]` | present | present | `P2Seq` |
+| `P2 WHY [%a]` | **absent** | present | `P2Why` |
+| `P2 ERR none` / `P2 ERR %r x%d` | **absent** | present | `P2ErrRow` |
+| `P2 DIAG %c %g %r` | present | present | **no** |
+| `P2 STATS discovered=%d apriori=%d/%d started=%d diag=%d noload=%d` | present | present | **no** |
+| `P2 WALK t=%d seen=%d iter=%d last=%g` | present | present | **no** |
+| `P2 FREE largest=%d pages` | present | present | `P2Digest` |
+| `P2 APRI bytes=%d entries=%d sum=%x` (+5) | absent | present | `P2Apri` |
+| `P2 BIN …` (+3) | absent | present | `P2Bins` |
+| `P2 RETRY …` | absent | present | `P2Retry` |
+| `P2 FWTY …` | absent | present | `P2FreeWhy` |
+| `P2 FWHY …` | absent | present | no |
+| `KEY 0/%d err=none …` / `KEY %d/%d …` | absent | present | `P2Key` |
+| `K %d %c%c %d/%d free=%d %g` | absent | present | `P2Tick` |
+
+Five of the eight are not ladder entries at all — `P2 DIAG`, `P2 STATS`, `P2 WALK` and both
+`P2 NOLOAD` lines. That is the whole reason the ladder could not report them: it answers "is
+instrument *N* in this image", and a row it does not name is invisible to it however many times it
+is run. `P2 FWHY` is the same gap on the other side — it is in both payloads of record and in no
+rung of the ladder, so nothing has ever reported whether a given image carries it.
+
+Sixteen of the `P2 ` rows in the newer pair are new since `boot-now-0923`, and the two `DxeCore`
+bodies differ by exactly the space they take: 170,032 bytes against 172,592, a difference of 2,560.
+Both payloads of record carry the same set, and their `DxeCore` bodies are the same size to the
+byte (172,592 each) — the 2,048-byte difference between the two `.img` files is elsewhere. The
+older payload's compressed `FVMAIN` file inside `FVMAIN_COMPACT` is 0xf85f0 bytes and the newer
+one 0xf8e45, so the instrument set costs 2,133 bytes in the container and the inner FV gains one
+4 KiB page (0x703000 → 0x704000).
+
+### `P2 DIAG` names the status in words, one row per failure
+
+```
+P2 DIAG %c %g %r
+```
+
+Three fields: the phase letter, the driver's GUID, and the status. The GUID is the **36-character text
+form**, not the file name — `%g` is `BasePrintLib`'s (`PrintLibInternal.c:974-1003`), which prints
+`%08x-%04x-%04x-%02x%02x-%02x%02x%02x%02x%02x%02x`, and the `DebugLib` this platform links is
+`BaseDebugLibSerialPort` over `SiliciumPkg/Library/FrameBufferSerialPortLib` (`SiliciumPkg.dsc.inc:163-164`),
+so nothing between the format and the glass resolves a name. Step 4.9x's `:7405` already reads the
+field that way. The status is not a number either: `%r` resolves through the same library, which holds
+`mErrorString[][20+1]` at `:47` and indexes it at `:1035-1049` — so the panel prints `Load Error`,
+`Invalid Parameter`, `Unsupported`, `Device Error`, **`Out of Resources`**, **`Not Found`**,
+`Access Denied`, `Security Violation`, one of eight names for the eight statuses `P2WhyLetter` can
+spell. A row is therefore at most `P2 DIAG ` (8) + phase (1) + space (1) + GUID (36) + space (1) +
+the longest of the eight names (20) = **67 columns against the panel's 90, so no `P2 DIAG` row can
+wrap.** The two rows that can are `P2 RETRY` and `P2 APRI first=%g last=%g`: the source measures them
+at 86–152 and 92 columns respectively (`:228`, and Step 4.5x's `:4898`), which is why the one
+`P2 RETRY` row on a newer payload is the *hardest* line on the panel to photograph rather than the
+easiest.
+
+That row is a complete spelling of the same datum `P2 WHY` carries, and it is *better* than the
+letter string for a reader in one respect and worse in another: it carries the GUID, which the host
+tools resolve to a file name with no position table and no 46-character string to keep straight, and
+it costs 67 columns against the letter line's 55. `:5538` records that the session which produced the SEQ string
+produced, from the same sessions, "a single `P2 DIAG` line (`Out of Resources`)", and `:1553` reads
+that line as "a status whose name is `Out of Resources` … on a `P2 DIAG` line whose phase character
+was `L`". **The status has been on the glass and has been read.** What the transcription did not
+keep is the GUID on that row — the name was dropped in favour of the status — and what one line
+cannot say is whether the other 26 share it.
+
+### `P2Record` pushes one record per failure, so that screen held 27 of them
+
+`P2Record` (`:617`) is the function that wrote the SEQ slot which was read. It has two callers in
+the dispatch loop, and both are inside the failure branch:
+
+* `:1111` — `P2Record (&DriverEntry->FileName, 'L', Status);` after `CoreLoadImage` returned an
+  error;
+* `:1156` — `P2Record (&DriverEntry->FileName, 'S', Status);` after `CoreStartImage` returned an
+  error.
+
+The start-*success* path at `:1158` calls `P2MarkSeq` directly and records nothing, so `mP2Diag`
+holds one entry per **failure** and `mP2DiagCount` counts failures: `P2Record` is also the only
+writer of `mP2DiagCount` (`:623-627`), bounded by `P2BRINGUP_DIAG_MAX` = 64 (`:78`), above 27.
+
+The observed SEQ is 46 characters with nineteen `s`, 27 `L` and **zero `S`**, and `'S'` is written
+only by `:1156` — so no Apriori driver loaded and then failed to start, and the 27 records are the
+27 load failures. `P2Digest`'s loop (`:2419`) emits one `P2 DIAG` row per record, so **that screen
+carried 27 rows of `P2 DIAG L <driver> <status name>`**, in Apriori order, and the row one line
+below the transcribed SEQ string is the first of them.
+
+The same source says this was not always true. The comment above the DIAG block records that before
+the block was moved into the repeating digest, "a line printed here is only on the panel during the
+first frames … **Printed once, three of the twenty-seven were unreachable no matter how the
+photograph was taken.**" The move is what made the list readable; `boot-now-0923` is a
+post-move build, since the block is inside `P2Digest` in it — the same function that printed the
+SEQ row that was read.
+
+`P2 STATS` prints the count as `diag=%d`, and it is the one field that can exceed 27: records are
+taken for non-Apriori failures too, and those have no SEQ slot, so **`diag=` is the only instrument
+on any of these payloads that can report a failure the SEQ string structurally cannot show.** At
+27 the failure set is exactly the 27; above it, at least one driver outside the Apriori file failed
+to load or start, and nothing else on that screen would say so.
+
+### The correction, and how far back it goes
+
+Step 4.97's section "The row that would have been read, and the tool that reads it" says:
+
+> `tools/probe-fingerprint.py`'s ladder has said for three steps that the payload which produced the
+> SEQ reading (`boot-now-0923`) carries `P2 WHY` and does not carry `P2 ERR`. So a reading that
+> captured the SEQ row and not the WHY row captured a window whose bottom edge fell between two
+> adjacent lines, and the answer to this step's question was, most likely, already on that
+> photograph — **one row below the line that was transcribed**.
+
+The measurement above falsifies the premise and the conclusion together. `boot-now-0923`'s
+`DxeCore` contains no `P2 WHY` literal, so **no photograph of that screen could have contained a
+`P2 WHY` row**, at any framing, in any session; and the row one line below the transcribed SEQ
+string is not a `P2 WHY` row but the first `P2 DIAG L … <status>` row. The instinct was right — the
+answer was one line below the transcription — and the named row was wrong. Step 4.39 (`:6347`) had
+already measured the absence, in this document, 650 lines earlier.
+
+Step 4.39's own headline is the second correction, and it is the one that matters more. "Nothing on
+that screen can name a status" and Step 4.40's "no reading of that screen can produce a status" are
+both false: `P2 DIAG %c %g %r` is in that payload's `DxeCore`, by the census above — and by no other
+instrument, because `P2 DIAG` is not a rung of the ladder, so running `probe-fingerprint` on that file
+any number of times could not have reported it. The error was instrumental rather than factual: a
+table of *the ladder's markers* was read as a table of *the payload's rows*, and the two are not the
+same set.
+
+The doc was not uniformly wrong, which is what makes the rule worth withdrawing rather than
+apologising for. `:7398` records the opposite of the rule — that "the 27 are all
+`EFI_OUT_OF_RESOURCES`" rests on "a single status name read off a screen in an earlier session", and
+names the row it came from — and `:7411` puts the two rows that settle it side by side. So the rule
+at Step 4.39/4.40 and the record at `:7398` contradicted each other for sixty steps, and the
+measurement above decides which one the payload agrees with: the record does. `P2 DIAG L <guid>
+<status>` is on that screen, one row below the line that was transcribed three times.
+
+### What the same screen's other rows say, and how much of each is knowable without the glass
+
+`P2 STATS` has never been read (`:5538`), and four of its six fields do not need to be:
+
+| field | value on that screen | where it comes from |
+| --- | --- | --- |
+| `apriori=%d` | **46** | the SEQ string's length — `SeqLen = mP2Apriori` (`:2333`), and the string is 46 characters |
+| `apriori=/%d` | **70** | the Apriori array's entry count, measured host-side: `tools/apriori-index.py work/out/boot-now-0923.img` → `Apriori file 70 entries (1120 bytes)` |
+| `started=%d` | **19** | the `s` count — `mP2Started++` (`:1159`) is the same branch that writes `'s'` at `:1158` |
+| `diag=%d` | **27**, or more | one record per failure; 27 load failures and zero start failures, plus any non-Apriori failure |
+| `discovered=%d` | — | panel only |
+| `noload=%d` | — | panel only |
+
+So the row that has never been read is 4/6 known, and two of the four are the SEQ string's own
+length and letter counts. That is also the row that carries `diag=`, which is the only field that
+can report a failure outside the Apriori set.
+
+### Where each row sits, and the row to photograph now
+
+`P2Digest` prints SEQ, then the DIAG block, then STATS, then WALK, then `P2 FREE largest=`, then
+`P2Bins`, then `P2Key` — and it is called **41 times**: once at `:2552` and forty more inside
+`P2Hold`'s loop at `:2556`. The framebuffer console has no scrollback (`AdvanceNewLine` clears the
+whole screen once the cursor passes the last row), so after the first wipe the panel holds nothing
+but digest copies laid end to end, and each copy ends on the same row. On `boot-now-0923` that row
+is `P2 FREE largest=`; on both payloads of record it is `KEY …`, which the source bounds at 59
+columns precisely so that it cannot wrap, and which is the last populated row in every state
+including after a wipe.
+
+`P2LargestAlloc` (`:199`) is the probe behind both rows: it walks `{4096, 1024, 256, 64, 16, 4, 1}`
+with `CoreAllocatePages (AllocateAnyPages, EfiBootServicesData, N, &Memory)`, frees what it got and
+returns the first rung that succeeded, so `0` means even one page was refused. The two requests
+this batch argues about are 9 pages each — `tools/pe-facts.py` puts `PdcDxe` failing at 591 pages of
+cumulative demand and `ShmBridgeDxe` succeeding at 647, **on the identical request**: subsystem 11,
+9 pages, with one more failure in between. **If `P2 FREE largest=` reads 16 or more, then no 9-page
+request was refused for want of room, and the allocator-dry reading of `R` is struck out by the
+device itself** — which is what the host-side model already says (1,562 pages of image demand plus
+the volume's 759 pages of copies of those same files, 2,321 pages as the allocator sees it, against
+about 7,258 pages of `EfiConventionalMemory` in the DXE heap after PrePi takes `FVMAIN` off the
+top). If it reads 8 or below, the model and the device disagree, and the disagreement is the
+finding.
+
+### The reading owed, and what each row would decide
+
+| row | payload | what it decides |
+| --- | --- | --- |
+| `diag=` in `P2 STATS` | either | whether the failure set is exactly the 27, or 27 plus drivers the SEQ cannot see |
+| `P2 FREE largest=` | either | whether the heap had 16 pages in it when the digest ran — the `R` verdict, measured rather than argued |
+| `P2 ERR %r x%d` | both newer | one global cause against a split: `Out of Resources x27` is one finding, `Out of Resources x23` with `Not Found x4` is two, and the GUIDs on the `P2 DIAG` rows say which is which |
+| `P2 DIAG L …` rows | `boot-now-0923` | the per-driver half: 27 rows carrying the driver's GUID and the status in words, on a payload that is already flashed |
+| `KEY … err=… at=… free=… miss=…` | both newer | the same reading on one 59-column line, first failure's index and status, printed last so it survives the wipe |
+| `P2 APRI bytes= entries= sum=` | both newer | the checksum that makes the SEQ string verifiable rather than merely transcribed, and `unhit=` for the Apriori entries that matched nothing — 24 of the 70, if 46 were promoted |
+
+Nothing here changes what the phone is doing, and the device was not attached to this host this
+session — `lsusb`, `adb devices` and `fastboot devices` are all empty, and no panel has been
+photographed. The order the standing rules give is unchanged: read the payload back first
+(`tools/probe-fingerprint.py --read`, which dd's `boot` into `work/out/` and fingerprints it), read
+the screen second, and flash third — **先读屏，再刷下一次**.
+
+The one thing this step withdraws from Step 4.97 is not its enumeration, which stands, but its
+premise about the evidence. The status surface was not unread for want of a photograph: the rows
+that carry it were one line below the transcribed SEQ string, on a payload that is already in
+`boot`, and they were invisible to the instrument that was consulted — `P2 DIAG` is not a rung of
+the ladder, so a report about which instruments an image carries said "2 of 10" about an image that
+prints eight rows, and the two it named were the two it knows.
+
+### Nothing was built and nothing was flashed
+
+- `docs/08-device-session.md` is the only file this step changes — **+253 / −0** against `4ff3d23` —
+  and the only artifact it touches. No `.c`, no `.inf`, no `.asl`, no `APRIORI.inc`, no FFS file,
+  no payload, no partition: `work/out/` is exactly as Step 4.97 left it.
+- The payload of record is untouched: `work/out/p2-4.94/Mu-gauguin-silicon-gzip.img`, 1,144,832 B,
+  sha256 `d621f732f4763a303e980c5af04451479c2ace31801e796993a258f226c177a5`. The payload recorded as
+  being in `boot` is untouched: `work/out/p2-variants/Mu-gauguin-silicon-gzip.img`, 1,142,784 B,
+  sha256 `90b21643e3450c326fb3d24baf64d58d4692a5d155c36b76d2e020ff04a96b59`. The readback that
+  produced the SEQ reading is untouched: `work/out/boot-now-0923.img`, 1,142,784 B, sha256
+  `3547fd0487d333874492e519760155b46164be8989ab3b5db743d42feebfe8ee`.
+- Every number above is a measurement of one of those three files or a line of the tree under
+  `work/uefi/Mu-Silicium/`. The census is `fv-inventory.py`'s walk plus a regular expression over
+  `DxeCore`'s FFS body; the Apriori array length is `tools/apriori-index.py`'s own header line; the
+  print order and the record push are `Dispatcher.c`'s.
+- Cited: `Dispatcher.c:78`, `:199`, `:228`, `:617`, `:623-627`, `:1111`, `:1156`, `:1158`, `:1159`,
+  `:2239`, `:2333`, `:2339`, `:2348`, `:2349`, `:2419`, `:2431`, `:2454`, `:2462`, `:2464`, `:2470`,
+  `:2482`, `:2512`, `:2522`, `:2526-2531` (the comment recording three unreachable of the 27),
+  `:2552`, `:2556`; `BasePrintLib/PrintLibInternal.c:47`, `:974-1003`, `:1035-1049`;
+  `SiliciumPkg.dsc.inc:163-164`; and, in this document,
+  Steps 4.12, 4.13, 4.22, 4.39 (`:6347`), 4.40 (`:6603`), 4.97.
+- Standing rules unchanged: `userdata`, the partition table and the firmware LUN are untouched;
+  writes go to `boot` only; the control image is read before anything is overwritten; and the
+  screen is read before the next flash.
