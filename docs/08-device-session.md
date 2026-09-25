@@ -6460,8 +6460,10 @@ either measured away or measured to be reachable-but-unproven: `EFI_INVALID_PARA
 (a NULL or too-short file path), `EFI_UNSUPPORTED` (machine type, subsystem — both
 accepted; an unhandled relocation — none in the volume), `EFI_NOT_FOUND`
 (`GetFileBufferByFilePath`), the security protocols (not installed: `SecurityStubDxe`
-is one of the 27), `EFI_OUT_OF_RESOURCES` (three allocation sites, all of them
-pool-or-page), and `RETURN_LOAD_ERROR` from the loader's own guards (all clean).
+is one of the 27), `EFI_OUT_OF_RESOURCES` (this sentence said "three allocation
+sites"; the path carries more than three, and the two that were missing from it are
+named in Step 4.96 — every one of them is still a pool or a page), and
+`RETURN_LOAD_ERROR` from the loader's own guards (all clean).
 `EFI_DEVICE_ERROR` is produced nowhere in the path. **The live candidates are
 `EFI_OUT_OF_RESOURCES` and `EFI_NOT_FOUND`, and `P2 ERR` distinguishes them in one
 line.**
@@ -7362,6 +7364,11 @@ runtime pool beside them:
   promoted set is 5 pages and this one is 48 bytes. The note at `Page.c:1250-1254` names "a 200-byte
   AllocateRuntimePool" for exactly this role, and the only allocation that can be is this one — the
   other candidate, the preset at `:697`, is not an allocation at all.
+* and the path carries three more that are not in this function at all, which Step 4.96 counted:
+  `Image.c:1393`'s `AllocateZeroPool (sizeof (LOADED_IMAGE_PRIVATE_DATA))` in `CoreLoadImageCommon`
+  itself, and, one layer below `GetFileBufferByFilePath`, the section's own buffer at
+  `CoreSectionExtraction.c:1354` and the whole FFS file at `FwVolRead.c:328` — that last one being
+  the 759 pages the table above already measures, now named as the site it is.
 
 And the pool path is closed too: every reachable `EFI_OUT_OF_RESOURCES` out of `CoreAllocatePool`
 comes from `CoreAllocatePoolPages` failing (`Pool.c:242`, `:247`), except the `Size > MAX_POOL_SIZE`
@@ -7371,8 +7378,14 @@ gate at `Pool.c:231`, whose threshold is `MAX_ADDRESS - POOL_OVERHEAD`. So on th
 requires `P2FreeWhy` to have been called, which means `n >= 1`.**
 
 The other possible source, a `CoreConvertPages` failure after a successful search, has no way to
-fire either. `CoreConvertPagesEx`'s three failure returns are all `EFI_NOT_FOUND` (`Page.c:664`,
-`:686`, and the single-entry rule at `:672-676`), and the single-entry rule is the one that could
+fire either. `CoreConvertPagesEx` has four `EFI_NOT_FOUND` returns, and this sentence claimed
+three until Step 4.96: `:664` (no covering entry), `:675` — the single-entry rule, which the
+sentence cited correctly as `:672-676` — `:686` (assert-guarded), and `:713`. The one that was
+missing is `:713`, the incompatible-memory-types check, and it is the one that cannot fire on an
+allocation: the test is `!((NewType == EfiConventionalMemory) ^ (Entry->Type ==
+EfiConventionalMemory))`, a search returns only `EfiConventionalMemory` ranges, so for an
+allocation the two sides differ and the negation is false. It fires only when freeing pages that
+are not there to free. The single-entry rule is the one that could
 have been live: it fires only when the range being converted is not covered by one memory-map
 descriptor, and the range the search returns is inside one by construction — `CoreFindFreePagesI`
 clips `DescEnd` to `Entry->End` and then takes `Target = DescEnd - (NumberOfBytes - 1)`
@@ -18630,3 +18643,196 @@ that owns the walk.
   先读屏，再刷下一次. This step changes the interpretation of a stored reading; it does not
   take a new one, and the eight-name transcription it corrects was itself transcribed from
   that owed panel.
+
+## Step 4.96 — a comment that names two reasons where three decide, and the twenty places `EFI_OUT_OF_RESOURCES` is written on the load path
+
+### `Page.c:1048-1052` names two reasons where three decide
+
+The `P2FreeWhy` block opens with the sentence that licenses everything below it:
+
+```c
+// FindFreePages has four rungs and the third is the whole map. CoreLoadPeImage's
+// only allocation is CoreAllocatePages (AllocateAnyPages, ...) -- every one of the
+// 46 promoted modules has PcdLoadModuleAtFixAddressEnable 0 and RelocationsStripped
+// clear, so Image.c:700-741 leaves that one call and its status is what :741
+// returns.
+```
+
+`Image.c:700-741` leaves one call only if three conditions hold, and the sentence gives reasons for
+two of them:
+
+* `:702` — `if (PcdGet64 (PcdLoadModuleAtFixAddressEnable) != 0)`. False, and the sentence says so:
+  the PCD is `0` at `MdeModulePkg.dec:1154` and `_PCD_VALUE_PcdLoadModuleAtFixAddressEnable` is
+  `0ULL` in the generated `AutoGen.h:166`.
+* `:719` — `if ((PcdGetBool (PcdImageLargeAddressLoad) && (Image->ImageContext.ImageAddress) >= 0x100000))
+  || Image->ImageContext.RelocationsStripped)`. **Not addressed.** `PcdImageLargeAddressLoad` is
+  TRUE — `MdeModulePkg.dec:1379`, `_PCD_VALUE_PcdImageLargeAddressLoad` is `1U` in DxeCore's generated
+  `Build/gauguinPkg/DEBUG_CLANGPDB/AARCH64/MdeModulePkg/Core/Dxe/DxeMain/DEBUG/AutoGen.h:214`, read at
+  `DxeMain.inf:206`, overridden by no DSC, no `.inc` and no `.inf` in the tree — so this arm turns on
+  the address, and the address is the PE optional header's `ImageBase` and nothing else
+  (`BasePeCoff.c:624` for PE32, `:629` for PE32+). `tools/pe-facts.py`'s `ImageBase` column prints
+  `0x0` on all 46 promoted entries, which is the whole of why the arm is false.
+* `:730` — `if (EFI_ERROR (Status) && !RelocationsStripped)`. True, and the sentence says so:
+  `RelocationsStripped` is assigned from `IMAGE_FILE_RELOCS_STRIPPED` (`BasePeCoff.c:660`, which
+  is the `if` line of the block; `:661-666` are its three arms — PE32 and TE set it, the `else`
+  clears it), and `pe-facts.py`'s `chars` column
+  shows the bit clear on all 46 — every entry's `Characteristics` is `0x2022` or `0x2e`, both with
+  bit 0 clear.
+
+The sentence is therefore not false. Its fault is the shape of the *so*: it puts the two facts it
+does name on one side of a conjunction and lets the reader infer that `RelocationsStripped` clear is
+what keeps `:719` from firing. That is backwards. `RelocationsStripped` clear is what makes `:730`
+*take* the allocating branch — it is the reason the call happens, not the reason the fixed-address
+arm is skipped — and a reader who takes it the other way lands on exactly the conclusion Step 4.46
+was written to kill, that `has_reloc=False` is the mechanism behind the 27. Four of the 46 have
+`has_reloc` False and three of those four are failures, which is why the misreading is available at
+all.
+
+"The only allocation" is loose in the same direction. `CoreLoadPeImage` reaches the page allocator
+through exactly one call, but it also pools, at `:793`'s
+`AllocateRuntimePool ((UINTN)(Image->ImageContext.FixupDataSize))` and `:837`'s
+`AllocateRuntimePool (sizeof (EFI_RUNTIME_IMAGE_ENTRY))`, and each of those arrives at
+`FindFreePages` through `CoreAllocatePoolPages`. "Only" is said of the one request whose status
+`:741` returns, which is the claim the paragraph needs, and the sentence does not say that either.
+
+### The correction was drafted, applied, and reverted — the reason is the citation, not the hash
+
+Step 4.46's blockquote settled that a comment-only edit which does not rebuild is allowed: a comment
+is not in the binary, so it cannot move a payload's hash, and 4.46 checked both ends rather than
+assuming it. That rule is not what stopped this one. What stopped it is that `Page.c` is the most
+cited file in this document, and 48 of its citations are `Page.c:` tokens at or above line 1046 — the
+first line the insertion would move. The 35 distinct numbers are:
+
+```
+1073 1088 1090 1114 1129 1132 1159 1167 1182 1190 1207 1210 1217 1218 1228 1250 1258
+1272 1305 1312 1314 1326 1333 1343 1367 1382 1451 1500 1566 1574 2287 2511 2515
+```
+
+Rewriting 48 citations to buy a source comment a paragraph of completeness trades a small, local
+omission for 48 chances to introduce a wrong line number into the record, and the record is the thing
+this work is for. The mechanism the comment omits is already written out at length in Step 4.46, with
+its own citations, and a reader of the source who wonders about `:719` can find it there. So the
+defect is recorded here and the comment is left alone. It is the third `Page.c` comment defect this
+document has carried and the second left standing: 4.42 recorded two, 4.46 fixed one of them under
+the rule that a comment-only edit which does not rebuild cannot move a payload's hash, and this one
+is left for a reason that rule does not reach — the 48 citations above, not a staged payload.
+
+The revert is byte-exact and checkable: `git -C work/uefi/Mu-Silicium/Mu_Basecore apply --reverse
+--check uefi/patches/mu-basecore-local.patch` exits **0**, so the working tree's `Page.c` is what the
+tracked patch says it is, to the byte. Nothing was regenerated, nothing was rebuilt, and no
+`--check` was run against a tree that had drifted.
+
+### `CoreConvertPagesEx` has four `EFI_NOT_FOUND` returns, and this document said three
+
+The sentence in the load-path section read "`CoreConvertPagesEx`'s three failure returns are all
+`EFI_NOT_FOUND` (`Page.c:664`, `:686`, and the single-entry rule at `:672-676`)". There are four,
+and the count is now corrected in place:
+
+| return | line | the branch | fires on the load path? |
+| --- | --- | --- | --- |
+| no covering entry | `:664` | `Link == &gMemoryMap \|\| Entry == NULL` after the walk | no — a search returns a covered range |
+| the single-entry rule | `:675` | `ChangingType && NewType != EfiConventionalMemory && Entry->End < End` | no — `CoreFindFreePagesI` clips to one descriptor |
+| assert-guarded | `:686` | `Entry == NULL`, preceded by `ASSERT (Entry != NULL)` | no |
+| incompatible memory types | `:713` | `!((NewType == EfiConventionalMemory) ^ (Entry->Type == EfiConventionalMemory))` | no — and for a reason of its own |
+
+The one the sentence omitted is `:713`, and it is the one that cannot fire on an allocation. The
+test is an XOR of the two sides negated, so it is true exactly when the two sides *agree*: an
+allocation has `NewType != EfiConventionalMemory` and, since a search returns only
+`EfiConventionalMemory` ranges, `Entry->Type == EfiConventionalMemory`, so the sides differ and the
+negation is false. It fires when freeing pages that are not there to free — a caller bug, not a
+heap condition. The citation `:672-676` for the single-entry rule was correct as written (`:672` is
+the `if`, `:675` is the return), and the correction is to the count and to the missing fourth row,
+not to that.
+
+### The `EFI_OUT_OF_RESOURCES` sites on the load path, counted
+
+The section that enumerates `CoreLoadImage`'s failure surface said "three allocation sites, all of
+them pool-or-page", and the section that resolves the load path said `CoreLoadPeImage` "has exactly
+two `EFI_OUT_OF_RESOURCES` (`Image.c:697`, `:795`) and one more in the runtime pool beside them".
+Both are short. A `grep` over the four files the path runs through — `Image/Image.c`,
+`FwVol/FwVol.c`, `FwVol/FwVolRead.c`, `SectionExtraction/CoreSectionExtraction.c` — finds **20**
+statements of the form `return EFI_OUT_OF_RESOURCES` or `Status = EFI_OUT_OF_RESOURCES`:
+
+| file:line | the allocation it reports | on the dispatcher's load path? |
+| --- | --- | --- |
+| `Image.c:697` | none — the preset | reachable, always overwritten before `:741` |
+| `Image.c:795` | `AllocateRuntimePool (FixupDataSize)` | yes, when the image is subsystem 12 — the ten runtime drivers |
+| `Image.c:1321` | `AppendDevicePath` in the LoadFile branch | **no** — `ImageIsFromLoadFile` is FALSE for every promoted entry: `:1278` resolves the path against `gEfiFirmwareVolume2ProtocolGuid` first and sets `ImageIsFromFv` |
+| `Image.c:1393` | `AllocateZeroPool (sizeof (LOADED_IMAGE_PRIVATE_DATA))` | **yes** — and it was in neither enumeration |
+| `Image.c:1752` | `AllocatePool (JumpBufferSize)` | no — `CoreStartImage`, after the load |
+| `Image.c:1961` | `AllocatePool (ExitDataSize)` | no — `CoreExit` |
+| `FwVol.c:220` | `AllocatePool (HeaderLength)` | no — `GetFwVolHeader`, FV discovery |
+| `FwVol.c:363` | `AllocatePool (Size)` for a non-memory-mapped FV | no — `FvCheck`, discovery, and this FV is memory-mapped |
+| `FwVol.c:492` | `AllocateCopyPool (WholeFileSize)` for the checksum pass | no — `FvCheck`, discovery |
+| `FwVol.c:532` | `AllocateZeroPool (sizeof (FFS_FILE_LIST_ENTRY))` | no — `FvCheck`, discovery |
+| `FwVolRead.c:330` | `AllocateCopyPool (WholeFileSize, FfsHeader)` | **yes** — once per file on first read, and retained for the FV's life; the 759 pages the table above already measures |
+| `FwVolRead.c:384` | `AllocatePool (FileSize)` for the caller's buffer | no on the route the load takes, yes on the fallback |
+| `CoreSectionExtraction.c:346` | `AllocatePool (sizeof (CORE_SECTION_STREAM_NODE))` | yes |
+| `CoreSectionExtraction.c:358` | `AllocatePool (SectionStreamLength)` — the double buffer | only when `AllocateBuffer` is set, which a memory-mapped FV is not |
+| `CoreSectionExtraction.c:701` | `AllocateZeroPool (sizeof (CORE_SECTION_CHILD_NODE))` | yes, once per section walked |
+| `CoreSectionExtraction.c:754` | `AllocatePool (UncompressedLength)` | `case EFI_SECTION_COMPRESSION` (`:723`) only — not measured here |
+| `CoreSectionExtraction.c:795` | `AllocatePool (ScratchSize)` for the decompressor | same case |
+| `CoreSectionExtraction.c:1356` | `AllocatePool (CopySize)` — the section's own buffer | **yes** — and it was in neither enumeration |
+| `CoreSectionExtraction.c:1589` | `AllocatePool (ScratchBufferSize)` | a guided section only |
+| `CoreSectionExtraction.c:1603` | `AllocatePool (OutputBufferSize)` | a guided section only |
+
+So the path has **six live sites** — `Image.c:795` and `:1393`, `FwVolRead.c:330`, and
+`CoreSectionExtraction.c:346`, `:701` and `:1356` — one of which is runtime-only, plus the
+unreachable preset at `:697` and a set that depends on the section's type and on which of
+`GetFileBufferByFilePath`'s four routes the path ends on. **Every one of the twenty is a pool or a
+page request.** That last part is
+what the sentence was actually for, and it survives the correction: a pool request reaches
+`FindFreePages` through `CoreAllocatePoolPages` (`Pool.c:242`, `:247`), so the platform-wide
+statement — `EFI_OUT_OF_RESOURCES` out of an image load requires `FindFreePages` to have returned 0,
+which requires `P2FreeWhy` to have been called, which means `n >= 1` — is unchanged by the count.
+
+The three sites that were missing are worth naming. `Image.c:1393` is a fixed-size pool and cannot
+matter on its own. The other two are on the path and neither is small:
+`CoreSectionExtraction.c:1354` asks for
+the section's own length — the PE32's file size, which for these drivers is tens to hundreds of
+KiB — and `FwVolRead.c:328` asks for the same file *again*, whole, in a copy that is never freed
+until the FV is. On `BdsDxe` that is 385,166 bytes in one request: **95 pages**, against the 9-page
+image request `PdcDxe` was refused at. If the failure is a heap condition at the instant rather than
+a full map, the pool path is where a 95-page request would be refused first — and the section buffer
+at `:1354` is a second request of the same order, made one frame *below* `GetFileBufferByFilePath`,
+before `CoreLoadPeImage` is ever entered. Neither is a mechanism this document had considered, and
+neither is ruled out by `P2FreeWhy`: its `t=4` row is exactly "a pool chunk no driver's size
+explains", and the sizes that would explain it are these two, not any image's `SizeOfImage`.
+
+That is the one thing this step changes about the pending reading. `P2 FWHY` with `t=4` and an `np`
+matching no image was already one of the six branches, and `t=4` is `EfiBootServicesData` — which is
+what plain `AllocatePool` is (`DxeCoreMemoryAllocationLib/MemoryAllocationLib.c:493`) and what
+`AllocateCopyPool` is (`:772`, `:779`). The branch was written when no request on the load path was
+known to be a `EfiBootServicesData` one large enough to fail at a moment when a 9-page image request
+also failed; now the two below `GetFileBufferByFilePath` are, and the larger of them is the whole FFS
+file — up to `BdsDxe`'s 385,166 bytes, 95 pages, against `PdcDxe`'s refused 9. If a photograph ever
+shows `t=4`, the size to compare is a file's whole-file ceiling and not any image's `SizeOfImage`,
+and the file to compare it against is the one at the failing index.
+
+### Nothing was built and nothing was flashed
+
+- `docs/08-device-session.md` is the only file this step changes — **+210 / −4** against `d755d26`,
+  this section plus four in-place corrections — and the only artifact it
+  touches. No `.c`, no `.inf`, no `.asl`, no `APRIORI.inc`, no FFS file. The `Page.c` edit was made
+  and reverted within the step; the reverse-check below is the evidence, and the tracked patch's
+  hash is unchanged because the file it describes is.
+- **No build, no staging, no flash, and no write to any partition.** The device is absent from this
+  host throughout, so nothing here is a hardware reading and no panel was photographed.
+- The payload of record does not move: `work/out/p2-4.94/Mu-gauguin-silicon-gzip.img`,
+  **1,144,832 bytes**, sha256
+  `d621f732f4763a303e980c5af04451479c2ace31801e796993a258f226c177a5`, re-checked by `sha256sum` and
+  identical. `work/out/p2-variants/Mu-gauguin-silicon-gzip.img` is still the 4.74 set,
+  **1,142,784 bytes**, sha256 `90b21643e3450c326fb3d24baf64d58d4692a5d155c36b76d2e020ff04a96b59` —
+  **twentieth** step running.
+- The symbols this step cites are the ones on disk, re-read rather than remembered: `Image.c:702`,
+  `:719`, `:730`, `:741`, `:793`, `:837`, `:1393`, `:1629`; `BasePeCoff.c:624`, `:629`, `:660`;
+  `MdeModulePkg.dec:1154`, `:1379`; `Page.c:643`, `:664`, `:675`, `:686`, `:713`; `FwVolRead.c:328`,
+  `:330`, `:361-366`, `:384`; `FwVol.c:220`, `:363`, `:492`, `:532`; `CoreSectionExtraction.c:346`,
+  `:358`, `:701`, `:723`, `:754`, `:795`, `:1356`, `:1589`, `:1603`; `DxeServicesLib.c:665-716`,
+  `:851-926`.
+- The reading that would settle the status question is still the one already on the device. The 4.74
+  payload in `boot` carries `P2 ERR %r x%d`, `P2 DIAG %c %g %r`, `P2 BIN init=/hob_rc=/hob_rd=`,
+  `P2 BIN rc=/rd=/def=` and `P2 RETRY … bs9=`, and `tools/probe-fingerprint.py --expect P2FreeWhy`
+  exits **0** on it with all ten instruments present. One photograph of the bottom of the panel
+  decides between `Out of Resources x27` and a split, with no new build and no flash. Until then the
+  ordering rule stands: **先读屏，再刷下一次**.
