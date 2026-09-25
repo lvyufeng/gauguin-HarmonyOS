@@ -15518,3 +15518,202 @@ this node and not below it. That is the first constraint this step hands forward
   The payload in `boot` is still the **4.74** set and its panel reading is **still owed**
   under 先读屏，再刷下一次. Step 4.83 changes the payload in `work/out/p2-4.83` and not the
   one on the device.
+
+## Step 4.84 — the id the service series does decide, and the first full accounting of what this order costs
+
+### What this step was
+
+Wrote `TFTP`, the subsystem transport — `_HID` `QCOM06DC`, claimed by
+`QcTftpKmdf.inf` as "Qualcomm(R) TFTP Device", service `QcTftpKmdf`, KMDF 1.33.
+It goes between `PILC` and `IPC0`.
+
+Two results came out of it and the second is the larger one. The id is fully
+determined by the `PILC`/`RPEN`/`IPCC` triple a table carries — which is the exact
+mirror image of 4.82, where the *transport* id had to be read off an id already in
+the table because six byte-identical tables split three ways. And the position is
+the first one in this file chosen by measurement rather than by reading a
+neighbour's neighbourhood: scoring every insertion slot by the table-votes its
+relations carry gives a **unique** maximum, and it is the slot the node was written
+into.
+
+Along the way the file's own method came in for correction. Four earlier comments
+— at `RPEN`, `PILC`, `IPC0` and `GLNK` — each record "six relations no slot can
+satisfy" and treat that as a property of the slot. It is not. Those six are six of
+**128**, and the 128 are the price of seven placements this file made. That is now
+measured and written down.
+
+### The id: the service series does decide, and `vili` proves it
+
+Twenty-one corpus tables declare a `TFTP`, under seven ids. Group the 21 by the
+`PILC`/`RPEN`/`IPCC` triple each carries:
+
+| triple (`PILC` `RPEN` `IPCC`) | `TFTP` | tables |
+|---|---|---|
+| `06E0` `06E1` `06C2` | `QCOM06DC` | a52sxq, lisa, renoir, Waipio, Cedros IDP, Kailua MTP, Kailua QRD |
+| `1AE0` `1AE1` `1AC2` | `QCOM1ADC` | lemonade, venus, vili, Lahaina MTP |
+| `051B` `0533` – | `QCOM058B` | mh2, cepheus, nabu, pipa, vayu |
+| `04DF` `04E0` – | `QCOM048B` | a52q, miatoll |
+| `14DF` `14E0` – | `QCOM148B` | surya |
+| `023B` `026D` – | `QCOM02F6` | caymanslm |
+| `25E0` `25E1` `25C2` | `QCOM25DC` | alioth |
+
+Every table in a group takes that group's id, no id is shared between groups, and
+there is no departure in either direction. The low byte is not an offset from
+`PILC`: three groups with `PILC` `06E0`/`1AE0`/`25E0` all take `DC`, two with `04DF`
+and `14DF` take `8B`, and `051B` also takes `8B` while `023B` takes `F6`. What ties
+the id is the triple, not any one member of it — and **`vili` is the case that
+proves it**: it has no `PILC` at all, keeps its `1AE1`/`1AC2`, and still takes
+`1ADC` with its group.
+
+That is the sharpest form of the distinction 4.82 opened. Six tables sharing
+`06E0`/`06E1`/`06C2` byte for byte split three ways on the *transport* id
+(`0A84`/`0984`/`0C84`), so the service series does not determine the transport
+series. The same six all take `06DC`, so it does determine the service id issued
+beside it. The transport is free of the series; the service is fixed by it.
+
+### The three interfaces
+
+`qcsubsys_ext_mpss7280.inf` publishes one line and names three interfaces in it:
+
+```
+HKR,AMSS,"Interfaces",%REG_MULTI_SZ%,%GUID_TFTP_INTERFACE%,%GUID_DEVINTERFACE_PIL_TZ%,%GUID_DEVINTERFACE_GLINK%
+```
+
+with the comment that the GUIDS are "as defined in QCDK header files- pilapi.h,
+tftp_api.h, glink_wdf.h and ipav3_wdf.h in order listed", and
+`GUID_TFTP_INTERFACE = "{107A41BF-EB76-4FB8-A567-E7EF56968BBE}"`. `PILC` (4.82) and
+`GLNK` (4.82) are two of the three. This node is the third, and it is the one whose
+name the pair of them were standing around.
+
+The same extension set maps this transport's remote paths onto local ones:
+`mcfg_subsys_ext7280.inf` rewrites `\rfs\msm\mpss\readonly\firmware\image\` to
+kodiak\qdsp6m.qdb, oem_sw.txt and mbn_sw.txt under `Mappings\TFTP\Default\<sha256>`
+keys, and `qcsubsys_ext_adsp7280.inf` points ramdump roots at
+`\DriverData\QUALCOMM\TFTP\rfs\msm\adsp\ramdumps\`. So the node is not only a
+transport in the abstract — the firmware-image and ramdump paths the other two
+extension infs move are moved *through* it.
+
+### The body
+
+The smallest this file has written for a subsystem node, one member under `IPC0`'s:
+
+```asl
+Device (TFTP)
+{
+    Name (_HID, "QCOM06DC")  // _HID: Hardware ID
+    Alias (^PSUB, _SUB)  // _SUB: Subsystem ID
+    Name (_DEP, Package (One)  // _DEP: Dependencies
+    {
+        \_SB.IPC0
+    })
+
+    Method (_STA, 0, NotSerialized)  // _STA: Status
+    {
+        Return (0x0F)
+    }
+}
+```
+
+`_HID` in 21 of 21. `_DEP` in 21 of 21, naming `\_SB.IPC0` alone — **the first
+dependency in this file with one target and no exception**. The alias is
+`Alias (\_SB.PSUB, _SUB)` in 20, with Waipio carrying `Method (_SUB)` in the 21st —
+Waipio departing at the same member as it did at `IPC0` and at `GLNK`. There is no
+`_UID`, no `_CRS` and no `_CID` in any of the 21. `Method (_STA)` returns `0x0F` in
+**12** and is absent from exactly nine — caymanslm, mh2, a52q, cepheus, miatoll,
+nabu, pipa, surya, vayu, which is the 02/04/05/14 generations. This board is 0A and
+takes the method, which is what was written.
+
+### The 128-relation accounting, and the one slot that maximises the vote
+
+This is the part that corrects the file's method rather than adding to it.
+
+Of the **439** relations the corpus states unanimously about pairs of nodes *both*
+present in this table, this file contradicts **128 (29.2%)** — and every one of the
+128 is accounted for by seven placements:
+
+| node | relations broken | where this file put it | where the corpus puts it |
+|---|---|---|---|
+| `UCS0` | 27 | position 3 | after `PILC` |
+| `URS0` | 19 | position 4 | after `PILC` |
+| `USB0` | 19 | position 5 | after `PILC` |
+| `UFN0` | 19 | position 6 | after `PILC` |
+| `SPMI` | 12 | position 7 | after `SCM0` |
+| `GIO0` | 7 | position 13 | after `SPMI` |
+| `IC10` | 1 | before `UARD` | after `UARD` (9 of 9) |
+| `QGP0` | 10 | position 22 | after `CPU7` |
+| `QGP1` | 10 | position 23 | after `CPU7` |
+| `MMU0`, `MMU1` | 4 | collateral of the `IPC0`/`GLNK` slots | — |
+
+The four bus nodes are two-thirds of the cost and they are **one decision**: this
+file wrote the USB and storage block first and the corpus writes it after the
+cameras. The "six relations no slot can satisfy" recorded at `RPEN`, `PILC`, `IPC0`
+and `GLNK` are six of these 128 and not a peculiarity of those slots — so a slot
+must be scored by **how many relations it satisfies**, not by whether any break.
+
+Scored that way: `TFTP` relates unanimously to **32** of this file's 35 nodes,
+carrying **602 table-votes** (a relation's weight is the number of corpus tables
+voting on it). Inserting the node into every slot in turn, the maximum is **491**,
+and exactly **one** slot reaches it — between `PILC` and `IPC0`. The runner-up
+reaches **472** and loses `PILC`'s 19, which is the 19 tables that carry both (vili
+and Waipio are the two without a `PILC`). The six votes no slot can satisfy are the
+block from the 128: `UCS0` (10 of 10), `URS0`, `USB0`, `UFN0`, `GIO0` (20 each) and
+`SPMI` (21).
+
+That is where the node was written, at line 2632, between `PILC` (2475) and `IPC0`.
+
+### Neighbours, and what cannot be built here
+
+In six of the seven tables sharing this table's service triple, `TFTP` sits inside
+the remoteproc cluster. a52sxq, lisa and renoir read
+
+```
+... CSW0 SBTD TFTP QCSK MMU0 MMU1 IMM0 IMM1 GPU0 ...
+```
+
+and Cedros and both Kailua differ only in the four nodes before `SBTD`. **Not one
+of `SBTD`, `QCSK`, `IMM0` or `IMM1` exists in this table**, and `MMU0`/`MMU1` are
+twenty nodes away. Six tables agree on a neighbourhood that cannot be built here.
+The seventh, Waipio, reads `... BAM5 RPEN TFTP SCM0 TLOG SPMI IPCC IPC0 GLNK ...` —
+`TFTP` after `RPEN` and before `IPC0` and `GLNK`, which is the corridor this slot
+lands in, and the one of the seven whose relation this file can honour.
+
+Immediate-before census across the 21: `SPSS` 13, `SBTD` 4, `CDSP` 2, `BAMF` 1,
+`RPEN` 1. Immediate-after: `QCSK` 12, `MMU0` 7, `SSVC` 1, `SCM0` 1.
+
+### The ladder
+
+- `tools/acpi/gauguin.asl` is **4,092 lines**, md5 `716a852bf6bbb189723343ceb592713e`,
+  matching `uefi/Silicium-ACPI/Platforms/Xiaomi/gauguin/gauguin.asl` and
+  `work/uefi/Mu-Silicium/…/gauguin.asl` — the full three-stage chain run, all three
+  copies the same. The 131-line divergence seen at 4.83 did not recur.
+- `iasl -p /tmp/direct484 -tc gauguin.asl`: AML **6,270 bytes, 265 opcodes, 402 named
+  objects**, checksum `0x8d`, length `0x187e`, byte sum `0x00`,
+  sha256 `d5a8fdf871aaef887c8f10a9d4e8de0a5126c049147dc2d44c13f0e5eb29429b`.
+  The ids sit at `QCOM06E1` 3268, `QCOM06E0` 3299, **`QCOM06DC` 3331**, `QCOM0A0D`
+  3384, `QCOM0A84` 3427, `QCOM0A88` 3481 and 3578, `QCOM06C2` 4692.
+- Build: `PROGRESS - Success` followed by the known benign
+  `ValueError: DTB image must not be empty.` from Mu-Silicium's own `.img`.
+- `--dump-fvmain`: 7,356,416 bytes (`0x704000`),
+  sha256 `c7b29e2f3a14124bc63d240689fca9dcead09654cee43923dab6c1e7fc849a62`,
+  byte-identical to `Build/…/FV/FVMAIN.Fv`; `EFI_FV_TAKEN_SIZE = 0x703f98`.
+- The ACPI readback: 6 tables, `DSDT` at `0x0054d4c8` — **the same offset for a
+  fourteenth step** — 6,270 bytes with a valid checksum and byte-identical to the
+  direct compile, carrying `QCOM06DC`. `SSDT`/`APIC`/`GTDT` valid; only `FACP` and
+  `FACS` do not, as expected before `AcpiTableDxe` runs.
+- The three payloads are `048bee37…` (silicon/gzip), `1eebab25…` (stock/gzip) and
+  `856b92da…` (stock/none), all three matching GenFv's map at **123 offsets and
+  GUIDs, zero mismatches**, and all three passing `--expect P2FreeWhy` with the full
+  ten-instrument ladder. They are archived in `work/out/p2-4.84`.
+- `work/out/p2-variants` **still holds the 4.74 set** — `90b21643…`, `e693e1a0…`,
+  `26919861…`. Ninth step running.
+- Device count **36 → 37** `Device (` declarations. The census: **50 `_HID`/`_CID`
+  declarations, 36 distinct**, `QCOM06DC` being the new declaration and a claimed id
+  (`QcTftpKmdf/QcTftpKmdf.inf`). The same two remain unclaimed as every step since
+  4.70: `QCOM0A8B` (`URS0`) and `QCOM24A5` (`UFS0`).
+- The panel decoder re-checked against itself: `panel-text.py --selftest` decodes
+  **9 of 11** degraded photographs exactly, flags 4 differing characters as weak and
+  leaves **0 unannounced**.
+- The device is absent from this host throughout, so nothing here is a hardware
+  reading. The payload in `boot` is still the **4.74** set and its panel reading is
+  **still owed** under 先读屏，再刷下一次. Step 4.84 changes the payload in
+  `work/out/p2-4.84` and not the one on the device.

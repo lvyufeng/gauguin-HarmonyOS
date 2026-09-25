@@ -2455,7 +2455,10 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
         // it in this file, because this file wrote the early block in an order of
         // its own in which ABD - unanimous before RPEN - keeps company with
         // devices the corpus puts after. They are recorded and not repaired, as
-        // there: a reordering is its own measurement.
+        // there: a reordering is its own measurement. The full count of what this
+        // order costs the corpus is measured at TFTP below (Step 4.84) and these
+        // six are six of 128 broken relations, over seven placements, one of
+        // which is this one.
         Device (RPEN)
         {
             Method (_STA, 0, NotSerialized)  // _STA: Status
@@ -2470,6 +2473,169 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
         Device (PILC)
         {
             Name (_HID, "QCOM06E0")  // _HID: Hardware ID
+            Method (_STA, 0, NotSerialized)  // _STA: Status
+            {
+                Return (0x0F)
+            }
+        }
+
+        // TFTP is the firmware transfer service, and QcTftpKmdf.inf names it in
+        // one line: %QcTftpKmdf.DeviceDesc%=QcTftpKmdf_Device, ACPI\QCOM06DC,
+        // the description string being "Qualcomm(R) TFTP Device" and the binary
+        // QcTftpKmdf.sys, a KMDF driver (KmdfLibraryVersion 1.33), class SYSTEM
+        // under the same {4d36e97d-...} the nodes around it use, StartType 3,
+        // ServiceType 1. Fourteen sections, one hardware id, one file to copy,
+        // and no registry data of its own beyond the SoC device category GUID
+        // that forty-six of the infs in this set carry.
+        //
+        // It is the third of three interfaces the modem subsystem hands out.
+        // qcsubsys_ext_mpss7280.inf names the set in one line -
+        // HKR,AMSS,"Interfaces",%REG_MULTI_SZ%,%GUID_TFTP_INTERFACE%,
+        // %GUID_DEVINTERFACE_PIL_TZ%,%GUID_DEVINTERFACE_GLINK% - and a comment
+        // under it records where the three come from: "pilapi.h, tftp_api.h,
+        // glink_wdf.h in order listed". PILC is the first of the three, written
+        // in Step 4.82, and GLNK is the second. This is the third, and one inf
+        // publishing the three as a single list is the plainest statement in the
+        // driver set that they belong to one subsystem. What the service carries
+        // is legible in the other two infs that mention it: mcfg_subsys_ext7280
+        // maps remote paths under \rfs\msm\mpss\readonly\firmware\image\ to local
+        // ones - kodiak\qdsp6m.qdb among them - under a Mappings\TFTP key named
+        // by a SHA-256; and qcsubsys_ext_adsp7280 points its ramdump roots at
+        // \DriverData\QUALCOMM\TFTP\rfs\msm\adsp\ramdumps\. Firmware images in
+        // and ramdumps out, over the router below and the transport beside it.
+        //
+        // The id is fixed by this table's service series, which is the exact
+        // opposite of how GLNK's was fixed. Twenty-one tables declare a TFTP,
+        // under seven ids, and they do not scatter the way the GLNK ids scatter:
+        // group the twenty-one by the PILC/RPEN/IPCC triple each one carries and
+        // every table in a group takes the same TFTP id, and no id is shared
+        // between two groups.
+        //
+        //   triple              TFTP   tables
+        //   06E0 06E1 06C2      06DC   a52sxq, lisa, renoir, Waipio, Cedros IDP,
+        //                               Kailua MTP, Kailua QRD
+        //   1AE0 1AE1 1AC2      1ADC   lemonade, venus, vili, Lahaina MTP
+        //   051B 0533  -        058B   mh2, cepheus, nabu, pipa, vayu
+        //   04DF 04E0  -        048B   a52q, miatoll
+        //   14DF 14E0  -        148B   surya
+        //   023B 026D  -        02F6   caymanslm
+        //   25E0 25E1 25C2      25DC   alioth
+        //
+        // Seven groups, seven ids, twenty-one of twenty-one with no departure in
+        // either direction. The high byte is the group's high byte throughout.
+        // The low byte is the group's and is not an offset from any member of it:
+        // the three groups whose PILC is 06E0, 1AE0 and 25E0 all take DC, the two
+        // whose PILC is 04DF and 14DF take 8B, the one whose PILC is 051B takes
+        // 8B as well, and the one whose PILC is 023B takes F6. So 8B comes out of
+        // three different PILC values, and one PILC value does not decide the low
+        // byte on its own. vili is the case that settles the reading: it has no
+        // PILC at all and keeps 1AE1 and 1AC2, and it takes 1ADC like the other
+        // three of its group. The id is a function of the triple.
+        //
+        // This is the mirror image of the GLNK measurement. There, six tables
+        // carrying 06E0, 06E1 and 06C2 byte for byte split three ways on the
+        // transport id - 0A84, 0984 and 0C84 - and the service series was found
+        // not to determine the transport series. The same six tables take 06DC
+        // here, all six of them, so the service series does determine the service
+        // id issued beside it. The transport is free of the series and the
+        // service is fixed by it, which is the sharpest form the distinction has
+        // taken. Within the row this table is in, that leaves nothing to choose:
+        // seven tables carry 06E0, 06E1 and 06C2, and all seven declare QCOM06DC.
+        // The driver set agrees and agrees only that far: of the seven ids the
+        // corpus uses exactly one appears anywhere in the 112 infs, QCOM06DC in
+        // QcTftpKmdf.inf, and no second inf names it.
+        //
+        // The body is the smallest this file has written, one member smaller than
+        // IPC0's. An _HID; a _DEP naming \_SB.IPC0 alone in twenty-one of
+        // twenty-one, the first dependency here with one target and no exception;
+        // the alias in twenty and Waipio's Method (_SUB) in the twenty-first,
+        // which is Waipio departing at the same member as at IPC0 and GLNK. No
+        // _CRS in any of the twenty-one, no _UID, no _CID. And a Method (_STA)
+        // returning 0x0F in twelve, which is the one member whose presence is not
+        // uniform: the nine without it are caymanslm, mh2, a52q, cepheus,
+        // miatoll, nabu, pipa, surya and vayu - the 02, 04, 05 and 14 generations
+        // - and the twelve with it are the 09, 0A, 0C, 1A and 25 ones. This board
+        // is 0A and takes the method.
+        //
+        // Position, and with it the first full accounting of what this file's
+        // order costs the corpus. Of the 439 relations the corpus states
+        // unanimously about pairs of nodes both present here, this file
+        // contradicts 128, and every one of the 128 is accounted for by seven
+        // placements this file made:
+        //
+        //   node      cost   the placement, against what the corpus does
+        //   UCS0       27    at position 3; corpus puts it after PILC
+        //   URS0       19    at position 4; likewise
+        //   USB0       19    at position 5; likewise
+        //   UFN0       19    at position 6; likewise
+        //   SPMI       12    at position 7; corpus puts it after SCM0
+        //   GIO0        7    at position 13; corpus puts it after SPMI
+        //   IC10        1    before UARD; corpus puts UARD first, 9 of 9
+        //   QGP0       10    at position 22; corpus puts it after CPU7
+        //   QGP1       10    at position 23; likewise
+        //   MMU0 MMU1   4    at positions 24 and 25; corpus puts the pair
+        //                    immediately after TFTP and before IPC0, which
+        //                    is what the 4 broken relations of IPC0 and GLNK
+        //                    are - they are collateral, not a move of theirs
+        //
+        // The four bus nodes are two thirds of the cost and they are one
+        // decision: this file wrote the USB and storage block first and the
+        // corpus writes that block after the cameras, near the end of its
+        // tables. The rest is smaller and separately decided. That is the
+        // baseline a slot argument has to be read against, and it corrects
+        // something the four comments before this one imply. The corpus pins a
+        // node only relative to other nodes, and this file has already declined
+        // to follow it in seven places, so a slot is scored by how many of the
+        // relations it satisfies and not by whether any are broken at all. The
+        // six relations RPEN's, PILC's, IPC0's and GLNK's comments each record
+        // as broken are six of the 128, and not a peculiarity of those slots.
+        //
+        // Scored that way there is one best slot for this node and it is unique.
+        // The relations to satisfy are the 602 table-votes carried by the
+        // thirty-two nodes this node has a unanimous relation with; the maximum
+        // is 491, and exactly one slot reaches it - between PILC and IPC0. The
+        // runner-up reaches 472 and the six votes it loses are PILC's: the
+        // corpus puts PILC before TFTP in 19 of 19 tables that have both, vili
+        // and Waipio being the two without a PILC. The six relations no slot can
+        // satisfy are the block recorded above - UCS0 (10 of 10), URS0, USB0,
+        // UFN0 and GIO0 (20 each) and SPMI (21) all follow TFTP in the corpus and
+        // all precede it here. So the slot is fixed by the node above it and the
+        // node below it, both of which are already in this file, and not by an
+        // adjacency read off a corpus table.
+        //
+        // It cannot reproduce the neighbourhood it was measured in, and that
+        // should be said plainly. In six of the seven tables that share this
+        // table's service triple, TFTP stands inside the remoteproc cluster:
+        // a52sxq, lisa and renoir read ... CSW0 SBTD TFTP QCSK MMU0 MMU1 IMM0
+        // IMM1 GPU0 ..., and Cedros and both Kailua differ only in the four nodes
+        // before SBTD. Not one of SBTD, QCSK, IMM0 or IMM1 is in this table, and
+        // MMU0 and MMU1 are here but twenty nodes away. The seventh table of the
+        // group is Waipio, and Waipio is the one that reads like this file:
+        // ... BAM5 RPEN TFTP SCM0 TLOG SPMI IPCC IPC0 GLNK ..., with TFTP after
+        // RPEN and before IPC0 and GLNK, which is the corridor this slot lands
+        // in. Six tables agree on a neighbourhood that cannot be built here and
+        // the seventh agrees on a relation that can. That is the whole of what
+        // the corpus has to say about where this node goes.
+        //
+        // What it hands forward. BAM1 and BAM5 precede TFTP in 21 of 21 and
+        // precede IPC0 in 21 of 21 and are still absent; in the nine generations
+        // the corpus spreads them over, the two always carry the same id as each
+        // other, QCOM0A0A in the two 0A tables. So they go between RPEN and this
+        // node or between this node and IPC0, and their own comment will have to
+        // choose, on the same 602-vote scale and against the same 128-relation
+        // baseline this one was measured on. MMU0 and MMU1 want to be adjacent to
+        // this node - MMU0 immediately follows TFTP in 7 tables, and the pair
+        // follows QCSK in 12 - and cannot be until this file decides to move
+        // them, which is a reordering and therefore its own measurement.
+        Device (TFTP)
+        {
+            Name (_HID, "QCOM06DC")  // _HID: Hardware ID
+            Alias (^PSUB, _SUB)  // _SUB: Subsystem ID
+            Name (_DEP, Package (One)  // _DEP: Dependencies
+            {
+                \_SB.IPC0
+            })
+
             Method (_STA, 0, NotSerialized)  // _STA: Status
             {
                 Return (0x0F)
@@ -2576,9 +2742,20 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
         // recorded and not repaired, as at RPEN and PILC and GLNK.
         //
         // Three nodes the corpus puts before IPC0 in every table that has both
-        // are not in this table yet - BAM1 and BAM5 (21 of 21) and TFTP (21 of
-        // 21). TFTP is on the list, and when it is written it goes above this
-        // node and not below it.
+        // were not in this table when that paragraph was written - BAM1 and BAM5
+        // (21 of 21) and TFTP (21 of 21) - and the prediction made here was that
+        // TFTP would be written above this node and not below it. It was written
+        // in Step 4.84 and it landed above, but the prediction was coarse: the
+        // corpus puts PILC before TFTP in 19 of 19 tables that have both, so the
+        // slot is not the one above IPC0's other side but the one between PILC
+        // and this node. On the 602 table-votes TFTP's relations carry that slot
+        // scores 491 and is the unique maximum; the runner-up scores 472 and
+        // loses PILC's 19. The adjacency predicted here is unchanged - TFTP is
+        // immediately before this node in this file now, and IPC0 is still
+        // immediately before GLNK, which is the adjacency the corpus does state,
+        // 21 of 21. BAM1 and BAM5 are still absent and their constraint is
+        // unchanged and now sharper: they precede both TFTP and this node in 21
+        // of 21, so whichever of the two slots they take, they take it above.
         Device (IPC0)
         {
             Name (_HID, "QCOM0A0D")  // _HID: Hardware ID
