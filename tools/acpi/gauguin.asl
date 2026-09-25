@@ -3989,41 +3989,69 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
                  * the address is the identity. Both members are `_ADR`-addressed
                  * children of a device this file already writes.
                  *
-                 * The shape is 20 of the 66 tables, and unanimous among them:
-                 * every one of the 20 carries an `RHUB` under `URS0`'s `USB0`
-                 * and a second under `URS0`'s `UFN0`, each with exactly one
-                 * `PRT1`. 43 tables declare neither device. The one table with a
-                 * hub and no port is caymanslm, which also carries the corpus's
-                 * only `RHUB` that is not a bare `_ADR` - its body holds a `_DSM`
-                 * and three temporaries - and the two Kailua tables name a
-                 * `PRT1` only as an `External`, under a `UBF0` whose table the
-                 * corpus does not hold.
+                 * The shape is 20 of the 65 tables - 21 of 66 if this table is
+                 * counted among them, which below it is not - and unanimous
+                 * among the 20: every one carries an `RHUB` under `URS0`'s
+                 * `USB0` and a second under `URS0`'s `UFN0`, each with exactly
+                 * one `PRT1`. 44 tables declare neither device, and 42 of those
+                 * name neither one either; the two that do are Kailua's, which
+                 * name a `PRT1` only as an `External`, under a `UBF0` whose
+                 * table the corpus does not hold.
                  *
                  * The bodies are measured rather than assumed. `RHUB`'s own body
-                 * is one member, `Name (_ADR, Zero)`, in 59 of its 60
+                 * is one member, `Name (_ADR, Zero)`, in 58 of its 60
                  * occurrences, and `PRT1`'s is three - `_ADR One`, `_UPC`, `_PLD`
                  * - in 58 of 59. The 59th `PRT1` is a52sxq's redriver: a
                  * top-level `Device (PRT1)` carrying `_HID "QCOM1121"`, sharing
-                 * the name and nothing else. `_UPC` is `Package (0x04) { One,
-                 * 0x09, Zero, Zero }` in all 40 instances under `URS0`; the six
-                 * that read 0x06 are all in `USB1`/`UFN1` subtrees, and this
-                 * table has no `URS1` at all.
+                 * the name and nothing else, stating neither `_UPC` nor `_PLD`.
+                 * The one table with a hub and no port is caymanslm, whose hub
+                 * is also the corpus's only `RHUB` in a table that declares no
+                 * port at all - its body holds a `_DSM` and three temporaries -
+                 * but not the corpus's only body that is more than a bare
+                 * `_ADR`: nabu carries a third `RHUB`, under a `USBD` that is
+                 * neither of `URS0`'s children, and that one holds an `MP0` with
+                 * an `XMKB` in it where the others hold a `PRT1`.
+                 *
+                 * `_UPC` is `Package (0x04) { One, 0x09, Zero, Zero }` in all 40
+                 * instances under `URS0`. The eighteen under the `URS1`-ward
+                 * controllers are not one value: twelve read the same 0x09, six
+                 * read 0x06, and this table has no `URS1` at all, so none of the
+                 * eighteen is a question this table is answering.
                  *
                  * `_PLD` is one blob everywhere and the field that moves is
-                 * `PLD_GroupPosition`: 0x0 on 38 of the 40 `URS0` instances - the
-                 * other two, pipa's, state no GroupPosition at all, which is the
-                 * same zero - against 0x1 on the fourteen of `URS1` and 0x3 on
-                 * vayu's two. 0x0 is this subtree's, and it is what this node
-                 * states.
+                 * `PLD_GroupPosition`: 0x0 on all 40 `URS0` instances - named in
+                 * 38 of them and read out of the twenty bytes in pipa's two,
+                 * which state it as a raw `Buffer (0x14)` rather than through a
+                 * `ToPLD` - against 0x1 on fourteen of the `URS1` instances and
+                 * 0x3 on vayu's two and pipa's two. The only port in the corpus
+                 * that states no `GroupPosition` is a52sxq's redriver, which is
+                 * also the only one that states no `_UPC`. 0x0 is this
+                 * subtree's, and it is what this node states.
                  *
                  * Where it sits is measured with a disagreement in it. Under
                  * `USB0` the node is the fourth member, after `_ADR`, `_S0W` and
-                 * `_CRS`, in 18 of the 20; under `UFN0` it is the third, between
-                 * `_S0W` and `_CRS`, in 17 of the 19 that have one. b4q and
-                 * ingres put it last in both devices, after `PHYC`, and vili puts
-                 * it after `_CRS` in `UFN0`; the majority order is followed in
-                 * each device, and the asymmetry between the two is the
-                 * corpus's rather than a slip.
+                 * `_CRS`, in 18 of the 21 the corpus puts there - the same 18 of
+                 * the 20 pair tables, caymanslm's being the twenty-first. The
+                 * two that are not, b4q's and ingres's, put it last, after
+                 * `PHYC`, and caymanslm's is last too. Under `UFN0` it is the
+                 * third, between `_S0W` and `_CRS`, in 17 of the 20, with b4q
+                 * and ingres last again and vili's fourth, after `_CRS`. The
+                 * majority order is followed in each device, and the asymmetry
+                 * between the two - hub fourth under `USB0`, third under
+                 * `UFN0` - is the corpus's rather than a slip.
+                 *
+                 * Every number above is what `tools/acpi-usb-pair-census.py`
+                 * prints for the 65 tables that are not this one, which is what
+                 * Step 4.91 added here. Step 4.90 wrote this comment by hand and
+                 * seven of its numbers do not survive the tool: the pair as "20
+                 * of the 66", 43 tables declaring neither, 59 of 60 bare hubs,
+                 * caymanslm's as the corpus's only non-bare body, 0x3 on vayu's
+                 * two, pipa's four `_PLD` fields called absent - they are 0x0 and
+                 * 0x3, and the field is in the bytes - and the two slot
+                 * denominators, 20 and 19 where the corpus has 21 and 20. The
+                 * shape it described was right and the arithmetic was not: a
+                 * file scoring itself is not a measurement, and neither is a
+                 * number nobody can re-derive.
                  *
                  * bitra is why this needs an argument. It has no `RHUB` and no
                  * `PRT1` - zero occurrences of either name - and carries `_UPC`

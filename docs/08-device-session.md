@@ -17243,49 +17243,58 @@ point of the step rather than an omission from it.
 
 ### The pair, and the three ways the corpus varies it
 
-Of the 66 tables, **20 carry both `RHUB` and `PRT1`**, and among those 20 the
-pair is unanimous: every one of them carries a hub under `URS0`'s `USB0` **and a
-second under `URS0`'s `UFN0`**, each with exactly one port. That is 40 hubs and
-40 ports and it is why the count is stated as 20 of 20 rather than 40 of 40 —
-the two move together, and a table that has one of these devices in one place
-and not the other does not exist in the corpus. **43 tables declare neither.**
-The three that break the pattern are single tables and not a group: caymanslm
-has a hub and no port, which is also the corpus's only `RHUB` whose body is not
-bare — it holds a `_DSM` and three temporaries — and the two Kailua tables name
-a `PRT1` only as an `External`, under a `UBF0` whose table the corpus does not
-hold. 20 + 43 + 3 is 66.
+Of the 65 tables that are not this one, **20 carry both `RHUB` and `PRT1`** (21
+of 66 if this table is counted among them, which it is not below), and among
+those 20 the pair is unanimous: every one of them carries a hub under `URS0`'s
+`USB0` **and a second under `URS0`'s `UFN0`**, each with exactly one port. That
+is 40 hubs and 40 ports and it is why the count is stated as 20 of 20 rather
+than 40 of 40 — the two move together, and a table that has one of these devices
+in one place and not the other does not exist in the corpus. **44 tables declare
+neither**, and 42 of those name neither device either. The three that break the
+pattern are single tables and not a group: caymanslm has a hub and no port —
+the only table in the corpus that does — and the two Kailua tables name a
+`PRT1` only as an `External`, under a `UBF0` whose table the corpus does not
+hold; both Kailuas are inside the 44. 20 + 44 + 1 is 65.
 
-The bodies are measured the same way. `RHUB`'s own members are one `Name` in 59
+The bodies are measured the same way. `RHUB`'s own members are one `Name` in 58
 of its 60 occurrences — `Name (_ADR, Zero)` and nothing else — and `PRT1`'s are
-three, `_ADR One`, `_UPC` and `_PLD`, in 58 of its 59. The 59th `PRT1` is
-a52sxq's redriver: a top-level `Device (PRT1)` carrying `_HID "QCOM1121"`, which
-shares the name and nothing else. Counting members rather than grepping names is
-what separates those two, and it is the reason the 59 is recorded rather than
-rounded to "all of them".
+three, `_ADR One`, `_UPC` and `_PLD`, in 58 of its 59. The two `RHUB`s that are
+more than a bare `_ADR` are caymanslm's, which holds a `_DSM` and three
+temporaries, and nabu's third one, under a `USBD` that is neither of `URS0`'s
+children, which holds an `MP0` with an `XMKB` in it where every other hub holds
+a `PRT1`. The 59th `PRT1` is a52sxq's redriver: a top-level `Device (PRT1)`
+carrying `_HID "QCOM1121"`, which shares the name and nothing else and states
+neither `_UPC` nor `_PLD`. Counting members rather than grepping names is what
+separates those, and it is the reason the 59 is recorded rather than rounded to
+"all of them".
 
 `_UPC` is `Package (0x04) { One, 0x09, Zero, Zero }` in **all 40** instances
-under `URS0`. The six instances in the corpus that read `0x06` are all inside
-`USB1`/`UFN1` subtrees, and this board has no `URS1` at all, so the value is not
-in doubt here — but it is worth recording that the value is per-`URS`, because a
-table that had both would need two different numbers in the same member.
+under `URS0`. The eighteen instances under the `URS1`-ward controllers are not
+one value: twelve read the same `0x09` and six read `0x06`. This board has no
+`URS1` at all, so none of the eighteen is a question this table is answering —
+but it is worth recording that the value is per-`URS`, because a table that had
+both would need two different numbers in the same member.
 
 `_PLD` is one blob everywhere, and the field that moves is `PLD_GroupPosition`:
-`0x0` on 38 of the 40 `URS0` instances, against `0x1` on all fourteen of the
-`URS1` ones and `0x3` on vayu's two. The two that are not `0x0` among the
-`URS0` instances are pipa's, and they state no `GroupPosition` at all — a
-different spelling of the same zero, and the reading that makes 38 and 40 the
-same number rather than a discrepancy. `0x0` is this subtree's.
+`0x0` on **all 40** of the `URS0` instances — named in 38 of them and read out
+of the twenty bytes in pipa's two, which state it as a raw `Buffer (0x14)`
+rather than through a `ToPLD` — against `0x1` on fourteen of the `URS1` ones and
+`0x3` on vayu's two and pipa's two. The only port in the corpus that states no
+`GroupPosition` is a52sxq's redriver, which is also the only one that states no
+`_UPC`. `0x0` is this subtree's.
 
 ### Where it sits, and a disagreement the corpus has with itself
 
 Placement is measured with the disagreement left in it rather than smoothed
 over. Under `USB0` the node is the **fourth** member, after `_ADR`, `_S0W` and
-`_CRS`, in 18 of the 20. Under `UFN0` it is the **third**, between `_S0W` and
-`_CRS`, in 17 of the 19 that have one. The minority is b4q and ingres, which put
-it last in both devices, after `PHYC`, and vili, which puts it after `_CRS` in
-`UFN0`. The majority order is followed in each device separately, and the
-asymmetry between the two — fourth in one, third in the other — is the corpus's
-and not a slip in this file.
+`_CRS`, in 18 of the 21 the corpus puts there — the same 18 of the 20 pair
+tables, caymanslm's being the twenty-first. Under `UFN0` it is the **third**,
+between `_S0W` and `_CRS`, in 17 of the 20, every one of the pair tables having
+one. The minority is b4q and ingres, which put it last in both devices, after
+`PHYC`, and vili, which puts it after `_CRS` in `UFN0`; caymanslm's is last too.
+The majority order is followed in each device separately, and the asymmetry
+between the two — fourth in one, third in the other — is the corpus's and not a
+slip in this file.
 
 ### bitra is why this needed an argument
 
@@ -17416,3 +17425,187 @@ their `_ADR`, `_S0W`, `_CRS`, `_STA` and the `PHYC` child are untouched, and
   Windows runs on the phone. The payload in `boot` is still the **4.74** set and
   its panel reading is **still owed** under 先读屏，再刷下一次. Step 4.90 archives
   its payloads in `work/out/p2-4.90` and does not touch the one on the device.
+
+### Correction — Step 4.91
+
+Seven of the numbers in this entry were measured by hand, in `/tmp`, with no
+script in the repository to re-run them, and all seven come out different when
+the same questions are asked by `tools/acpi-usb-pair-census.py`, which Step 4.91
+added:
+
+| as this entry states it | re-measured |
+|---|---|
+| the pair as "of the 66 tables" | 20 of the 65 that are not this one; 21 of 66 counting it |
+| **43 tables declare neither** | **44** — 42 naming neither device, plus Kailua's two |
+| caymanslm the corpus's only non-bare `RHUB` | nabu's third hub, under `USBD`, is the second |
+| `RHUB`'s body one `Name` in **59 of 60** | **58 of 60** |
+| `0x3` on vayu's two | on four — vayu's two and pipa's two |
+| pipa's two `_PLD`s state no `GroupPosition` | all 40 `URS0` instances state `0x0`; pipa's state it in the bytes |
+| slot denominators **20** and **19** | **21** and **20** |
+
+The errors are not all of one kind, and only one of them is arithmetic. The pair
+count, the neither count, the bare-hub count and the two denominators were
+counted wrong by hand, and the entry's own arithmetic at "20 + 43 + 3 is 66"
+balanced only because the third term counted Kailua's two tables a second time,
+the neither count already holding them. The `GroupPosition` row is not a slip:
+iasl renders a `_PLD` built
+as a `VarPackage` as a raw `Buffer (0x14)` instead of naming its fields, pipa's
+four are the only ones in the corpus built that way, and a reading that only
+knows the field names reports four values absent — two of which are `0x0` and
+two `0x3`. The shape this entry describes was right in every case; the numbers
+were not, which is the whole of Step 4.91's argument for the tool.
+
+## Step 4.91 — the numbers re-derived from the repository, and a field the disassembler spells as bytes
+
+### What this step was
+
+Wrote no node, added no id, moved no resource, and did not change a byte of the
+compiled table. It made Step 4.90's evidence reproducible and corrected it: the
+counts that comment states now come from `tools/acpi-usb-pair-census.py`, which
+is in the repository, and seven of them changed when the tool asked the same
+questions the `/tmp` script had asked.
+
+The claim that this step changes no byte is measured rather than asserted, and
+that measurement is the reason the step is worth a ladder row at all. Comments
+do not reach an AML: `tools/acpi/gauguin.asl` grew 28 lines and 2,130 bytes,
+`DSDT.aml` compiled from it is `f260db3a…d28f5560` — **Step 4.90's hash, byte for
+byte** — and all three payloads built from the rebuilt volume are the same three
+files 4.90 archived, compared with `cmp`. So every number in the ladder below is
+4.90's, restated, and the payload set is not a new one.
+
+### The tool, and why the unit is the declaration
+
+`tools/acpi-usb-pair-census.py` counts what the 66 reference tables do with the
+`RHUB`/`PRT1` pair. Its unit is the **declaration**, attributed to the device
+that encloses it by one brace-stack pass over the disassembly, because the two
+cheap alternatives are both wrong here. `grep -c RHUB` gives the same totals on
+this corpus and would stop doing so the moment a table nested a hub inside
+something else — which is what nabu does; and a search anchored at a device
+header reads the *next* device's body, which is how a `_UPC` gets attributed to
+a port that has none.
+
+Three controller bands are reported rather than two. `A` is `URS0`'s `USB0` and
+`UFN0`, `B` is `URS1`'s `USB1` and `UFN1` — which this board does not have — and
+`X` is anything else, which is one row and not a rounding: nabu's third hub sits
+under a `USBD` that is neither, and a52sxq's redriver is a top-level `PRT1`.
+
+The tool drops this table from the corpus by default, the same rule and the same
+default as `tools/acpi-order-votes.py`, and prints both framings side by side,
+because the difference *is* the finding: the corpus is a Mu-Silicium checkout's
+`Silicium-ACPI` submodule and `tools/sync-uefi-platform.sh` installs this file
+into it, so this table is one of the sixty-six. A file scoring itself is not a
+measurement.
+
+```
+                      not counting this table (65)   counting it (66)
+pair under USB0+UFN0                    20                    21
+declare neither device                  44                    44
+hub and no port                          1 (caymanslm)         1
+RHUB occurrences                        60  (bare 58)          62  (bare 60)
+PRT1 occurrences                        59  (three 58)         61  (three 60)
+_UPC under URS0                        40 × 0x09             42 × 0x09
+_PLD GroupPosition under URS0          40 × 0x0              42 × 0x0
+```
+
+Every row of the first column is now the sentence in the comment above `USB0`'s
+`RHUB`, and the two counts that do not move between the columns are the two that
+cannot: neither count, because this table declares the pair and so is not in the
+neither bucket, and the hub-with-no-port table, which is caymanslm either way.
+
+### The seven numbers
+
+| Step 4.90 said | the tool says |
+|---|---|
+| the pair as "20 of the 66 tables" | 20 of the 65 that are not this one; 21 of 66 counting it |
+| 43 tables declaring neither | 44 — 42 that name neither device and Kailua's two |
+| `RHUB`'s body one `Name` in 59 of its 60 | 58 of 60 |
+| caymanslm's the corpus's only non-bare `RHUB` | nabu's third hub is the second |
+| 0x3 on vayu's two | on four: vayu's two and pipa's two |
+| pipa's two `_PLD`s state no `GroupPosition` | all 40 `URS0` instances state `0x0` |
+| slot denominators 20 and 19 | 21 and 20 |
+
+Three of the seven are the same mistake in three places — a denominator that
+counted this table on one side and not the other — and the "20 + 43 + 3 is 66"
+the entry used to check itself was consistent only because the third term
+counted Kailua's two a second time. Corrected and self-checked, the same
+decomposition is **20 + 44 + 1 = 65**, or **21 + 44 + 1 = 66** with this table
+in.
+
+### The second kind of mistake, and it is not arithmetic
+
+The `GroupPosition` row is a different animal: the number was not miscounted, it
+was unreadable to the reading that was used on it, and the reading was
+field-name matching on the disassembly.
+
+pipa's `_PLD` is a `VarPackage` — its AML is `08 5F 50 4C 44 13 1A 01 11 17 0A
+14 …`, where every other port in the corpus has `12` (PackageOp) at that byte
+and pipa has `13` (VarPackageOp) — and iasl's disassembler prints a `ToPLD (...)`
+with named fields only for the `Package` form. For the `VarPackage` form it
+prints the twenty bytes. So a reader that knows only the field names finds no
+`GroupPosition` in pipa's four ports and Step 4.90 recorded that as "they state
+no `GroupPosition` at all — a different spelling of the same zero", which is
+true of two of them and false of the other two.
+
+What the bytes say is measurable, and the encoding was measured rather than
+looked up: compiling `ToPLD` with `PLD_GroupPosition` set to 0, 1, 2, 3, 4,
+0x0F, 0x1F and 0x7F and reading the twenty bytes back gives a seven-bit field at
+bit 7 of bytes 10-11, little endian — `0x3` is `80 01` and `0x7F` is `80 3F`.
+pipa's own four buffers, read out of its `DSDT.aml`, are at `0x66189`,
+`0x662F9`, `0x66566` and `0x666B9` — `69 0C 00 00` twice and `69 0C 80 01`
+twice: its two `URS0` ports state `0x0` and its two `URS1` ports state `0x3`.
+(Its fifth `_PLD`, at `0x668A9`, is not a port's: it is `CON0`'s, the connector
+inside `UCP0`.)
+The tool now reads the field out of the buffer when the name is not there, and
+prints which of its rows were read that way — `A:0x0=40 [A:0x0=2 read from the
+raw buffer], B:0x1=14, B:0x3=4 [B:0x3=2 read from the raw buffer]` — so a later
+step can see that the reading is not uniform without having to know why.
+
+That changes what the comment's evidence is worth, in the direction of the node
+being *more* secure rather than less: the value this table states is now `0x0`
+in all 40 `URS0` instances with no exceptions at all, where 4.90 could only say
+38 of 40 with a hand-wave about spelling.
+
+### The ladder
+
+- `tools/acpi/gauguin.asl` is **4,746 lines**, 265,746 bytes, md5
+  `734b99faf6ffe7cfec7041bf504410bb` (from 4,718 lines and 263,616 bytes at
+  `5ef3599ec84aa033aa208a177f74a158` — +28 lines, +2,130 bytes, all of it
+  comment), and all three copies are the same file: `tools/acpi/`,
+  `uefi/Silicium-ACPI/Platforms/Xiaomi/gauguin/` and
+  `work/uefi/Mu-Silicium/Silicium-ACPI/Platforms/Xiaomi/gauguin/`.
+- The compiled table is **unchanged**, which is the measurement this step rests
+  on: `DSDT.aml` is 6,641 bytes, checksum `0x4f`, sha256
+  `f260db3ade7b2c7dc2c272fe03645508574cb65f3e34009e81ae59cbd28f5560` — 4.90's
+  hash exactly — and `iasl` reports the same 0 errors, 24 warnings, 59 remarks,
+  129 optimizations, 267 opcodes and 424 named objects it reported for 4.90's
+  file.
+- `FVMAIN.Fv` is 7,356,416 bytes (`0x704000`, unchanged), sha256
+  `abd1a826a500a8fd9e90a0670f7a4742f073b9bb673415374be9346bd7138764` — 4.90's
+  — with `EFI_FV_TAKEN_SIZE = 0x704110` and `FVMAIN_COMPACT` at `0x10b0e8`, both
+  unchanged from 4.90.
+- `tools/fv-inventory.py --acpi` on the built payload: six tables, `SSDT` at
+  `0x0054d484`, `DSDT` 6,641 bytes at `0x0054d4c8` — **the same offset for a
+  twenty-first step** — checksum valid, `APIC` (724) and `GTDT` (156) valid,
+  `FACP` (276) and `FACS` (64) not, as expected before `AcpiTableDxe` runs and
+  only those two.
+- The three payloads are `45c978f3…09b22c8` (silicon/gzip, 1,144,832 bytes),
+  `e1b23ab0…33a0b442` (stock/gzip, 1,150,976 bytes) and `0be06803…cb30d610`
+  (stock/none, 3,248,128 bytes) — **byte-identical to 4.90's three**, `cmp`
+  clean on all three, which is why `work/out/p2-4.91` holds copies of the same
+  files rather than a new build: the point of the step is that there is nothing
+  new to build. All three still match GenFv's map at 123 offsets and GUIDs with
+  zero mismatches and pass the checks ABL makes before it hands control over.
+- The order vote does not move: **10,356 of a 10,356 ceiling, 0 broken
+  relations of 532**, with the corpus's own copy of this table excluded as a
+  voter, which is the same number 4.90 recorded — and it has to be, since the
+  table's declarations did not change.
+- The census is **52 `_HID`/`_CID` declarations, 38 distinct**, unchanged, and
+  the same two remain unclaimed as every step since 4.70: `QCOM0A8B` (`URS0`)
+  and `QCOM24A5` (`UFS0`).
+- `work/out/p2-variants` **still holds the 4.74 set** — `90b21643…`,
+  `e693e1a0…`, `26919861…`. **Fifteenth** step running.
+- The device is absent from this host throughout, so nothing here is a hardware
+  reading. The payload in `boot` is still the **4.74** set and its panel reading
+  is **still owed** under 先读屏，再刷下一次. Step 4.91 archives
+  `work/out/p2-4.91` as a copy of 4.90's payloads and does not touch the one on
+  the device.
