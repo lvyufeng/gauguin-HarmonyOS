@@ -14482,3 +14482,234 @@ corpus's device count moves 44 -> **45**.
   The payload in `boot` is still the **4.74** set and its panel reading is **still owed**
   under 先读屏，再刷下一次. Step 4.79 changes the payload in `work/out/p2-4.79` and not
   the one on the device.
+
+## Step 4.80 — the generation the driver set keeps, and a loader with no subsystem to belong to
+
+### What this step was
+
+One node: `PILC`, the Peripheral Image Loader — the block that authenticates and starts the
+DSPs. It is the first node in the table whose id comes from the **06** generation of the
+service group, and that is the step: until now the id's generation had been decided one node
+at a time, on whatever the driver set happened to claim for that one node. Here it was
+measured across seven nodes at once, and the answer came out as a single rule — the
+generation is a property of the *table*, every corpus table picks one for the whole group of
+seven, and this driver set claims exactly one of the seven, so gauguin's generation is
+decided by the set and not by the silicon.
+
+The node itself is the shortest in the file: `_HID` and an `_STA` that returns `0x0F`. No
+`_CRS`, no `_UID`, no `_DEP` — and, for the first time here, **no `_SUB`**, which the
+corpus's own phone tables say is right for this one node and not for its neighbours.
+
+The device was absent from this host for the whole step, as it was for 4.77 through 4.79.
+`adb devices` is empty. Nothing here is a hardware reading, and the payload in `boot` is
+still the 4.74 set.
+
+### The generation is the table's, and the driver set picks it
+
+The corpus declares a `PILC` in 19 of its 66 tables, under **seven ids, one per
+generation**:
+
+| id | tables | which |
+|---|---|---|
+| `QCOM06E0` | 6 | a52sxq, lisa, renoir, Cedros IDP, Kailua MTP, Kailua QRD |
+| `QCOM051B` | 5 | the family-05 boards — mh2, cepheus, nabu, pipa, vayu |
+| `QCOM1AE0` | 3 | lemonade, venus, Lahaina — the 1A generation |
+| `QCOM04DF` | 2 | miatoll, a52q |
+| `QCOM023B` | 1 | caymanslm |
+| `QCOM14DF` | 1 | surya |
+| `QCOM25E0` | 1 | alioth |
+
+The same seven generations appear on `PILC`'s six siblings, with the same shape — `RPEN`
+`06E1`, `SSVC` `06DB`, `TFTP` `06DC`, `QCDB` `06DE`, `PDSR` `06DF`, `SOCP` `06DD`, each in
+the 06 form 6 or 7 times and once or twice per older generation, with `SOCP` alone having no
+02 form at all.
+
+The finding is what happens when those seven are read **per table** rather than per node.
+Twenty tables carry three or more of the seven, and **nineteen of the twenty write a single
+generation across all of them**:
+
+```
+04xx   2 tables   (miatoll, a52q)
+05xx   5 tables   (mh2, cepheus, nabu, pipa, vayu)
+06xx   6 tables   (a52sxq, lisa, renoir, Cedros IDP, Kailua MTP, Kailua QRD)
+14xx   1 table    (surya)
+1Axx   4 tables   (lemonade, venus, Lahaina, vili)
+25xx   1 table    (alioth)
+```
+
+The twentieth is caymanslm, which writes 02 for six of the seven and 03 for `SSVC` — the
+corpus's oldest board slipping once, and not a second rule.
+
+So the generation is not a property of the SoC and not a property of the driver: it is a
+property of the **table**, which is to say of the build that emitted it. Every one of these
+boards was shipped with one Windows driver package, that package was compiled for one id
+generation, and the table was generated to match. Two boards with the same silicon in
+different generations is the normal case here, not the exception.
+
+### One of the seven is claimed, and it is the one this table takes
+
+Which generation gauguin's table must take is then not a choice. Of the 112 `.inf` files in
+this set:
+
+- `qcpil.inf` matches `ACPI\QCOM06E0` and installs the service `qcPILC` on it —
+  `ServiceBinary = %13%\qcpil.sys`, `DeviceDesc = "Qualcomm(R) Peripheral Image Loader
+  Device"`. `qcPILC` is this node's name in lower case.
+- `qcpilfilterext.inf` matches the *same* id a second time, as `Class=Extension` with
+  `AddFilter=qcPILFC,,UpperFilterInstall` and `FilterPosition=Upper` — so the set ships a
+  function driver and an upper filter for this one PIL id, and for no other.
+- No inf in the set names `051B`, `1AE0`, `04DF`, `023B`, `14DF` or `25E0` — for `PILC` or
+  for any of its six siblings.
+
+The corpus's 1A boards — lemonade and venus — write `QCOM1AE0` on a node that is otherwise
+this one, and on a Windows built from this set that node would bind to nothing. So the id is
+the driver's, as it has been since Step 4.63, **and the driver's generation is this table's
+generation**.
+
+There is one confirmation of the rule already inside the file. `IPCC` has carried
+`QCOM06C2` since Step 4.73 — written three steps before any of this was measured, chosen
+because `qcipcc7280.inf` names that one id outright. It is in the same generation. The rule
+does not change it; the rule explains it.
+
+Note what the rule does *not* do. It is not "use 06 everywhere". The set spans three
+generations — the GPIO and PMIC-GPIO block and the SMMUs are `0A` (`QCOM0A0C`, `QCOM0A2D`,
+`QCOM0A09`), the thermal zones are `0A`, `IPCC` is `06`, `SCM0` is `04` — and the file
+already follows the set in each case. What is new is that for a **group** of seven
+co-generated nodes there is a single generation to measure, and it is measured.
+
+### The hardware, from the board
+
+The id is a fact about the driver set. The hardware is a fact about the board, and gauguin's
+own tree names this block three times over, in the compatible strings:
+
+```
+remoteproc@3000000  qcom,sm6350-adsp-pas   firmware-name = .../adsp.mbn
+remoteproc@4080000  qcom,sm6350-mpss-pas   firmware-name = .../modem.mbn
+remoteproc@8300000  qcom,sm6350-cdsp-pas   firmware-name = .../cdsp.mbn
+```
+
+`pas` is the Peripheral Authentication Service, the secure half of the same loader; each of
+the three carries `smp2p`, each firmware name sits under `qcom/sm7225/fairphone4/`, and the
+two DSPs add `fastrpc` children with compute contexts. Two of the three are the ADSP and the
+CDSP, which are what Windows drives through this driver. (The third is the modem, which
+Step 4.70 recorded as outside what this port can drive; the *loader* is shared, which is why
+its node has to exist before the DSPs do.)
+
+### The body: `_STA` in the new generations, the alias only on the reference boards
+
+All six 06 tables write the same two members:
+
+```asl
+Device (PILC)
+{
+    Name (_HID, "QCOM06E0")  // _HID: Hardware ID
+    Method (_STA, 0, NotSerialized)  // _STA: Status
+    {
+        Return (0x0F)
+    }
+}
+```
+
+and four of the six write nothing else at all — a52sxq, lisa, renoir and Cedros' IDP. The
+two that add a line are Kailua's MTP and QRD board files, which carry
+`Alias (\_SB.PSUB, _SUB)`; one SoC's two files agreeing with each other, and with the 1A
+form's three. Across the nineteen tables `_STA` returning `0x0F` is in the 06 and 1A forms
+(9) and absent from the two older ones, which write `_HID` alone (7). The alias is narrower
+still: it appears in the 1A form's three tables and in two of the 06 form's six, and nowhere
+else.
+
+That makes `PILC` the first device in this table without a `_SUB`, and the reason is the
+node's role rather than a preference. The loader does not sit *inside* a subsystem — it
+brings subsystems up — and the corpus's own phone tables say so by carrying the alias on
+`RPEN`, `TFTP`, `PDSR` and `SSVC`, all four of which are in the same run and all four of
+which have it. The four tables that omit it here are three phone tables and one silicon IDP.
+
+There is a second reason to leave it out, and it is the same defect the `IPCC` node records:
+this board's `PSUB` is `"MTP07225"`, while the reference tables the drivers compare against
+are `IDP07280` and `CRD07280`. A `_SUB` here would return a string no branch of the driver's
+own comparison can take. Omitting it is both the corpus's form and the safer half of the
+choice.
+
+No `_UID`, no `_CRS`, no `_DEP` — and those three hold for **all nineteen** tables, so
+nothing is being carried forward from a minority form. The dependency in this group does not
+run through `PILC` at all: `TFTP`'s `_DEP` names `IPC0`, `PDSR`'s names `PEP0`, `GLNK` and
+`IPC0`, `SSVC`'s names `IPC0` and `QDIG`, and none of those four devices is in this table
+yet. This node therefore waits on nothing.
+
+### Position: nine relations satisfied, and three that no slot can satisfy
+
+`PILC`'s corpus position is the strongest kind of measurement, because two of its relations
+are unanimous and adjacent: **`RPEN` is immediately before it in 19 of 19 tables and `CDI`
+immediately after it in 19 of 19**. It is the second member of a run —
+
+```
+RPEN  PILC  CDI  SCSS  ADSP  SLM1  ADCM  AUDD
+```
+
+— that no table ever splits. Neither neighbour is in this table, so the slot was derived the
+way `ABD`'s was in 4.78: follow the relations outward to the nearest nodes the file actually
+has. Nine of them, every one unanimous in the tables that carry both:
+
+| relation | tables |
+|---|---|
+| `UARD` before `PILC` | 13 of 13 |
+| `IC10` before `PILC` | 9 of 9 |
+| `IC11` before `PILC` | 3 of 3 |
+| `PILC` before `MMU0` | 19 of 19 |
+| `PILC` before `MMU1` | 19 of 19 |
+| `PILC` before `SCM0` | 19 of 19 |
+| `PILC` before `IPCC` | 10 of 10 |
+| `PILC` before `QGP0` | 17 of 17 |
+| `PILC` before `QGP1` | 19 of 19 |
+
+All nine are satisfied by placing the node after the last `IC` node and before `QGP0`, which
+is where it went. No later slot is: between `QGP1` and `MMU0` the two `QGP` relations break
+instead, and an earlier slot breaks the `IC` and the `PMIC` chain.
+
+Three further relations are unsatisfiable by *any* slot, and they are worth writing down
+rather than passing over. The corpus puts `USB0`, `SPMI` and `GIO0` **after** `PILC`, each
+in 19 of 19 tables; this file placed all three earlier than that, for reasons recorded where
+each was written. A node insertion cannot repair a pre-existing ordering divergence without
+becoming a reordering, and a reordering is its own measurement — the three are noted in the
+node's own comment and left alone.
+
+### The ladder
+
+- `tools/acpi/gauguin.asl` — 3,554 lines (was 3,458), md5
+  `17f069dccc3fd07654b7fd5cbd52ff80` on **all three copies** (`tools/acpi/`, the tracked
+  `uefi/Silicium-ACPI/`, and the synced `work/uefi/Mu-Silicium/` tree). The generator was
+  run first and `sync-uefi-platform.sh` second; skipping either installs the previous table.
+- `DSDT.aml` — 6,080 bytes (was 6,048), sha256
+  `ae08726a1110427e3610b508df575bb5b0f152ffbcd694cb91d4118119159d87`, length `0x17c0`,
+  checksum `0xe5`, **263 opcodes** and **384 named objects** (was 262 and 381: the node adds
+  the `Device` opcode and three names — `PILC`, `_HID`, `_STA`). `iasl` reports **0 errors**,
+  24 warnings, 55 remarks, unchanged from 4.79.
+- The readback: the DSDT sliced out of the **built payload's** decompressed inner `FVMAIN`
+  at `0x0054d4c8` — the same offset as the last nine steps — is byte-identical to the direct
+  compile, `cmp` clean, and carries `QCOM06E0` and `PILC`. The direct compile and the tree's
+  `DSDT.aml` are byte-identical to each other as well.
+- `FVMAIN.Fv` is `0x704000` (`7,356,416`), sha256
+  `f8b47e6649a3390110c5d2f5de18670b83c1f86661fd743838d4d9b135e74e6d`, with
+  `EFI_FV_TAKEN_SIZE = 0x703ed8` — exactly `0x20` (32) more than 4.79's `0x703eb8`, for
+  exactly 32 more bytes of AML. The outer volume, `SILICIUM_UEFI.fd` = the fixed 3 MiB
+  `FVMAIN_COMPACT`, is at `0x10afd0` of `0x300000`, `0x10` (16) more than 4.79's `0x10afc0`,
+  leaving **2,052,144 bytes** free. The `0x128` between FVMAIN's taken size and its length is
+  still GenFv rounding to a 4 KiB boundary and not capacity.
+- The three payloads are `18fdcf5f…` (silicon/gzip), `463eca48…` (stock/gzip) and
+  `9cbbf9e6…` (stock/none), all three the same byte lengths as 4.78's and 4.79's because the
+  container is a fixed-size volume, all three matching GenFv's map at **123 offsets and
+  GUIDs, zero mismatches**, all three carrying the full instrument ladder and passing the
+  checks ABL makes before it hands control over. They are archived in `work/out/p2-4.80`.
+- `work/out/p2-variants` **still holds the 4.74 set** — `90b21643…`, `e693e1a0…`,
+  `26919861…`. Sixth step running.
+- The census: **46 `_HID`/`_CID` declarations, 32 distinct, 30 claimed** — up one in each
+  column, `QCOM06E0` being the new declaration and a claimed id. The same two remain
+  unclaimed as every step since 4.70: `QCOM0A8B` (`URS0`) and `QCOM24A5` (`UFS0`).
+- `build_uefi.py` again ended with the `mkbootimg` `ValueError: DTB image must not be empty`
+  traceback on Mu-Silicium's *own* image. That image is not used here and never has been:
+  the payload of record is built by `tools/build-p2-payloads.sh` from the volume and the
+  shim, and the volume is what the build wrote before the traceback. The footer is the same
+  one 4.78 and 4.79 ended with; it is written down here so the next reader does not chase it.
+- The device is absent from this host throughout, so nothing here is a hardware reading.
+  The payload in `boot` is still the **4.74** set and its panel reading is **still owed**
+  under 先读屏，再刷下一次. Step 4.80 changes the payload in `work/out/p2-4.80` and not the
+  one on the device.

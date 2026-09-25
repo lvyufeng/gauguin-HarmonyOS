@@ -2262,6 +2262,103 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
             }
         }
 
+        // PILC is the Peripheral Image Loader, the block that authenticates and
+        // starts the DSPs, and it is the first node in this table whose id comes
+        // from the 06 generation of the service group. That is the step: the
+        // generation was decided node by node until now, and here it is measured
+        // across seven nodes at once, so the rule is the finding and this node is
+        // its first application.
+        //
+        // The board first, because the hardware has to be here before the id
+        // matters. gauguin's own tree carries three remoteprocs and all three are
+        // named with this framework's initials:
+        //
+        //   remoteproc@3000000  qcom,sm6350-adsp-pas   adsp.mbn
+        //   remoteproc@4080000  qcom,sm6350-mpss-pas   modem.mbn
+        //   remoteproc@8300000  qcom,sm6350-cdsp-pas   cdsp.mbn
+        //
+        // - "pas" being the Peripheral Authentication Service, the secure half of
+        // the same loader, each of the three carrying smp2p and a firmware-name
+        // under qcom/sm7225/fairphone4/, and the two DSPs adding fastrpc children.
+        // So this board names the block four times over, three of them in its own
+        // compatible strings, and two of the three are the DSPs Windows drives
+        // through this driver.
+        //
+        // The corpus declares a PILC in 19 of its 66 tables, under seven ids, one
+        // per generation:
+        //
+        //   06E0 x6   a52sxq, lisa, renoir, Cedros IDP, Kailua MTP, Kailua QRD
+        //   1AE0 x3   051B x5   04DF x2   023B x1 (caymanslm)
+        //   14DF x1 (surya)      25E0 x1 (alioth)
+        //
+        // The same seven generations appear on PILC's six siblings - RPEN 06E1,
+        // SSVC 06DB, TFTP 06DC, QCDB 06DE, PDSR 06DF, SOCP 06DD - each of them in
+        // the 06 form 6 or 7 times and in the older forms once or twice per
+        // generation, with SOCP alone having no 02 form at all. And the generation
+        // is a property of the table and not of the SoC: of the 20 tables that
+        // carry three or more of the seven, 19 write a single generation across
+        // all of them, and the twentieth, caymanslm, writes 02 for six and 03 for
+        // the seventh - the corpus's oldest board slipping once, and not a second
+        // rule.
+        //
+        // The driver set then picks one generation of the seven, and it picks 06.
+        // qcpil.inf matches ACPI\QCOM06E0 and installs the service qcPILC on it,
+        // which is this node's name in lower case; qcpilfilterext.inf matches the
+        // same id as Class=Extension with an upper filter, QCPILFilter.sys, so the
+        // set ships a function driver and a filter for this one PIL id and for no
+        // other; and no inf in the set names 051B, 1AE0, 04DF, 023B, 14DF or
+        // 25E0, here or on any of the six siblings. The corpus's 1A boards -
+        // lemonade and venus - write QCOM1AE0 on a node that is otherwise this
+        // one, and that id binds to nothing on this host. The id is the driver's,
+        // as on every node here, and the driver's generation is this table's
+        // generation. This table's IPCC has carried QCOM06C2 since Step 4.73,
+        // written before any of this was measured; it is in the same generation,
+        // and that is the one confirmation of the rule already inside the file.
+        //
+        // The body follows the six tables whose id this is. _STA returning 0x0F is
+        // in the 06 and 1A forms - 9 of the 19 - and absent from the two older
+        // ones, which write _HID alone in all 7. The alias is narrower: four of
+        // the six 06 tables omit it - a52sxq, lisa, renoir and Cedros' IDP - and
+        // the two that carry Alias (\_SB.PSUB, _SUB) are Kailua's MTP and QRD
+        // board files, one SoC's two files agreeing with each other and with the
+        // 1A form's three. The four that omit it are three phone tables and one
+        // silicon IDP, and that makes PILC the first device here without a _SUB.
+        // The reason is the node's role rather than a preference: the loader does
+        // not sit inside a subsystem, it brings subsystems up, and the corpus's
+        // own phone tables say so by carrying the alias on RPEN, TFTP, PDSR and
+        // SSVC beside this node. There is also no _SUB value here that would be
+        // right - this board's PSUB is "MTP07225" where the drivers' own reference
+        // tables compare against IDP07280 and CRD07280, the mismatch the IPCC node
+        // records - so the omission is the safer half of the choice as well.
+        //
+        // No _UID, no _CRS and no _DEP. The first two hold for all nineteen
+        // tables: no PILC anywhere carries either. So does the third, and the
+        // dependency in this group does not run through PILC - TFTP's _DEP names
+        // IPC0, PDSR's names PEP0, GLNK and IPC0, SSVC's names IPC0 and QDIG, and
+        // none of those four devices is in this table.
+        //
+        // Position, derived as usual. RPEN is immediately before PILC in 19 of 19
+        // and CDI immediately after in 19 of 19, so this node is the second member
+        // of a run - RPEN, PILC, CDI, SCSS, ADSP, SLM1, ADCM, AUDD - that no table
+        // ever splits. Neither neighbour is here, so the slot comes from the
+        // relations this file can check: UARD (13 of 13), IC10 (9 of 9) and IC11
+        // (3 of 3) precede it, and MMU0, MMU1 and SCM0 (19 of 19 each), IPCC
+        // (10 of 10), QGP0 (17) and QGP1 (19) follow it. Every one of those nine
+        // is satisfied by the slot below, and no later slot is: between QGP1 and
+        // MMU0 the two QGP relations break instead. Three further relations are
+        // unsatisfiable in any slot, because this file placed USB0, SPMI and GIO0
+        // earlier than the corpus's order has them while the corpus puts all three
+        // after PILC, each in 19 of 19. They are recorded here rather than
+        // repaired: this step is a node, and a reordering is its own measurement.
+        Device (PILC)
+        {
+            Name (_HID, "QCOM06E0")  // _HID: Hardware ID
+            Method (_STA, 0, NotSerialized)  // _STA: Status
+            {
+                Return (0x0F)
+            }
+        }
+
         // QGP0 and QGP1 are the two GPI DMA controllers, and they are here
         // because the QUP engines above are not self-driving. Two independent
         // sources say so. The corpus: lisa's SP14 and a52sxq's IC14 each carry
