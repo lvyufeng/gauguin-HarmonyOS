@@ -20094,3 +20094,141 @@ against GenFv's map for all 123 files.
 - Standing rules unchanged: `userdata`, the partition table and the firmware LUN are
   untouched; writes go to `boot` only; the control image is read before anything is
   overwritten; and the screen is read before the next flash.
+
+---
+
+## Step 4.102 — the walk counters are summed over every firmware volume, and 4.101's `t=` table was computed on one of two
+
+Step 4.101 closed with a table of expected `P2 WALK` readings — `t=0 seen=80 iter=81`, `t=1`/`t=2`/`t=4`
+`iter=1`, `t=3 seen=1 iter=2` — and offered it as a falsifier: *"either of them low, or `t=1`/`t=2`/`t=4`
+non-zero, means the volume on the device is not the volume in the record."* That table was computed from
+the inner `FVMAIN` alone. The counters it predicts from are not scoped to a volume, and the FD holds two.
+All five of its five rows are wrong, and every wrong number is short: each `iter` is one low because a
+second volume contributes a second terminating "no more files" call to every type, and the fourth row is
+two low on `iter` and one low on `seen` because that second volume also contributes the only FV-image file
+in the firmware. The direction matters: the readings the table called a mismatch are what a correct payload
+prints.
+
+### The counters are globals, and the notify handler runs once per volume
+
+`mP2WalkSeen[8]`, `mP2WalkIter[8]` and `mP2WalkErr[8]` are `STATIC` at `Dispatcher.c:125-127`, initialised
+to zero and **never reset** — there is no assignment to any of the three anywhere in the file outside
+`:1962`, `:1964` and `:1967`. They are incremented inside the discovery walk, which lives in
+`CoreFwVolEventProtocolNotify`, a protocol notify on `gEfiFirmwareVolume2ProtocolGuid`. A notify fires
+once per FV2 *installation*, so the counters are the sum of every FV the dispatcher ever walked — and
+`P2 WALK` (`:2447-2460`) prints that sum as though it described one volume.
+
+The FD has two volumes, and they are not both FVMAIN:
+
+| volume | where | `FvLength` | `HeaderLength` | `ExtHeaderOffset` | files |
+| --- | --- | ---: | ---: | ---: | --- |
+| `FVMAIN_COMPACT` | the FD itself, `SILICIUM_UEFI.fd` 0x300000 B | 0x300000 | 0x48 | 0 | **2** |
+| `FVMAIN` | inside the outer volume's one type-0x0B file | 0x706000 | 0x48 | 0x60 | 123 |
+
+Measured this session on the build tree's `FV/SILICIUM_UEFI.fd` by the same walk `fv-inventory.py` uses:
+the outer volume's file list is **two entries and nothing else** — `SECURITY_CORE` (type 0x03)
+`9AFFB503-E643-4141-8B90-17E8588B1D35`, 69,560 B at 0x48, and `FIRMWARE_VOLUME_IMAGE` (type 0x0B)
+`9E21FD93-9C72-4C15-8C4B-E77F1DB2D792`, 1,021,545 B at 0x11000. **The outer volume carries no Apriori
+file**: no file in it has `gAprioriGuid` (`FC510EE7-FFDC-11D4-BD41-0080C73C8881`), and the array is in the
+inner volume at offset 0x78 as Step 4.101 established.
+
+Both volumes are walked, by two routes that converge on the same notify. The outer volume gets its FVB from
+`PlatformPei.c:133`, which is `BuildFvHob (PcdGet64 (PcdFvBaseAddress), PcdGet32 (PcdFvSize))` — **one** FV
+HOB, for the FD, i.e. for the outer volume — and `FwVolBlockDriverInit` (`FwVolBlock.c:613`) turns every FV
+HOB into an FVB at `:646`. The inner volume is reached from the outer volume's own walk: the t=4 iteration
+finds the type-0x0B file and, unless a HOB FV2 for it already exists (`FvFoundInHobFv2`, `:1564-1587`,
+which requires a HOB FV2 to match on both `FileName` and `FvName`), the else-branch at `:2037-2042` calls
+`CoreProcessFvImageFile` (`:2041`), which produces an FVB for the decompressed inner volume at `:1804`.
+Either route lands on the same next hop: `FwVol.c:717` registers a protocol notify on
+`gEfiFirmwareVolumeBlockProtocolGuid`, `NotifyFwVolBlock` runs, and it installs the FV2 protocol at
+`FwVol.c:682` — at which point the Dispatcher's own notify (`:2218`) fires a walk for that handle. Two FV2
+handles, two walks, one pair of counters.
+
+Which of the two routes installs the inner volume's FVB is not decidable from this host alone, and it does
+not change the count: whether the FVB comes from `CoreProcessFvImageFile` during the outer walk or from
+`FwVolBlockDriverInit` over a HOB FV2 built earlier, the FV2 protocol appears once and the Dispatcher walks
+it once. What the tree does say is that the only `BuildFv2Hob` call site in it is upstream `Mu_Basecore`'s
+`EmbeddedPkg/Library/PrePiLib/FwVol.c:972` — everywhere else the name appears it is a library definition, a
+stub or a mock, and nothing under `Platforms/`, `Silicon/` or `uefi/` calls it — and that gauguin's own PEI
+is `PlatformPeim` (`PlatformPei.c:127-133`), which builds one `EFI_HOB_TYPE_FV` and no FV2 HOB.
+
+### The corrected expectation, with the arithmetic shown
+
+The five rows are the five entries of `mDxeFileTypes` in order (`Dispatcher.c:697-703`), whose type numbers
+are `PiFirmwareFile.h:62-71`: `DRIVER` 0x07, `COMBINED_SMM_DXE` 0x0C (an alias of `COMBINED_MM_DXE`),
+`COMBINED_PEIM_DRIVER` 0x08, `DXE_CORE` 0x05, `FIRMWARE_VOLUME_IMAGE` 0x0B.
+
+| `t` | type | outer volume | inner volume | **`P2 WALK` must read** |
+| --- | --- | --- | --- | --- |
+| 0 | `DRIVER` (0x07) | 0 seen, 1 iter | 80 seen, 81 iter | `seen=80 iter=82` |
+| 1 | `COMBINED_SMM_DXE` (0x0C) | 0 seen, 1 iter | 0 seen, 1 iter | `seen=0 iter=2` |
+| 2 | `COMBINED_PEIM_DRIVER` (0x08) | 0 seen, 1 iter | 0 seen, 1 iter | `seen=0 iter=2` |
+| 3 | `DXE_CORE` (0x05) | 0 seen, 1 iter | 1 seen, 2 iter | `seen=1 iter=3` |
+| 4 | `FIRMWARE_VOLUME_IMAGE` (0x0B) | **1 seen, 2 iter** | 0 seen, 1 iter | **`seen=1 iter=3`** |
+
+Each volume contributes `seen` successes plus exactly one terminating `EFI_NOT_FOUND` call per type, which
+is why every `iter` is `seen + 1` **per volume** and the sums are not `seen + 1` overall. Type 0x0B is the
+row that changes shape rather than just size: the outer volume holds one FV-image file and the inner holds
+none, so `t=4` is `seen=1` on a correct payload and not `seen=0`.
+
+`last=` is written only on success (`:1965`) and the inner volume's t=4 sweep finds nothing, so the
+`t=4` line's `%g` is the outer volume's FV-image GUID `9E21FD93-9C72-4C15-8C4B-E77F1DB2D792` whichever
+order the two notifies run in. The other two non-empty `last=` columns are measurable the same way:
+`t=0`'s is the last `DRIVER` in the inner volume's file order, `EBF342FE-B1D3-4EF8-957C-8048606FF671`
+(`SetupBrowser`, at 0x59F088), and `t=3`'s is `D6A2CB7F-6A18-4E2F-B43B-9920A733700A`, the `DXE_CORE` at
+0x4F8 — the same GUID the array carries as `ap0`. `t=1` and `t=2` never write `last` at all, so their
+lines end in the all-zero GUID from the `STATIC` initialiser.
+
+### What this costs if it is not corrected, and what it buys
+
+- **The falsifier in Step 4.101 would fail a good payload.** A device running the record's volume would
+  print `iter=82` where the table said `iter=81` and `t=4 seen=1` where the table said `seen=0`, and the
+  step's own sentence — *"the volume on the device is not the volume in the record"* — is what that
+  mismatch was written to mean. The mismatch is in the table, not on the panel. Nothing about the volume's
+  identity changes: `t=0 seen=80` is still the ceiling and still the number to read — the `seen` columns are
+  sums too, but this is the one row where the sum equals the inner volume's own count, because the outer
+  volume has no `DRIVER` file to add to it.
+- **`t=4 seen` is worth reading for its own sake, and it was not on any list before this step.** It is a
+  one-bit statement about which of two worlds the counters live in: `seen=1` means the outer volume was
+  walked and every `seen`/`iter` pair above is a sum of two volumes, while `seen=0` with `t=0 iter=81`
+  means the outer volume was never walked and the counters happen to be inner-only. **That reading decides
+  whether `t=0 seen=80` is a statement about FVMAIN or about the whole firmware**, and `t=0 seen=80` is one
+  of the two numbers the 23-unmatched-entry question turns on. It is the cheapest way to find out, and it
+  is on the screen that is already owed.
+- **The sums are a floor, not an identity.** They assume exactly two FV2 installations: one HOB FV plus one
+  from `CoreProcessFvImageFile`. A third would raise them, and there is a concrete way one could appear —
+  a second handle for the outer volume, whose `FvNameGuid` is all-zero (its `ExtHeaderOffset` is 0, the
+  same fact Step 4.101 recorded) and which therefore cannot collide with anything in `FvIsBeingProcessed`
+  (`:1411-1422`), since that check is guarded by `FvNameGuidIsFound`. The one-FV-HOB measurement above is
+  what makes two the count on this build; a `t=0 iter` above 82 is not a contradiction, it is a third
+  volume, and the `last=` columns are what would name it.
+
+One further consequence of the outer volume being file-poor rather than file-empty: its notify invocation
+reaches `Fv->ReadSection (Fv, &gAprioriGuid, …)` at `:2063-2071` and fails it, so `AprioriEntryCount = 0`
+for that volume (`:2073` on the success path, `:2094-2096` on the failure path) and the promotion loop is a
+no-op there — a nuisance for the 46 only in the sense that `mP2AprioriCount` is a `MAX` and never sees a
+zero. It cannot be a mechanism for the 23: the outer volume contains no type-0x07 file at all, so no
+Apriori entry could have matched in it.
+
+### Nothing was built and nothing was flashed
+
+- `docs/08-device-session.md` is the only file this step changes. No `.c`, no `.inf`, no `.asl`, no
+  `APRIORI.inc`, no FFS file, no payload. The build tree was opened read-only, and every number above was
+  read out of `Build/gauguinPkg/DEBUG_CLANGPDB/FV/SILICIUM_UEFI.fd`, `.../FVMAIN.Fv` and
+  `.../FVMAIN.Fv.txt` on this host.
+- **The device is absent from this host throughout** — `adb devices` is empty, there is no Qualcomm
+  function on the USB bus, and there is no `/dev/ttyUSB*`. The reading owed on the payload in `boot`
+  (`90B21643…`, rung 7260) under 先读屏，再刷下一次 therefore remains owed, and nothing was flashed.
+- The payload of record does not move: `work/out/p2-4.94/Mu-gauguin-silicon-gzip.img`, 1,144,832 B,
+  `d621f732f4763a303e980c5af04451479c2ace31801e796993a258f226c177a5`.
+  `work/out/p2-variants/Mu-gauguin-silicon-gzip.img` is still the 4.74 set, 1,142,784 B,
+  `90b21643e3450c326fb3d24baf64d58d4692a5d155c36b76d2e020ff04a96b59` — **twenty-first** step running.
+  The unflashed P3 candidate `work/out/usb-host/Mu-gauguin-xhci-host-gzip.img` is unchanged at 1,169,408 B,
+  `efc8e10d09f0f286011e1aacc638a7edd2ed5fcd86884640b28d14628f58f9f3`.
+- Cited, re-read rather than remembered: `Dispatcher.c:125-128`, `:1804`, `:1961-1967`, `:1996`,
+  `:2037-2042`, `:2063-2096`, `:2218`, `:2447-2460`; `FwVolBlock.c:613`/`:646`; `FwVol.c:682`/`:717`;
+  `PlatformPei.c:127`/`:133`; `tools/fv-inventory.py`'s `fv_files` and `sections`; and, in this document,
+  Step 4.101's `P2 WALK` table and the `FvNameGuidIsFound` measurement it carries.
+- Standing rules unchanged: `userdata`, the partition table and the firmware LUN are untouched; writes go
+  to `boot` only; the control image is read before anything is overwritten; and the screen is read before
+  the next flash.
