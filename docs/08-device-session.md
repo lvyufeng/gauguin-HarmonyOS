@@ -13021,3 +13021,215 @@ itself about. The part worth carrying forward is not the nodes: it is that a dri
 per-instance registry layout is a *source* for ACPI resource derivation, the same way a
 sibling table's `_CRS` is, and in this step it was the only source that could tell two
 otherwise identical instances apart.
+
+## Step 4.73
+
+Step 4.72 closed with a negative result on its own list and a positive one on the
+table: the two SMMUs were written, and the thing every remaining node in the file
+is waiting on is `PEP0`. Step 4.72 also left one measurement open from 4.66 and
+4.67 - the thermal zones had been counted on both sides and the two counts did not
+join, because the corpus names its zones `TZ<n>` and the board names its
+`cpu-0-0-usr`, and a name is not an identity. This step closes that, and the thing
+that closed it was not a name at all.
+
+### The join is the driver's id list, and it rules out the same-SoC table
+
+`qcpep.wd7280.inf` is the only driver on this host that binds a thermal zone, and
+it lists the ids it accepts:
+
+```
+0A17, 0A37-0A51, 0A57-0A64, 0A91, 0A92, 0ABF, 0AC8-0ACB, 0AD4, 0AD8-0AE0
+```
+
+That is the family `Xiaomi/lisa` and `Samsung/a52sxq` write, and no other table in
+the 66-table corpus. The one table in the corpus that *is* the same SoC as this
+board - `Samsung/a52q`, SM7225 - writes a completely different family:
+
+```
+084B, 084F, 085C, 085D, 085E, 085F, 0862, 0863, 0865, 0867, 089D, 089E
+```
+
+and **no `.inf` in any of the five driver trees on this host claims a single one of
+those**. So the same-SoC table is not the modelling table, and the id family is a
+property of the driver set rather than of the silicon - the same conclusion Step
+4.72 reached for the SMMUs from `qcsmmu7280.inf`'s two per-instance registries, and
+the same one Step 4.71 reached for the GPI DMA from `qcgpi7280.inf`. The family
+byte is an id space, and which space a block was defined in is decided by who wrote
+the driver for it.
+
+This is worth stating plainly because a52q was the tempting answer. It is the only
+table in the corpus whose `_CRS` windows, interrupt ladder and block set match this
+board's closely enough to have been used as a source in earlier steps, and it looked
+like the natural source again here. It is the wrong source, and the evidence that it
+is wrong is one grep over the driver package.
+
+### One id, an `_UID` per instance - the third time
+
+`QCOM0A58`, `QCOM0A59` and `QCOM0AD4` each carry `_UID Zero` **and** `_UID One` in
+every one of the 20 tables that has them, and no table anywhere declares a second
+id for a second instance of the same block. That is exactly the shape Step 4.72
+found on the SMMUs (`QCOM0A09` twice, `Zero`/`One`) and the shape Step 4.30-onward
+found on the QUP engines. A thermal zone is therefore named for the sensor *block*
+it belongs to and not for the sensor: the corpus's device names `TZ0`-`TZ7`,
+`TZ9`-`TZ13` are its own labels, their numeric suffix is not the `_UID` (lisa skips
+`TZ8` and `TZ14` and goes from `TZ13` to `TZ15`), and they are kept here so the
+provenance of each node stays visible in the file.
+
+### What was written
+
+Thirteen nodes - the family's `0A` zones minus the four groups that need something
+this table has not got.
+
+| device | `_HID` | `_UID` | `_PSV` | `_CRT` | `_TC1` | `_TC2` | `_TSP` | `_MTL` |
+|---|---|---|---|---|---|---|---|---|
+| `TZ0`  | `QCOM0A58` | `Zero` | - | - | - | - | 1 | - |
+| `TZ1`  | `QCOM0A58` | `One`  | `0x0EF6` | `0x0F28` | 0 | 1 | 1 | `0x14` |
+| `TZ2`  | `QCOM0A59` | `Zero` | - | - | - | - | 1 | - |
+| `TZ3`  | `QCOM0A59` | `One`  | `0x0EF6` | `0x0F28` | 0 | 1 | 1 | `0x14` |
+| `TZ4`  | `QCOM0AD4` | `Zero` | - | - | - | - | 1 | - |
+| `TZ5`  | `QCOM0AD4` | `One`  | `0x0EF6` | `0x0F28` | 0 | 1 | 1 | `0x14` |
+| `TZ6`  | `QCOM0A91` | `Zero` | `0x0E60` | `0x0F28` | 1 | 2 | 2 | - |
+| `TZ7`  | `QCOM0A51` | `Zero` | - | `0x0F28` | - | - | `0x32` | - |
+| `TZ9`  | `QCOM0A4C` | `Zero` | - | `0x0F28` | - | - | `0x32` | - |
+| `TZ10` | `QCOM0A92` | `Zero` | `0x0E60` | `0x0F28` | 1 | 2 | `0x0A` | - |
+| `TZ11` | `QCOM0ABF` | `Zero` | - | `0x0F28` | 0 | 1 | `0x32` | - |
+| `TZ12` | `QCOM0A4B` | `Zero` | - | `0x0F28` | - | - | `0x32` | - |
+| `TZ13` | `QCOM0A57` | `Zero` | - | `0x0F28` | - | - | - | - |
+
+Every one of the thirteen ids is claimed by `qcpep.wd7280.inf`, which is the point
+of writing them: the census reads **23 of 25 distinct ids claimed** and the two
+unclaimed are the same two it has named for three steps, `QCOM0A8B` (UFS) and
+`QCOM24A5`.
+
+Four groups are deliberately absent, and each is its own measurement rather than a
+deferral:
+
+- the **PMIC group** `QCOM0AC8`/`0AC9`/`0ACB`, which is the only group in the
+  family whose `_DEP` has two entries (`{PEP0, PMIC}`) and the only one carrying a
+  `_DSM` (on UUID `c2d42c4b-e25e-471c-8a4e-290aac3a29a3`, writing `TPSV`/`TCRT`/
+  `TTC2`, setting `TTC1 = Zero` and issuing `Notify (\_SB.TZ15, 0x81)`) plus a
+  `GpioInt` `_CRS` on `\_SB.PM01` pin `0x00C0` - a device this table does not have;
+- the **ADC group** `QCOM0A5F`/`0A61`/`0A63`, whose `_DEP` names `ADC1` (and, in
+  a52q's shape, `ADC2`);
+- **`TZ99`**, `QCOM0A5A`, whose `_TZD` is a 13-entry package naming the eight CPU
+  containers, `PEP0`, `WLTM`, `CSW0`, `GPU0` and `MJCT` - five of which this table
+  has not got, and which is the one zone that summarizes the others;
+- the nine **`QCOM04C0`-`QCOM04C8`**, which are the one group on family `04` rather
+  than `0A` and the one group claimed by a different driver,
+  `qcthermalmdm7280.inf` - the modem's thermal zones, and the modem is the thing
+  this port cannot drive at all.
+
+### The one place this step deviates from its source, and why
+
+`_PSV` is a temperature, and a temperature on this board is measured in exactly one
+place: the device tree's trips. So a `_PSV` is written only where this board has a
+trip to cite, and the two sources agree on two of the three cases and disagree on
+the third:
+
+| board trip | value | corpus zone | corpus `_PSV` |
+|---|---|---|---|
+| `gpuss-max-step` / `gpu-trip0` | 95000 | `TZ6` `QCOM0A91` | `0x0E60` - agrees |
+| `npu-step` / `npu-trip0` | 95000 | `TZ10` `QCOM0A92` | `0x0E60` - agrees |
+| `cpu-*-step` / `cpuNN-config` | 110000 | `TZ1`/`TZ3`/`TZ5` | `0x0EC4` (105 C) - **disagrees** |
+
+The encoding both sides use is `(T C + 273) * 10`, which is what makes the
+comparison possible at all: `0x0E60` is 3680 is 95 C, `0x0EC4` is 3780 is 105 C,
+`0x0EF6` is 3830 is 110 C, `0x0F28` is 3880 is 115 C. The third row is written with
+the **board's** number, because a passive trip point is a thermal-design decision
+and the board is the design; and gauguin's tree carries no 105 C trip anywhere, so
+copying `0x0EC4` would have put a temperature in this table that no measurement on
+this hardware supports.
+
+The same rule runs the other way in two places, and both are recorded rather than
+smoothed over:
+
+- `TZ11` `QCOM0ABF` is given **no** `_PSV` although lisa sets `0x0EC4` on it:
+  nothing on this board names that block, so there is no trip here to cite and the
+  family's number would be a guess wearing a source's clothes.
+- `_CRT` is written on **all thirteen** although lisa writes it only on its PMIC
+  group. Every one of gauguin's SoC zones carries a `reset-mon-cfg` trip at 115000,
+  which is `0x0F28` - the same number lisa's PMIC group uses, which is the
+  independent confirmation that `0x0F28` means what the encoding says it means.
+
+`_TC1`, `_TC2`, `_TSP`, `_MTL` and `_TZP` are the family's values unchanged,
+because they are coefficients, periods and limits with no counterpart on either
+side of the join; the family's thermal engine reads them as policy, and this board
+has no measurement that would set any of them.
+
+### The `ThermalZone` keyword, which is a second opcode and not a synonym
+
+The first build of this step wrote the thirteen nodes with `Device (TZ0)`, because
+that is what every other node in this file uses including the two SMMUs. It
+compiled, it linked, the AML was the right size, and the disassembler re-emitted
+all thirteen as `Device`. That is the tell: ASL's `ThermalZone` is not sugar for
+`Device` - it is AML's `ThermalZoneOp`, `0x5B 0x85`, against `DeviceOp`'s
+`0x5B 0x82`, a different opcode of the same length. A zone written as a `Device`
+is a device that happens to carry `_PSV` and `_TSP`; a zone written as a
+`ThermalZone` is a thermal zone. The corpus is right and the first attempt was
+wrong, and because the two opcodes are the same length the mistake changes the AML
+by nothing at all except its checksum:
+
+| | first attempt | corrected |
+|---|---|---|
+| source | `Device (TZ0)` | `ThermalZone (TZ0)` |
+| AML size | 5,210 bytes | 5,210 bytes |
+| opcodes | 237 | 237 |
+| named objects | 326 | 326 |
+| disassembles as | `Device (TZ0)` | `ThermalZone (TZ0)` |
+| sha256 | `bed7c89d…9546a` | `ff492bef…1d639` |
+
+The lesson is worth keeping because it is the second time in this phase that a
+structure compiled cleanly and was still wrong - the first was 4.49's `AcpiTableUpdate`
+comments - and because the instrument that caught it was the *disassembler* rather
+than the compiler. A build that reports `0 Errors` and a device count that matches
+is not evidence that the ACPI object is the object the spec names.
+
+### What was verified
+
+- `iasl` on the source: **AML 5,210 bytes, 237 opcodes, 326 named objects, 0
+  Errors**, 24 Warnings, 40 Remarks, 105 Optimizations - warnings and remarks
+  unchanged from 4.72, which is what says no new class of problem was introduced.
+- The delta against 4.72 is exactly the thirteen nodes: **3,997 → 5,210 bytes**,
+  196/181 opcodes and named objects → 237/326, 26 devices → 39, and every one of
+  the 1,213 added bytes is accounted for by a `ThermalZone` body.
+- `SSDT`, `APIC`, `FACP`, `FACS` and `GTDT` are byte-identical sha256 for sha256
+  with 4.72's, a fifth consecutive step. That is the check that says this step
+  changed the DSDT and nothing else.
+- The DSDT read back out of the built payload at FVMAIN offset **`0x54d4c8`** - the
+  same offset as 4.72's, because the table grew inside its own FFS file - hashes
+  `ff492bef347825a846b03469a15fce2679ecdfe85003e1bf35f2845e79c1d639`, which is the
+  `iasl` output to the byte, and its checksum byte makes the table sum to zero mod
+  256.
+- All three payloads match GenFv's map at **123 offsets and GUIDs, zero
+  mismatches**, and `probe-fingerprint.py --expect P2FreeWhy` returns 0 with all
+  ten instruments present.
+- The census reads 39 `_HID`/`_CID` declarations, 25 distinct, **23 claimed, 2
+  unclaimed** - and the two are unchanged.
+
+### The space, which is now the binding constraint
+
+`FVMAIN` was at 2,376 bytes free as of 4.72. This step added 1,216 bytes of file
+area and it is now **1,160 bytes free of 7,356,416 (`0x704000`)** - the DSDT is the
+last section of its `AcpiTables` file and the file grew in place, shifting the five
+FFS files behind it. `FVMAIN_COMPACT` is at 1,089,206 used and **2,056,522 free** of
+its `0x300000` cap, so the compressed side is not the problem; the uncompressed
+inner volume is, and it has room for roughly one more node of this size.
+
+That is worth stating as a fact about the next step rather than a worry about this
+one: the PMIC group alone is three nodes with a `_DSM` apiece and a `_CRS`, and it
+does not fit. Whatever comes next in this phase either stays under about a thousand
+bytes of AML, or the file area is re-cut - which means changing the `FDF`'s
+`FVMAIN` size and the `0x704000` cap with it, and that is its own step with its own
+measurement, not a side effect of writing zones.
+
+### What this step was
+
+The zones were the last thing 4.66 and 4.67 had counted on both sides without being
+able to join, and the join turned out to be the same lesson this file has now
+learned three times: the id is the driver's, not the board's and not the SoC's. It
+also turned up a smaller, sharper thing - that `ThermalZone` and `Device` are
+different AML opcodes of identical length, so the difference between a thermal zone
+and a device carrying thermal methods is invisible in the size, the opcode count and
+the compiler's report, and visible only when the artifact is disassembled. The
+thirteen nodes are the family's thirteen cheap zones; the four groups left are the
+ones that need devices this table has not got, and one of them is the modem.

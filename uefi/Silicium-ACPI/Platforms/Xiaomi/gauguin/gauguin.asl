@@ -2301,6 +2301,243 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
             }
         }
 
+        // The first thirteen thermal zones, and the family this table's zone
+        // ids belong to - which the driver set decides rather than the SoC.
+        //
+        // qcpep.wd7280.inf is the one driver on this host that binds a thermal
+        // zone, and it lists the ids it accepts: 0A17, 0A37-0A51, 0A57-0A64,
+        // 0A91, 0A92, 0ABF, 0AC8-0ACB, 0AD4 and 0AD8-0AE0. That is the family
+        // lisa and a52sxq write and no other. The other SM7225 table in the
+        // corpus, a52q, uses a different one - 084B, 084F, 085C, 085D, 085E,
+        // 085F, 0862, 0863, 0865, 0867, 089D, 089E - and no inf on this host
+        // claims a single one of those, so the same-SoC table is not the
+        // modelling table here. The id family tracks the driver set, the way
+        // the SMMU's did in 4.72, and lisa/a52sxq are what the driver binds.
+        //
+        // The zones are also the third appearance of the pattern 4.72 found on
+        // the SMMUs: one id, an _UID per instance. 0A58, 0A59 and 0AD4 each
+        // carry _UID Zero and _UID One in every one of the 20 tables that has
+        // them, and no table anywhere gives a second id for a second instance
+        // of the same block. A zone is therefore named for the sensor block it
+        // belongs to and not for the sensor: the corpus device names TZ0-TZ7,
+        // TZ9-TZ13 are the family's own labels, their numeric suffix is not
+        // the _UID, and they are kept here so the provenance stays visible.
+        //
+        // _PSV, and where the two sides disagree. The board's device tree
+        // carries 92 zones and 127 trips and the trips are the only place a
+        // temperature appears, so a _PSV is written only where this board has
+        // a trip to cite:
+        //
+        //   gpu-trip0   95000  0x0E60  ->  TZ6   0A91  (lisa: 0x0E60, agrees)
+        //   npu-trip0   95000  0x0E60  ->  TZ10  0A92  (lisa: 0x0E60, agrees)
+        //   cpuNN-config 110000 0x0EF6 ->  the three _UID One zones, on the
+        //                                  eight cpu-*-step zones' own value
+        //
+        // The third line is a disagreement recorded rather than smoothed over:
+        // lisa writes 0x0EC4 (105 C) on those three, gauguin's board has no
+        // 105 C trip anywhere, and its closed-loop cpu zones step at 110 C.
+        // The board's number wins because the number is a thermal-design
+        // decision and the board is the design. The same rule drops 0ABF's
+        // _PSV, which lisa sets to 0x0EC4: nothing on this board names that
+        // block, so there is no measurement here that would put a temperature
+        // on it. _CRT is the opposite case - lisa writes it only on its PMIC
+        // group, but every one of gauguin's SoC zones carries a reset-mon-cfg
+        // trip at 115000, which is 0x0F28, which is the number lisa's PMIC
+        // group already uses; it is written here on the board's evidence.
+        //
+        // _TC1, _TC2, _TSP, _MTL and _TZP are the family's, because they are
+        // coefficients and periods with no counterpart on either side of the
+        // join, and the driver's thermal engine reads them as policy.
+        //
+        // _TZD is not written. lisa's GPU zone lists \_SB.GPU0 and its PMIC
+        // group lists \_SB.PEP0; this table has neither device, and a _TZD
+        // that names a device this table does not have is worse than no _TZD.
+        // _DEP is the one every corpus zone carries and the one every omitted
+        // node here is waiting on: {PEP0} alone on all but the PMIC group, and
+        // a one-entry _DEP is a shape no table has - the same rule the QUP
+        // engines, the QGP nodes and the two SMMUs already follow, and the same
+        // thing that changes for all of them on the day PEP0 lands.
+        //
+        // Four groups are deliberately not here yet, and each is its own
+        // measurement: the PMIC group 0AC8/0AC9/0ACB, which is the only one
+        // whose _DEP has two entries and the only one with a _DSM and a GpioInt
+        // _CRS on \\_SB.PM01 pin 0x00C0; the ADC group 0A5F/0A61/0A63, which
+        // _DEPs two devices this table has not got; TZ99 0A5A, whose _TZD is a
+        // 13-entry package naming five containers and which is the one zone
+        // that summarizes the others; and the nine 04C0-04C8 the modem's own
+        // qcthermalmdm7280.inf binds, which the modem cannot be driven from.
+        ThermalZone (TZ0)
+        {
+            Name (_HID, "QCOM0A58")
+            Name (_UID, Zero)
+            Name (TTSP, One)
+            Method (_TSP, 0, NotSerialized) { Return (\_SB.TZ0.TTSP) }
+            Name (_TZP, Zero)
+        }
+
+        ThermalZone (TZ1)
+        {
+            Name (_HID, "QCOM0A58")
+            Name (_UID, One)
+            Name (TPSV, 0x0EF6)
+            Method (_PSV, 0, NotSerialized) { Return (\_SB.TZ1.TPSV) }
+            Name (TCRT, 0x0F28)
+            Method (_CRT, 0, NotSerialized) { Return (\_SB.TZ1.TCRT) }
+            Name (_MTL, 0x14)
+            Name (TTC1, Zero)
+            Method (_TC1, 0, NotSerialized) { Return (\_SB.TZ1.TTC1) }
+            Name (TTC2, One)
+            Method (_TC2, 0, NotSerialized) { Return (\_SB.TZ1.TTC2) }
+            Name (TTSP, One)
+            Method (_TSP, 0, NotSerialized) { Return (\_SB.TZ1.TTSP) }
+            Name (_TZP, Zero)
+        }
+
+        ThermalZone (TZ2)
+        {
+            Name (_HID, "QCOM0A59")
+            Name (_UID, Zero)
+            Name (TTSP, One)
+            Method (_TSP, 0, NotSerialized) { Return (\_SB.TZ2.TTSP) }
+            Name (_TZP, Zero)
+        }
+
+        ThermalZone (TZ3)
+        {
+            Name (_HID, "QCOM0A59")
+            Name (_UID, One)
+            Name (TPSV, 0x0EF6)
+            Method (_PSV, 0, NotSerialized) { Return (\_SB.TZ3.TPSV) }
+            Name (TCRT, 0x0F28)
+            Method (_CRT, 0, NotSerialized) { Return (\_SB.TZ3.TCRT) }
+            Name (_MTL, 0x14)
+            Name (TTC1, Zero)
+            Method (_TC1, 0, NotSerialized) { Return (\_SB.TZ3.TTC1) }
+            Name (TTC2, One)
+            Method (_TC2, 0, NotSerialized) { Return (\_SB.TZ3.TTC2) }
+            Name (TTSP, One)
+            Method (_TSP, 0, NotSerialized) { Return (\_SB.TZ3.TTSP) }
+            Name (_TZP, Zero)
+        }
+
+        ThermalZone (TZ4)
+        {
+            Name (_HID, "QCOM0AD4")
+            Name (_UID, Zero)
+            Name (TTSP, One)
+            Method (_TSP, 0, NotSerialized) { Return (\_SB.TZ4.TTSP) }
+            Name (_TZP, Zero)
+        }
+
+        ThermalZone (TZ5)
+        {
+            Name (_HID, "QCOM0AD4")
+            Name (_UID, One)
+            Name (TPSV, 0x0EF6)
+            Method (_PSV, 0, NotSerialized) { Return (\_SB.TZ5.TPSV) }
+            Name (TCRT, 0x0F28)
+            Method (_CRT, 0, NotSerialized) { Return (\_SB.TZ5.TCRT) }
+            Name (_MTL, 0x14)
+            Name (TTC1, Zero)
+            Method (_TC1, 0, NotSerialized) { Return (\_SB.TZ5.TTC1) }
+            Name (TTC2, One)
+            Method (_TC2, 0, NotSerialized) { Return (\_SB.TZ5.TTC2) }
+            Name (TTSP, One)
+            Method (_TSP, 0, NotSerialized) { Return (\_SB.TZ5.TTSP) }
+            Name (_TZP, Zero)
+        }
+
+        ThermalZone (TZ6)
+        {
+            Name (_HID, "QCOM0A91")
+            Name (_UID, Zero)
+            Name (TPSV, 0x0E60)
+            Method (_PSV, 0, NotSerialized) { Return (\_SB.TZ6.TPSV) }
+            Name (TCRT, 0x0F28)
+            Method (_CRT, 0, NotSerialized) { Return (\_SB.TZ6.TCRT) }
+            Name (TTC1, One)
+            Method (_TC1, 0, NotSerialized) { Return (\_SB.TZ6.TTC1) }
+            Name (TTC2, 0x02)
+            Method (_TC2, 0, NotSerialized) { Return (\_SB.TZ6.TTC2) }
+            Name (TTSP, 0x02)
+            Method (_TSP, 0, NotSerialized) { Return (\_SB.TZ6.TTSP) }
+            Name (_TZP, Zero)
+        }
+
+        ThermalZone (TZ7)
+        {
+            Name (_HID, "QCOM0A51")
+            Name (_UID, Zero)
+            Name (TTSP, 0x32)
+            Method (_TSP, 0, NotSerialized) { Return (\_SB.TZ7.TTSP) }
+            Name (TCRT, 0x0F28)
+            Method (_CRT, 0, NotSerialized) { Return (\_SB.TZ7.TCRT) }
+            Name (_TZP, Zero)
+        }
+
+        ThermalZone (TZ9)
+        {
+            Name (_HID, "QCOM0A4C")
+            Name (_UID, Zero)
+            Name (TTSP, 0x32)
+            Method (_TSP, 0, NotSerialized) { Return (\_SB.TZ9.TTSP) }
+            Name (TCRT, 0x0F28)
+            Method (_CRT, 0, NotSerialized) { Return (\_SB.TZ9.TCRT) }
+            Name (_TZP, Zero)
+        }
+
+        ThermalZone (TZ10)
+        {
+            Name (_HID, "QCOM0A92")
+            Name (_UID, Zero)
+            Name (TPSV, 0x0E60)
+            Method (_PSV, 0, NotSerialized) { Return (\_SB.TZ10.TPSV) }
+            Name (TCRT, 0x0F28)
+            Method (_CRT, 0, NotSerialized) { Return (\_SB.TZ10.TCRT) }
+            Name (TTC1, One)
+            Method (_TC1, 0, NotSerialized) { Return (\_SB.TZ10.TTC1) }
+            Name (TTC2, 0x02)
+            Method (_TC2, 0, NotSerialized) { Return (\_SB.TZ10.TTC2) }
+            Name (TTSP, 0x0A)
+            Method (_TSP, 0, NotSerialized) { Return (\_SB.TZ10.TTSP) }
+            Name (_TZP, Zero)
+        }
+
+        ThermalZone (TZ11)
+        {
+            Name (_HID, "QCOM0ABF")
+            Name (_UID, Zero)
+            Name (TTC1, Zero)
+            Method (_TC1, 0, NotSerialized) { Return (\_SB.TZ11.TTC1) }
+            Name (TTC2, One)
+            Method (_TC2, 0, NotSerialized) { Return (\_SB.TZ11.TTC2) }
+            Name (TTSP, 0x32)
+            Method (_TSP, 0, NotSerialized) { Return (\_SB.TZ11.TTSP) }
+            Name (TCRT, 0x0F28)
+            Method (_CRT, 0, NotSerialized) { Return (\_SB.TZ11.TCRT) }
+            Name (_TZP, Zero)
+        }
+
+        ThermalZone (TZ12)
+        {
+            Name (_HID, "QCOM0A4B")
+            Name (_UID, Zero)
+            Name (TTSP, 0x32)
+            Method (_TSP, 0, NotSerialized) { Return (\_SB.TZ12.TTSP) }
+            Name (TCRT, 0x0F28)
+            Method (_CRT, 0, NotSerialized) { Return (\_SB.TZ12.TCRT) }
+            Name (_TZP, Zero)
+        }
+
+        ThermalZone (TZ13)
+        {
+            Name (_HID, "QCOM0A57")
+            Name (_UID, Zero)
+            Name (TCRT, 0x0F28)
+            Method (_CRT, 0, NotSerialized) { Return (\_SB.TZ13.TCRT) }
+            Name (_TZP, Zero)
+        }
+
         Device (CPU0)
         {
             Name (_HID, "ACPI0007")
