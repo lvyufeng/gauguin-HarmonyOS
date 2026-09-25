@@ -78,12 +78,16 @@
  * gauguin's device tree states too. No _LPI: gauguin's low-power idle
  * parameters have not been derived, and an unverified _LPI is worse than none.
  *
- * P3 also asks for I2C, SPI, buttons and thermal zones, and none of them is
- * here. What is here, as of Step 4.66, is the PMIC family - SPMI, PMIC and
- * PM01, Step 4.63 - the TLMM pin controller, GIO0, and its pin count, Step
- * 4.64 and 4.65 - and the Type-C controller UCS0, because unlike the others
- * their names turned out not to be a guess. The note above those nodes is how
- * each value was settled.
+ * P3's first item also asks for I2C, SPI, buttons and thermal zones, and half
+ * of that list is here. Here: the I2C engines - the QUP pair I2C8 and I2C9 and
+ * the charger cluster's IC11, Steps 4.68 through 4.87 - and the generic button
+ * device BTNS, Step 4.89. Not here: the SPI engines, written when a slave with
+ * a driver arrives rather than on their own, and the thermal zones, which are a
+ * step of their own. The PMIC family - SPMI, PMIC and PM01, Step 4.63 - the
+ * TLMM pin controller, GIO0, and its pin count, Step 4.64 and 4.65 - and the
+ * Type-C controller UCS0 came earlier and stay, because unlike the others their
+ * names turned out not to be a guess. The note above each node is how that
+ * node's values were settled.
  *
  * UCS0 is the first node added here on the strength of the driver set's own
  * claim rather than of a sibling table: qcusbcucsi7280.inf binds
@@ -92,10 +96,11 @@
  * depend on in lisa's table, is deliberately not ported with it; that node's
  * comment carries the measurement and the reason.
  *
- * The rest stays out for a measured reason. Every one of those nodes needs a
- * `_HID` (and for the I2C blocks a `_DSM` whose contract is documented nowhere
- * in this tree), and the device tree carries no ACPI name: it has registers and
- * pins, which are the half that is knowable.
+ * What stays out stays out for a measured reason. Every one of those nodes
+ * needs a `_HID`, and the device tree carries no ACPI name: it has registers
+ * and pins, which are the half that is knowable. I2C is the case that showed
+ * the way through rather than the exception to it - its id is not read off the
+ * tree either, it is read off the family, and qci2c7280.inf claims it.
  *
  * The PM01 census is what changed the picture, and it is worth stating in full.
  * Across the 21 tables in Silicium-ACPI that carry a PMIC-GPIO node at all - one
@@ -671,12 +676,19 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
                         })
                     }
 
+                    // The pair is the PON's two key indices - power first, resin
+                    // second - and that is measured rather than assumed: in all
+                    // 20 tables that carry both a PM01 and a BTNS this package
+                    // equals that node's pins[0] and pins[2], and the device
+                    // trees confirm the same two numbers from the other side.
+                    // gauguin's own are 0 and 1; see the note above SPMI, and
+                    // the BTNS node at the end of this file.
                     If ((ToInteger (Arg2) == One))
                     {
                         Return (Package (0x02)
                         {
-                            0x07,
-                            0x06
+                            0x00,
+                            0x01
                         })
                     }
                 }
@@ -2855,11 +2867,29 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
          * adds a second. gauguin has no PMIC on pin 3.
          *
          * PM01._DSM: the GPIO Controller UUID, function 0 returning the bitmap
-         * 0x03 (functions 1 and 2), function 1 returning Package (0x02){0x07,
-         * 0x06}. The UUID, the bitmap and the pair are each constant across
-         * every table that carries them; the pair's meaning is not established.
-         * Four older tables return Buffer (One){0x00} at function 1 instead, and
-         * those are all pre-0A families.
+         * 0x03 (functions 1 and 2), function 1 returning the platform's own
+         * PON key indices. The UUID and the bitmap are constant across every
+         * table that carries them, and the pair at function 1 is not: it is
+         * 0x07,0x06 in ten tables and Zero,One in ten others, twenty in all.
+         * Its meaning was open until this step and is now measured. It is
+         * <kpdpwr, resin>, the two PON index numbers the platform's power-on
+         * block gives those keys, and the measurement is a coincidence that
+         * cannot be one: in every one of those twenty tables the package at
+         * function 1 is exactly the pair the same table's BTNS node lists as
+         * pins[0] and pins[2] - twenty of twenty, both fields, no exception.
+         * The device trees read from the other side the same way: lisa's
+         * pon_hlos@1300 names its two interrupts kpdpwr and resin at indices 7
+         * and 6, miatoll's qcom,power-on@800 names the same two at 0 and 1, and
+         * those are the two pairs the ACPI tables split into.
+         *
+         * gauguin's are 0 and 1, from its own pm6350 pon@800: pwrkey takes
+         * interrupt index 0, resin index 1, both enabled. The tempting pair is
+         * 7 and 6 - it is the one this file carried until this step, it is the
+         * one the SM8350 family states, and gauguin has a block that states it
+         * too, the pmk8350's pon@1300 - but both of that block's keys are
+         * status = "disabled" in gauguin.dts, and pm6350 at SPMI USID 0 is the
+         * PMIC the board boots from. Four older tables return Buffer
+         * (One){0x00} at function 1 instead, and those are all pre-0A families.
          *
          * _STA returning 0x0F is this file's convention on every device it
          * defines; the reference tables leave it out and are present by default.
@@ -4441,6 +4471,160 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
             {
                 Return (\_SB.HIRQ)
             }
+        }
+
+        // BTNS is the generic button device, and it is the one node in this file
+        // whose _HID was never a question. ACPI0011 is Microsoft's own id for it,
+        // every table in the corpus that declares a BTNS declares exactly that,
+        // and the driver is inbox - which is why the 7280 set, whose claims
+        // confirm most of the ids here, has nothing to say about this node and
+        // does not need to. It goes last, and that is a vote rather than an
+        // impression: appended here it takes the file to 36 units, 592 pairs and
+        // 10,428 votes, which tools/acpi-order-votes.py scores at 10,356 of a
+        // 10,356 ceiling with 0 broken relations of 532 - and that tool's
+        // --fixed-point frees only I2C8, I2C9, UAR2 and IC11, so this node's last
+        // slot is the only one that maximises the score. The 34 pairs it can make
+        // carry 588 votes and every one of them puts it after the other node
+        // (UAR2 is the one unit it never shares a table with, so that pair has no
+        // weight and no vote).
+        //
+        // The three descriptors are the shape, and in 22 tables the shape does
+        // not move: descriptor 0 is Edge, ActiveBoth, ExclusiveAndWake, PullDown;
+        // descriptor 2 is the same with Exclusive in place of ExclusiveAndWake;
+        // descriptor 1 is Edge, ActiveBoth, Exclusive, PullUp. The three tables
+        // that write 0x0BB8 into descriptor 1's debounce cell are the same three
+        // that carry a _STA, and both habits are theirs rather than the family's,
+        // so neither is copied here. The single exception in the whole corpus is
+        // cepheus, whose fourth descriptor puts an Edge, ActiveLow, Exclusive,
+        // PullUp pin on \_SB.GIO0 instead of on the PMIC - a board wiring a button
+        // to the TLMM, which gauguin does not do.
+        //
+        // Descriptors 0 and 2 are the PON's two keys, kpdpwr and resin, and their
+        // numbers are the PON's own interrupt indices rather than anything this
+        // file picks: in all 20 tables that carry both a BTNS and a PM01, those
+        // two cells equal PM01._DSM function 1's package, field for field. That is
+        // what settled the pair's meaning above. gauguin's are 0 and 1 - its
+        // pm6350 pon@800 gives kpdpwr interrupt index 0 and resin index 1, both
+        // enabled, and the pmk8350's pon@1300 pair of 7 and 6 is disabled on both
+        // keys - so 0x0000 and 0x0001 here, the same two numbers the corrected
+        // _DSM now states.
+        //
+        // Descriptor 1 is the volume-up key, and its number is the one value in
+        // this node that rests on correlation rather than on measurement of the
+        // same fact. gauguin's volume-up is pm6350's PMIC-GPIO 2: gpio-keys has
+        // `gpios = <0xa0 0x02 0x01>`, phandle 0xa0 being `gpio@c000` inside the
+        // pm6350 at SPMI USID 0, nine pins, and gpio 2's own pin state is
+        // bias-pull-up - which is why the descriptor's fourth cell is PullUp. The
+        // number in the pin list is not 2. PM01's pin namespace is flat and shared
+        // by every device that hangs off it, and the GPIO blocks in it do not
+        // start at zero: of the 22 BTNS tables, 16 name a volume-up whose
+        // controller resolves in the device trees, and they carry exactly three
+        // bases - 0x7F in six (pm8150@0 in five, pm8998@0 in one), 0xC0 in seven
+        // (pm7325@1 in two, pm8350@1 in five) and 0x207 in three (pm6150l@4 in
+        // three) - each being the ACPI number minus the controller-relative pin
+        // that tree gives. The base tracks the SPMI slot rather than the model:
+        // two different PMICs agree at slot 0 and two more at slot 1. gauguin's
+        // block is pm6350 at slot 0, so the pin list says 0x7F + 2, which is
+        // 0x0081.
+        //
+        // That is a reasoned number, not a measured one, and the difference is
+        // worth keeping visible. pm6350 appears in no corpus table and in no
+        // device tree in this checkout but gauguin's; no INF in the 7280 set names
+        // a pin; and the firmware tree carries no PMIC-GPIO pin-base table at all
+        // - there is no `*PmicGpio*` file in it and no `pmicgpio`, `pm_gpio` or
+        // `PmicGpio` string anywhere in it, the model appearing once, as
+        // `EFI_PMIC_IS_PM6350 = 0x36` in EFIPmicVersion.h, with no numbering
+        // beside it. If the base is a function of the model rather than of the
+        // slot, the true number is something else and the volume-up key is the one
+        // thing this node gets wrong; the other two descriptors are unaffected,
+        // because their numbers are indices the PON itself states.
+        //
+        // The _DSD is copied rather than derived, and the measurement is what says
+        // so. Its outer package is two elements - the Generic Buttons Device UUID
+        // and one inner package of five-element entries - and the first four
+        // entries are byte-identical in all 20 tables that carry three descriptors:
+        // Zero One Zero One 0x0D; One Zero One One 0x81; One One One 0x0C 0xE9;
+        // One 0x02 One 0x0C 0xEA. The pins those same tables list are not
+        // identical at all - 0x0007/0x00C6/0x0006 in one, 0x0000/0x0085/0x0001 in
+        // another, 0x0000/0x0209/0x0001 in a third. A blob that does not move when
+        // the hardware does is the driver's table rather than the platform's, so it
+        // is repeated here unchanged and its fields are not interpreted. The entry
+        // count is one more than the descriptor count - four here, five in cepheus,
+        // six in caymanslm - and those two tables' extra entries are the ones that
+        // make it move.
+        Device (BTNS)
+        {
+            Name (_HID, "ACPI0011")  // _HID: Hardware ID
+            Alias (^PSUB, _SUB)  // _SUB: Subsystem ID
+            Name (_UID, Zero)  // _UID: Unique ID
+            Method (_CRS, 0, NotSerialized)  // _CRS: Current Resource Settings
+            {
+                Name (RBUF, ResourceTemplate ()
+                {
+                    GpioInt (Edge, ActiveBoth, ExclusiveAndWake, PullDown, 0x0000,
+                        "\\_SB.PM01", 0x00, ResourceConsumer, ,
+                        )
+                        {   // Pin list
+                            0x0000
+                        }
+                    GpioInt (Edge, ActiveBoth, Exclusive, PullUp, 0x0000,
+                        "\\_SB.PM01", 0x00, ResourceConsumer, ,
+                        )
+                        {   // Pin list
+                            0x0081
+                        }
+                    GpioInt (Edge, ActiveBoth, Exclusive, PullDown, 0x0000,
+                        "\\_SB.PM01", 0x00, ResourceConsumer, ,
+                        )
+                        {   // Pin list
+                            0x0001
+                        }
+                })
+                Return (RBUF) /* \_SB_.BTNS._CRS.RBUF */
+            }
+
+            Name (_DSD, Package (0x02)  // _DSD: Device-Specific Data
+            {
+                ToUUID ("fa6bd625-9ce8-470d-a2c7-b3ca36c4282e") /* Generic Buttons Device */,
+                Package (0x04)
+                {
+                    Package (0x05)
+                    {
+                        Zero,
+                        One,
+                        Zero,
+                        One,
+                        0x0D
+                    },
+
+                    Package (0x05)
+                    {
+                        One,
+                        Zero,
+                        One,
+                        One,
+                        0x81
+                    },
+
+                    Package (0x05)
+                    {
+                        One,
+                        One,
+                        One,
+                        0x0C,
+                        0xE9
+                    },
+
+                    Package (0x05)
+                    {
+                        One,
+                        0x02,
+                        One,
+                        0x0C,
+                        0xEA
+                    }
+                }
+            })
         }
     }
 }

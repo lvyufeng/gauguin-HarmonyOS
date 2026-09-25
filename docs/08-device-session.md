@@ -16886,3 +16886,324 @@ and left alone where it is historic narrative:
   flashing it instead of 4.74 would test nothing this step claims: the payload
   ladder is here to prove the reorder reached the artifact, not to be booted for
   its own sake.
+
+## Step 4.89 — the node the operating system already drives, and a pin that is reasoned rather than measured
+
+### What this step was
+
+Wrote one node — `BTNS`, the generic button device — and corrected one number in
+a node written long ago: `PM01._DSM`'s function 1 returned lisa's PON key pair
+`{0x07, 0x06}` and now returns gauguin's `{0x00, 0x01}`. The two belong to the
+same step because they are the same two numbers: the node's first and third pin
+lists *are* the PON's power and resin indices, which is what that function
+returns, and the correction is what made that visible.
+
+Of the three numbers `BTNS` carries, two are measurements — the PON indices, read
+off the device tree and confirmed from the corpus's other side — and the third is
+not. That one is the volume-up key, and the corpus pins it by a rule this step had
+to derive before it could be used at all. The node's own comment says which is
+which, in those words, because a reader comparing this table to another board's
+needs to know where the guesses are.
+
+### Why this one needs no driver-set confirmation
+
+Every node in this file has been checked against the installed driver set — 112
+`.inf` files from `~/work/woa-ref/inf-7280` — because a QCOM id nothing claims is
+a node that exists in the table and not in Device Manager. `BTNS` is the first
+node here that does not need that check, and the reason is the id: `ACPI0011` is
+Microsoft's, not Qualcomm's, so the operating system supplies the driver and no
+vendor `.inf` is involved. Nothing in that 112-file set mentions it, and nothing
+is the correct answer — the same reading `ACPI0007` for the eight CPUs and
+`ACPI000E` for `PRTC` have always had, and the census tool already says so in
+those words.
+
+What the corpus says is one id and no variants: **22 of the 66 tables carry a
+`BTNS`, and `_HID` is `ACPI0011` in 22 of 22** — the widest unanimity any node
+written here has had. `_SUB` is the alias `^PSUB` in every one of them, and
+`_UID` is `Zero`.
+
+### The shape, and the three ways the corpus varies it
+
+The descriptors are read off the corpus rather than reasoned about, and the
+first thing reading them carefully does is break the "all 22 agree" claim that
+was available from a careless count. There are three descriptors in 20 tables;
+cepheus has four, and caymanslm five. So the invariant has to be stated as the
+first three, and then the exceptions named:
+
+```asl
+GpioInt (Edge, ActiveBoth, ExclusiveAndWake, PullDown, 0x0000, "\\_SB.PM01", …)
+GpioInt (Edge, ActiveBoth, Exclusive,         PullUp,   0x0000, "\\_SB.PM01", …)
+GpioInt (Edge, ActiveBoth, Exclusive,         PullDown, 0x0000, "\\_SB.PM01", …)
+```
+
+Those three are byte-identical in all 22 tables except in one field and one
+table. The field is the debounce on the middle descriptor: `0x0000` in 19 tables
+and `0x0BB8` in exactly **gts8p, r0q and vili** — and those three are exactly the
+tables that carry a `_STA` inside `BTNS`, which this step verified by membership
+test rather than by grep (`grep -l 0x0BB8` over the corpus returns 30 files, of
+which 27 have the value somewhere other than this node). It is one habit, in
+three boards, and not two facts that happen to share a set.
+
+The table is **cepheus**: a fourth descriptor,
+
+```asl
+GpioInt (Edge, ActiveLow, Exclusive, PullUp, 0x0000, "\\_SB.GIO0", …) { 0x0061 }
+```
+
+which is the only descriptor in the whole corpus of 22 that names a controller
+other than `\_SB.PM01`, is the only `ActiveLow` among them, and is the only one
+whose pin is not in the PMIC's flat pin namespace — it is a TLMM line. caymanslm
+is the fifth and sixth descriptors, `0x0087` and `0x0086`, both `PullUp`,
+appended after the triple. Neither is written here: this table has three, the
+three are what 20 of 22 state, and the fourth and fifth in the two boards that
+have them carry board-specific lines this board's device tree does not mention.
+
+The `_STA` is not written either. 19 of the 22 omit it, this file's nearest
+precedent `UCS0` has none, and nothing about this board varies per SKU in a way
+a `_STA` would express.
+
+### The three pins, and which of them is measured
+
+The pin triples in the corpus, counted this step:
+
+| tables | pins | the middle number |
+|---|---|---|
+| 10 | `0x0007`, `0x00C6`, `0x0006` | `0xC0 + 6` |
+| 5 | `0x0000`, `0x0085`, `0x0001` | `0x7F + 6` |
+| 2 | `0x0000`, `0x0209`, `0x0001` | `0x207 + 2` |
+| 2 | `0x0007`, `0x00D5`, `0x0006` | — |
+| 1 | `0x0000`, `0x020F`, `0x0001` | `0x207 + 8` |
+| 1 | `0x0000`, `0x0085`, `0x0001`, `0x0087`, `0x0086` | `0x7F + 6` |
+| 1 | `0x0000`, `0x0085`, `0x0001`, `0x0061` | `0x7F + 6` |
+
+The first and third entries of every triple are the PON's power and resin
+indices, and that is the identity the `_DSM` correction came out of. The middle
+entry is the volume-up key expressed in the *PMIC's* pin namespace rather than
+the PMIC-GPIO's own, and the four right-hand rows are the whole of what makes it
+usable: `0x00C6`, `0x0085`, `0x0209` and `0x020F` are each a constant plus the
+pin number that board's device tree gives for the same key, and the constants are
+exactly three — `0x7F`, `0xC0` and `0x207`.
+
+The step that measured this found the constants are a function of the **SPMI
+slot** the GPIO controller's PMIC sits in, and of nothing else. Six tables at
+slot 0 (`pm8998@0`, `pm8150@0`) carry `0x7F`; seven at slot 1 (`pm7325@1`,
+`pm8350@1`) carry `0xC0`; three at slot 4 (`pm6150l@4`) carry `0x207`. Two
+different PMIC models agree at slot 0 and two more at slot 1, which rules out
+"the base is a function of the model"; and the pin numbers underneath those
+bases differ across the group (6, 6, 8 and 2 for the four rows above), which
+rules out "the base is the pins counted so far".
+
+For gauguin the owner is read off this board's own device tree and is not in
+doubt: `gpio-keys`'s `key-volume-up` has `linux,code = <0x73>` and
+`gpios = <0xa0 0x02 0x01>`, phandle `0xa0` is `gpio@c000`, and that node is
+`compatible = "qcom,pm6350-gpio","qcom,spmi-gpio"` inside `pmic@0` — SPMI slot 0
+— with `gpio-ranges = <0xa0 0x00 0x00 0x09>`, i.e. nine pins. So the key is
+pm6350 pin 2, the base is `0x7F`, and the number is `0x7F + 2 = 0x0081`.
+
+That number is **reasoned and not measured**, and the node's comment says so in
+those words, because `pm6350` has no precedent anywhere on this machine: it is in
+`Resources/DTBs/gauguin.dts` and in no other device tree in the 161-entry corpus,
+it is in no `.inf` in the driver set, and the firmware tree spells it exactly once
+— `EFI_PMIC_IS_PM6350 = 0x36` in `EFIPmicVersion.h`. There is therefore no table
+in the corpus from which a pm6350 pin could be checked, and the alternative to a
+reasoned number is no number at all.
+
+The two that *are* measured are stated from this board's tree: `pmic@0`'s
+`pon@800` is `qcom,pm8998-pon`, its `pwrkey` is `interrupts = <0x00 0x08 0x00 0x03>`
+and its `resin` is `<0x00 0x08 0x01 0x03>`, both enabled — indices **0** and
+**1**. The tempting pair is `pmk8350 pon@1300`, whose two keys are at 7 and 6,
+which is lisa's pair; both are `status = "disabled"` on this board, and that is
+why the numbers written are 0 and 1 and not 7 and 6.
+
+### `PM01._DSM` function 1, now that its meaning is established
+
+The node above is where the correction came from, so the correction is recorded
+here rather than folded into the ladder. Function 1 returned `Package (0x02)
+{0x07, 0x06}` from 4.x until now, on the grounds that the pair is constant across
+every table that carries it — which is true, and which was the whole of what was
+known about it: the comment said in as many words that the pair's *meaning* was
+not established.
+
+It is established now, and by two routes. In the corpus, of the 22 tables with a
+`BTNS`, **20 also carry a `PM01`**, and in **20 of 20** the returned pair equals
+that node's `pins[0]` and `pins[2]` field for field — `0x07,0x06` in ten tables
+and `Zero,One` in ten, with `gts8p` and `r0q` carrying `BTNS` and no `PM01` at
+all. In the device trees, the same two numbers are named: lisa's `pon_hlos@1300`
+has `interrupts = <0x00 0x13 0x07 0x03 … 0x00 0x13 0x06 0x03>` on children
+called `kpdpwr` and `resin`, and miatoll's `qcom,power-on@800` names them at 0
+and 1. So the pair is **(the PON's kpdpwr index, its resin index)** — an order,
+not a set, and the corpus's ten tables per value are ten boards with each
+arrangement rather than an ambiguity.
+
+gauguin's own are 0 and 1, and `{0x00, 0x01}` is what the function returns now.
+
+### The `_DSD` is copied and not derived
+
+The device-specific data is one UUID and a small table:
+
+```asl
+Name (_DSD, Package (0x02) {
+    ToUUID ("fa6bd625-9ce8-470d-a2c7-b3ca36c4282e"),
+    Package (0x04) {
+        Package (0x05) { Zero, One, Zero, One, 0x0D },
+        Package (0x05) { One, Zero, One, One, 0x81 },
+        Package (0x05) { One, One, One, 0x0C, 0xE9 },
+        Package (0x05) { One, 0x02, One, 0x0C, 0xEA }
+    }
+})
+```
+
+and the reason it is copied verbatim rather than derived is a measurement: the
+four entries are **byte-identical in all 20 tables** that have four, while the
+*pins in those same tables differ* — the blob does not move when the hardware
+does. It is the driver's table, not the board's. Two tables carry more
+(cepheus five entries, caymanslm six), and this step re-measured that census
+after a first attempt returned the wrong shape:
+
+```
+Counter({4: 20, 6: 1, 5: 1})
+```
+
+The first attempt walked backwards from the package to find its opening brace and
+landed on the wrong one, which is worth recording because the *cause* is a fact
+about the corpus: lisa's `BTNS` carries **two** `_DSD` packages, the first
+anchored on `ToUUID ("6211e2c0-58a3-4af3-90e1-927a4e0c55a4")` with
+`Package (0x01) { Package (0x02) { "HotPlugSupportInD3", One } }`, and the buttons
+UUID second. A walker that assumes one `_DSD` per device reads the wrong one.
+
+Nothing in this step interprets the five fields, and the node comment says that
+too: the entries are the driver's, this file cannot check them, and copying them
+is the only thing it can honestly do with them.
+
+### Where it goes, settled by vote
+
+The node is last, and that is a measurement rather than an impression. Appended
+at the end of the file, the table is **36 units, 592 pairs and 10,428 votes**,
+which `tools/acpi-order-votes.py` scores at **10,356 of a 10,356 ceiling with 0
+broken relations of 532**. Its `--fixed-point` frees exactly four nodes — `I2C8`,
+`I2C9`, `UAR2` and `IC11`, the same four 4.88 left free — so `BTNS`'s slot is
+determined and the last one is the only slot that maximises the score. The 34
+pairs it can make carry **588 votes** (measured directly: the sum over the other
+34 nodes of the tables carrying both), every one of them putting it after the
+other node, and `UAR2` is the one unit it never shares a table with, which is why
+the count is 34 and not 35.
+
+That adjacency is not the adjacency a summary of this corpus would have guessed:
+the node that precedes `BTNS` is `TSC1` in 11 tables, `TSC5` in 3 and `AGR0` in 3
+with `TSSD`, `IRL1` and `MBCL` once each and twice with nothing at all; the node
+that follows it is `RVRM` in 12, `NRCX` in 4, `QDCI` in 3, `ADC1` once and
+nothing twice. This file has none of those nodes, so the vote reduces to "last",
+and the score says last is where it goes.
+
+### The body
+
+```asl
+Device (BTNS)
+{
+    Name (_HID, "ACPI0011")     // Generic Buttons Device
+    Alias (^PSUB, _SUB)
+    Name (_UID, Zero)
+    Method (_CRS, 0, NotSerialized)
+    {
+        Name (RBUF, ResourceTemplate ())
+        {
+            GpioInt (… ExclusiveAndWake, PullDown, 0x0000, "\\_SB.PM01", …) { 0x0000 }
+            GpioInt (… Exclusive,         PullUp,   0x0000, "\\_SB.PM01", …) { 0x0081 }
+            GpioInt (… Exclusive,         PullDown, 0x0000, "\\_SB.PM01", …) { 0x0001 }
+        }
+        Return (RBUF)
+    }
+    Name (_DSD, Package (0x02) { ToUUID ("fa6bd625-…"), Package (0x04) { … } })
+}
+```
+
+The first and third pin lists carry the PON indices and equal `_DSM` function 1
+field for field; the middle one is the volume-up key and is the reasoned number.
+`_STA` is absent, as it is in 19 of the corpus's 22.
+
+`PM01._DSM`'s function 1 changed from
+
+```asl
+Return (Package (0x02) { 0x07, 0x06 })
+```
+
+to
+
+```asl
+Return (Package (0x02) { 0x00, 0x01 })
+```
+
+with the comment above it rewritten from "the pair's meaning is not established"
+to the reading measured above.
+
+### The ladder
+
+- `tools/acpi/gauguin.asl` is **4,630 lines**, 257,772 bytes,
+  md5 `63f034f177d915d0fcfa163ed5742340` (from 4,446 lines and 247,241 bytes at
+  `488d9d9bdf5b99cfe55f88a4071dc7f7` — +184 lines, +10,531 bytes), matching
+  `uefi/Silicium-ACPI/Platforms/Xiaomi/gauguin/gauguin.asl` and
+  `work/uefi/Mu-Silicium/…/gauguin.asl` — the full three-stage chain run, all
+  three copies the same.
+- `iasl -p /tmp/chk489b -tc gauguin.asl`: AML **6,587 bytes, 267 opcodes, 416
+  named objects**, checksum `0xa4`, length `0x19bb`, byte sum `0x00`,
+  sha256 `9619a83b20baf8c7047be66f9ae10e38ff2cbd9b561eb94527e446ab9243f042`.
+  `iasl` reports **0 errors, 24 warnings, 59 remarks and 129 optimizations**
+  against 4.88's 24 warnings and 55 remarks — the warning count is the invariant
+  it has been since 4.82 and the four new remarks are the two `_CRS` and two
+  `_DSD` remarks a new node with both earns.
+- The **+237 bytes are two changes with opposite signs**, and the AML says so
+  rather than the source: `PM01._DSM`'s pair went from `0x07, 0x06` to
+  `0x00, 0x01`, and in AML `7` and `6` are each a one-byte constant opcode plus
+  an operand byte while `0` and `1` are `ZeroOp` and `OneOp`, one byte each — so
+  that edit **removes 2 bytes**, and the appended node adds 239. Measured: the
+  first byte of the AML that differs from 4.88's after the length field is at
+  offset **763**, where `5b 82 4e 09` (`Device` `PM01`, package length `0x094e`)
+  becomes `5b 82 4c 09` (`0x094c`); every id at or after `PRTC` shifts back two
+  bytes (`ACPI000E` 1069 → 1067, `QCOM0A16` 1695 → 1693, the three `QCOM0A10`
+  1455/1575/1815 → 1453/1573/1813, `QCOM0A8B` 5391 → 5389, `QCOM0AA4` 6223 →
+  6221); and every id before it is unmoved (`QCOM24A5` at 93, `QCOM0427` at
+  336). `ACPI0011` sits at 6362, which is past the old file's entire 6,350 bytes:
+  the node is appended, and the last eight bytes of the AML are now the last
+  `_DSD` entry, `01 0a 02 01 0a 0c 0a ea`.
+- Build: `PROGRESS - Success` followed by the known benign `ValueError: DTB image
+  must not be empty.` from Mu-Silicium's own `.img`, unchanged from 4.88 and for
+  the same reason (its config is v2, which cannot express a DTB region).
+- `--dump-fvmain`: **7,360,512 bytes (`0x705000`)**,
+  sha256 `86d2ffc57380e9feead3ae478811fb2dfbc85cc65d6219372c96b48591b53cca`,
+  byte-identical to `Build/…/FV/FVMAIN.Fv`. `EFI_FV_TAKEN_SIZE = 0x7040d8`, up
+  `0xf0` from 4.88's `0x703fe8` — the DSDT's 237 bytes rounded up to an 8-byte
+  boundary — and that is why the **volume itself grew a page**, `0x704000` →
+  `0x705000`: 4.88's volume had `0x18` bytes free at its end, so a file that grew
+  by `0xf0` could not stay inside it and GenFv rounded the total up to the next
+  4 KiB. `FVMAIN_COMPACT`'s `EFI_FV_TAKEN_SIZE = 0x10b0a0`, up `0xc0` from
+  `0x10afe0`: the compressed size of a table whose DSDT is 237 bytes larger, and
+  it moves by less than the raw growth because gzip found more to reuse.
+- The ACPI readback: 6 tables, `DSDT` at `0x0054d4c8` — **the same offset for a
+  nineteenth step** — 6,587 bytes with a valid checksum and **byte-identical to
+  the direct compile** (`9619a83b…`), extracted at that offset from the built
+  payload; `SSDT` (61 bytes), `APIC` (724) and `GTDT` (156) valid; `FACP` (276)
+  and `FACS` (64) do not checksum, as expected before `AcpiTableDxe` runs and only
+  those two. `FVMAIN` holds 123 FFS files and `0x703edb` bytes of file headers and
+  data.
+- The three payloads are `aec449a5…015c7b79` (silicon/gzip, 1,144,832 bytes),
+  `48705893…aac7b1a1` (stock/gzip, 1,150,976 bytes) and `52107ae9…96cb0614`
+  (stock/none, 3,248,128 bytes) — **all three matching GenFv's map at 123 offsets
+  and GUIDs, zero mismatches**, and all three passing `check-payload.py` and
+  `abl-boot-check.py`. The two stock images are the same size as 4.88's to the
+  byte and the silicon one is up exactly one `0x800` page, its own page size; all
+  three differ from 4.88 in hash. They are archived in `work/out/p2-4.89`.
+- `work/out/p2-variants` **still holds the 4.74 set** — `90b21643…`, `e693e1a0…`,
+  `26919861…`. **Thirteenth** step running.
+- Device count: 36 top-level `Device (` declarations, **38** in total with
+  `DEV0` inside `UFS0` and `USB0` and `UFN0` inside `URS0` — up one, which is
+  `BTNS`. The census is **52 `_HID`/`_CID` declarations, 38 distinct**, up from
+  51 and 37 by `ACPI0011` at line 4557 and nothing else. `QCOM0A10` is still
+  claimed by `qci2c7280.inf` and carried by `I2C8`, `I2C9` and `IC11`;
+  `QCOM0A16` by `qcuart7280.inf` on `UAR2`. The same two remain unclaimed as
+  every step since 4.70: `QCOM0A8B` (`URS0`) and `QCOM24A5` (`UFS0`) — and
+  `ACPI0011` is the first id in this table that needs no claimant.
+- The device is absent from this host throughout, so nothing here is a hardware
+  reading, and `BTNS` in particular is a node nothing can be tried against until
+  Windows runs on the phone. The payload in `boot` is still the **4.74** set and
+  its panel reading is **still owed** under 先读屏，再刷下一次. Step 4.89 archives
+  its payloads in `work/out/p2-4.89` and does not touch the one on the device.
