@@ -17814,3 +17814,190 @@ here as `Alias (^PSUB, _SUB)` where the corpus spells the full path — the same
   The payload in `boot` is still the **4.74** set and its panel reading is **still owed**
   under 先读屏，再刷下一次. Step 4.92 archives `work/out/p2-4.92` and does not touch the
   one on the device.
+
+## Step 4.93 — the node every withheld dependency waited on, and a count that was wrong in the comment that said so
+
+`PEP0` is written, and `AGR0` with it. It is the largest single node this table has added,
+and it is the one node in the file whose *absence* has been the stated reason for a dozen
+other omissions — the SMMU `_DEP`, the QUP engine `_DEP`s, `UCS0`'s, `URS0`'s, and the
+thermal `_TZD`s. What it is for is the two interfaces Windows' power engine calls: `_DSM`,
+which reports subsystem state, and `THTZ`, which dispatches a thermal trip point to a zone.
+
+### What it is, and what is copied
+
+- `_HID` is `QCOM0A17` and `_CID` is `PNP0D80`. The family byte does the work the header
+  above asks for: `0A` is gauguin's, and the two `QCOM0A17` tables in the corpus — lisa's
+  and a52sxq's — are the two tables of family `0A`. `PNP0D80` is Microsoft's id for a
+  system power management controller and is carried by fourteen of the twenty; the six that
+  carry no `_CID` are the older families.
+- `_DEP` is `\_SB.IPCC`, which eleven of the twenty name, three name `\_SB.PMIC` and six
+  omit entirely. `IPCC` is the node this table already has and the one whose own `_DEP`
+  names `PEP0` as the far end of its mailbox, so the reference resolves in both directions
+  within one table — the shape every corpus table uses.
+- `_SUB` is a `Method` branching on `\_SB.PSUB`, which is what eighteen of the twenty do.
+  The branch is written on `"MTP07225"`, this board's own SKU, because that string occurs
+  exactly once in the corpus and the once is this file's own `PSUB`. This answers the
+  concern `IPCC`'s comment recorded: lisa's `IDP07280`/`CRD07280` pair has no branch to
+  take here, which was a defect in the method and not in this table.
+- `_DSM` is lisa's, verbatim, and the UUID is not a choice: `8d5ca34c-ae83-4a2a-9dd1-a74ffead548b`
+  is a raw GUID at offset **1,707,616** of `qcpep7280.sys`. Its six subsystem selectors
+  read `\_SB.<six>._STA`, and this board has none of those six devices — the two DSPs, the
+  sensor island, the modem and the two secure processors are firmware and not ACPI nodes —
+  so all six are declared `External` inside the `DefinitionBlock` and every read is behind
+  `CondRefOf`. That is the corpus's own shape: lisa's disassembly reads
+  `Return (\_SB.SCSS._STA)` and annotates it "External reference". Each of the six answers
+  `Zero` here.
+- `_CRS` is eleven GSIs and the set is a function of the `_HID`'s family byte rather than of
+  the SoC — every `QCOM0A17` writes these eleven in this order, `QCOM0819` writes nine,
+  `QCOM0C17` ten of a different set, and the four `QCOM1A17` tables disagree among
+  themselves. But the first four are derived from this board and not copied: the vendor
+  tree's `qcom,pdc-ranges` maps PDC pins `0..0x5D` onto GIC SPIs `0x1E0..0x23D`, so pins
+  `0x1A`, `0x1B`, `0x1C` and `0x1D` arrive as INTIDs `0x21A`–`0x21D`, and those four pins
+  are exactly the `uplow`/`critical` lines of this board's two
+  `thermal-sensor@c263000`/`@c265000` blocks. The other seven have no counterpart anywhere
+  in the vendor tree and are recorded as the family's.
+- `INTR`'s shared-memory pair is `0x80900000` with a length of `0x00200000`, and the board
+  says so twice over: the vendor tree reserves exactly that address for two megabytes as a
+  no-map region and the `smem` node consumes it. The same three tables that move that pair
+  also move the `0x0C300000`/`0x0400` pair together with it, against `0x1000` elsewhere —
+  and this board's AOSS QMP node is `power-management@c300000` with a length of `0x1000`,
+  so the majority value is also the board's.
+- `PPPP` is forty-six rails and every one is a regulator node in this board's own tree:
+  twenty-one under the pm6350, twelve under the pm6150l, seven under the pm8008 and the six
+  DV triplets. There is no `CXO_BUFFERS` and no `BUCK_BOOST`, because this board's tree
+  declares neither. The order is the corpus's; all forty-six names are in `qcpep7280.sys`'s
+  own vocabulary, which is the check that says the strings are the driver's.
+
+### THTZ, and the one place this node does not copy
+
+The corpus's `THTZ` methods are written from the platform's thermal *inventory* rather than
+from the zone bodies next to them — lisa's dispatches thirty-two keys and writes `TPSV` into
+`TZ13`, a zone that declares no member at all. Copying a key set would mean writing members
+into zones by number and hoping they match. So the key set here is the thirteen zones this
+table actually declares, and the per-zone selector sets come from the declarations directly:
+selector 0 for `TPSV`/`_PSV`, 1 for `TCRT`/`_CRT`, 2 for `TTSP`/`_TSP`, 3 for `TTC1`/`_TC1`,
+4 for `TTC2`/`_TC2`, with `0xFFFF` for anything unhandled at either level. That reading of
+the selectors is taken from lisa's `TZ31`, the one zone in the corpus declaring all five.
+
+Each key block carries its own temporary for the selector copy, because the name is scoped
+to the method and not to the block. This is where the step's one real error was: the first
+version emitted `Name (_T_1, …)` inside each of thirteen peer blocks of one method, which
+iasl rejected twelve times —
+
+```
+Error 6074 - Name already exists in scope (\_SB.PEP0.THTZ._T_1)
+```
+
+— and the fix is the compiler's own numbering. lisa's compiled `THTZ` carries thirty-three
+of them, `_T_0` for the zone copy and `_T_1` through `_T_W` for its thirty-two keys, so the
+blocks here take `_T_1` through `_T_D` in the same pattern. It is also the ceiling on this
+shape of method: a key set larger than thirty-six blocks has no `_T_` digit left to name.
+The compiled table carries seventeen `Name (_T_` in total — one zone copy, thirteen keys,
+and the three inside `_DSM`.
+
+### What PEP0 unblocked, and what it did not
+
+- `ABD` gains `Name (_DEP, Package (One) { \_SB.PEP0 })` as its first member (line 398),
+  which is what makes `PEP0`'s own `\_SB.ABD.ROP1` field reachable: the two refer each
+  other through the same I2C channel at address 1.
+- `UCS0` gains the same one-entry `_DEP` between `_HID` and `_CRS` (line 6096), the line its
+  comment had reserved for eighteen steps.
+- `URS0` gains `Package (0x02) { \_SB.PEP0, \_SB.UCS0 }` (line 5469), which is lisa's shape:
+  its `URS0` depends on both.
+- Twelve of the thirteen thermal zones gain
+  `Method (_DEP, 0, NotSerialized) { Return (Package (0x01) { PEP0 }) }`. `TZ13` is left out
+  because its corpus form needs `\_SB.BCL1`, which this table has not got.
+- `_TZD` is written on the three `_UID One` pairs (`TZ1` 4653, `TZ3` 4700, `TZ5` 4747),
+  which is where the corpus puts it.
+
+Not unblocked, and deferred deliberately:
+
+- **The SMMUs, and the deferral found a wrong number.** The comment on `MMU0`/`MMU1` said
+  "the `_DEP` is `{PEP0}` in all 40 nodes, PEP0 is absent". PEP0 is absent no longer, and
+  the count was never right. Re-counted over the twenty tables that carry both SMMUs:
+  `MMU1` writes `{PEP0}` in **20 of 20**, `MMU0` writes `{PEP0}` in **11** and `{MMU1}` in
+  **9**. So 31 of the 40 name `PEP0` and 9 name the peer SMMU. That entry is now held back
+  by a split in the family rather than by a missing node, which is a different question and
+  belongs to the step that answers it.
+- **The engines.** 34 UART-shaped nodes write `{PEP0}` in 31 and `{MMU0, PEP0}` in 3, and
+  the settled part is settled (`UAR8` 4 of 4, `UARD` 13 of 13, both `{PEP0}` alone) — but
+  the IC nodes are not (`I2C8` 4 `{PEP0}` against 1 `{PEP0, QGP1}`), the SPI nodes are not
+  (`SPI5` 2 `{PEP0, QGP1, MMU0}` against 1 `{PEP0, QGP0, MMU0}`), and the two nodes the
+  family writes as second entries are themselves split (`MMU0` 11/9, `SCM0` 11 `{PEP0}`
+  against 10 carrying none). Those four counts are the next step's work, and it is the
+  reason this step is PEP0 and not PEP0's dependents.
+- **Nothing to write** for `BAM1` (none in 21 of 21), `IPCC` (none in 12 of 12), `QGP0`
+  (none in 19 of 19) and `AGR0` (none in 20 of 20) — the corpus genuinely offers no
+  dependency on any of them, so their comments were already telling the truth.
+
+`AGR0` itself is `ACPI000C`, the standard id for a platform power-management aggregation
+device, with `_STA` returning `0x0F`, which is what all twenty corpus tables carry. It is
+placed after `UCS0` and before `BTNS`, which is where lisa puts it. `NPUR` on `PEP0` writes
+the second `_PUR` entry and notifies `AGR0`, which is the forward reference the comment
+describes — the corpus's shape, not a concession.
+
+### The ladder
+
+- `tools/acpi/gauguin.asl` is **6,499 lines**, 337,179 bytes, md5
+  `88e98a14764ec2ac0a81bab98c26e756`. All three copies are the same file:
+  `tools/acpi/`, `uefi/Silicium-ACPI/Platforms/Xiaomi/gauguin/` and
+  `work/uefi/Mu-Silicium/Silicium-ACPI/Platforms/Xiaomi/gauguin/`. Against HEAD the diff is
+  **+1,770 / −194**.
+- The compiled table is **12,257 bytes**, length `0x2fe1`, checksum `0xab`, sha256
+  `7f171e705ba611c4da8fb541157a92a00d8597b36a3eb8f6d8fbf8ff79fe0ed7`, with **742 opcodes and
+  508 named objects** and 0 errors, **26 warnings**, **93 remarks** and **376
+  optimizations**.
+- The two new warnings are `3115 Not all control paths return a value (\_SB.PEP0._SUB)` and
+  `3107 Reserved method must return a value (String required for _SUB)`. They are not a
+  defect: the corpus's own `PEP0._SUB` is an `If`/`ElseIf` with no fall-through in both
+  lisa (`IDP07280`/`CRD07280`) and a52sxq (`IDP07280`/`QRD07280`).
+- The previous table was re-derived rather than remembered: `git show
+  HEAD:tools/acpi/gauguin.asl` is 4,923 lines / 276,056 bytes / `acb008dc3385bcc28ddabaa0478e43ed`
+  and compiles to 6,891 bytes / `0x1aeb` / `0x92` / `8d0a821f…` with 273 opcodes, 435 named
+  objects, 24 warnings, 64 remarks and 132 optimizations — **exactly the identity the 4.92
+  entry states**, which is what makes the delta above a measurement rather than a
+  subtraction. Comparing the two AMLs, the first differing byte is at `0x4`, the length
+  field.
+- `FVMAIN.Fv` is **7,364,608 bytes (`0x706000`)**, sha256
+  `c8d6a400d189ca3ce6d35b9ba0f007aa03d651bc7dc252e1db9239d228aafb0d`, with
+  `EFI_FV_TAKEN_SIZE = 0x705700` (from `0x704208`) and `FVMAIN_COMPACT`'s taken size
+  `0x10b650` (from `0x10b178`).
+- Read back out of the built payload: six tables, `SSDT` (61) at `0x0054d484`, `DSDT`
+  **12,257 bytes at `0x0054d4c8`** — **the same offset for a twenty-third step** — checksum
+  valid and sha256 equal to the direct compile's, `APIC` (724) at `0x005504b0` and `GTDT`
+  (156) at `0x005508e4` valid, `FACP` (276) at `0x00550788` and `FACS` (64) at `0x005508a0`
+  not, as expected before `AcpiTableDxe` runs and only those two.
+- The three payloads are `3275a907af434cff178287b95f5ab8bb543177237e07815f55c777dd457aad5d`
+  (silicon/gzip, 1,144,832 bytes), `df3d59c9f67b21e86b78a0b1a7d9d769648d7998cc62299cfe46bced49c2c65b`
+  (stock/gzip, 1,155,072 bytes) and
+  `8f3ac2bdbcf7520c7dee2a7a4a23c7d762f4eeccd26206114b0ebfeb90477da8`
+  (stock/none, 3,248,128 bytes), all three matching GenFv's map at **123 offsets and GUIDs
+  with zero mismatches** and passing the checks ABL makes before it hands control over.
+  Archived in `work/out/p2-4.93`.
+- **Five comments were corrected after the build, and nothing moved.** The landing falsified
+  its own file: the two SMMU paragraphs and the QUP/UART paragraph said PEP0 was absent and
+  the entries therefore un-writable, and `UCS0`'s paragraph reserved the very `_DEP` line
+  this step wrote. All five now record what happened instead, the SMMU count is corrected
+  from "all 40" to 31 `{PEP0}` against 9 `{MMU1}`, and the engine `_DEP`s are named as the
+  next step's work rather than as blocked. The corrections are comments only: recompiling
+  gave the same `7f171e70…`, rebuilding gave the same `c8d6a400…` FVMAIN, and re-deriving
+  the payloads gave the same three hashes, **byte for byte**. The step's artifacts are
+  therefore the ones listed above rather than a second set.
+- The order vote is **12,312 votes, 12,240 of a 12,240 ceiling, over 700 pairs and 640
+  relations, 0 broken** (from 10,964 of 10,964 over 627 pairs and 567 relations), with the
+  same **72 unavoidable dissent votes in 60 pairs** carried by the same four boards — and
+  **none of the 60 dissent pairs names `PEP0`, `AGR0` or a thermal zone**, which is what a
+  step that adds a node the corpus orders identically on every side should leave behind.
+- The census is **56 `_HID`/`_CID` declarations, 42 distinct** (from 53 and 39), over
+  **112 `.inf` files and 158 distinct ACPI hardware ids**. `QCOM0A17 1x claimed by
+  qcpep.wd7280.inf` at `PEP0 (line 1225)`; `ACPI000C 1x standard id` at `AGR0 (line 6156)`;
+  and the unclaimed pair is unchanged at `QCOM0A8B` (`URS0`) and `QCOM24A5` (`UFS0`).
+- Devices **44 → 46** and methods **103 → 132** in the compiled table, with the thirteen
+  thermal zones unchanged and `_DEP` now appearing 25 times — 13 as a `Name` and 12 as a
+  `Method` — and `_TZD` exactly 3 times.
+- `work/out/p2-variants` **still holds the 4.74 set** — `90b21643…`, `e693e1a0…`,
+  `26919861…`. **Seventeenth** step running.
+- The device is absent from this host throughout, so nothing here is a hardware reading.
+  The payload in `boot` is still the **4.74** set and its panel reading is **still owed**
+  under 先读屏，再刷下一次. Step 4.93 archives `work/out/p2-4.93` and does not touch the one
+  on the device.

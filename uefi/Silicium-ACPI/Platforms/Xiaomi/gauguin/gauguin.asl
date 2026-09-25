@@ -139,6 +139,19 @@
  */
 DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
 {
+    External (\_SB.ADSP, DeviceObj)
+    External (\_SB.ADSP._STA, MethodObj)
+    External (\_SB.SCSS, DeviceObj)
+    External (\_SB.SCSS._STA, MethodObj)
+    External (\_SB.NSP0, DeviceObj)
+    External (\_SB.NSP0._STA, MethodObj)
+    External (\_SB.AMSS, DeviceObj)
+    External (\_SB.AMSS._STA, MethodObj)
+    External (\_SB.SPSS, DeviceObj)
+    External (\_SB.SPSS._STA, MethodObj)
+    External (\_SB.WPSS, DeviceObj)
+    External (\_SB.WPSS._STA, MethodObj)
+
     Scope (_SB)
     {
         Name (PSUB, "MTP07225")
@@ -382,6 +395,10 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
         // Device".
         Device (ABD)
         {
+            Name (_DEP, Package (One)  // _DEP: Dependencies
+            {
+                \_SB.PEP0
+            })
             Method (_STA, 0, NotSerialized)  // _STA: Status
             {
                 Return (0x0F)
@@ -1036,6 +1053,1383 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
                 }
 
                 Return (Zero)
+            }
+        }
+
+        // PEP0 - the power engine. It is the node every withheld `_DEP` in this
+        // file has been waiting on, and the one that carries both of the
+        // interfaces the Windows power driver uses: the `_DSM` it calls to ask
+        // about subsystem state and the thermal-zone dispatcher it polls. It is
+        // written here, after PRTC and before the TLMM block, because every node
+        // it depends on already exists above it.
+        //
+        // Placement is measured, not chosen. The corpus's adjacency is
+        // `<PMGK|PTCC|BCL1> PEP0 <BAM1|WLDS>`: sixteen of the twenty tables that
+        // carry PEP0 put BAM1 immediately after it, four put WLDS, and none puts
+        // anything else. This file has none of the three predecessors - no PMGK,
+        // no PTCC and no BCL1 - so PEP0 opens the block group that BAM1 and the
+        // TLMM comment below continue.
+        //
+        // The ids. `_HID` is "QCOM0A17": the middle byte moves with the
+        // generator family, 0A is gauguin's, and both of family 0A's tables,
+        // lisa's and a52sxq's, read that string on a node otherwise identical to
+        // this one. `_CID` is "PNP0D80", Microsoft's id for a system power
+        // management controller - carried by fourteen of the twenty, among them
+        // both of the tables at this `_HID`; the other six carry no `_CID`.
+        //
+        // `_DEP` is `\_SB.IPCC`. Eleven of the twenty name it, three name
+        // \_SB.PMIC, and six carry none. IPCC is the node this table already has
+        // and the one whose own `_DEP` names PEP0 as the far end of its mailbox.
+        // Both are forward and backward references within one table, which is
+        // the shape every corpus table uses and which iasl resolves, unlike the
+        // `Field`-on-`OperationRegion` order that is load-bearing.
+        //
+        // `_SUB` is a Method here, as in eighteen of the twenty; vili is the one
+        // table that aliases \_SB.PSUB instead and caymanslm the one that
+        // carries none. Every table that branches does so on \_SB.PSUB and
+        // returns the string it matched, over that platform's own SKU set -
+        // lisa's IDP07280 and CRD07280, Kailua's five, lemonade's seven. The
+        // string "MTP07225" occurs once in the corpus, and that once is this
+        // file's own \_SB.PSUB, so the branch here is written on our own SKU
+        // rather than on a set invented to fill it out: gauguin is an MTP board
+        // and the id `_SUB` returns should be the one the board sets. The absent
+        // fall-through is the corpus's own shape - no table returns anything
+        // when no branch matches.
+        //
+        // `_DSM` is written, and it is the member whose shape needed a decision.
+        // The UUID is not in doubt: 8d5ca34c-ae83-4a2a-9dd1-a74ffead548b is
+        // carried as a raw GUID at offset 1707616 of qcpep7280.sys, and the same
+        // string is in every corpus table that has a PEP0 `_DSM`. What the
+        // method does is report subsystem state: one selector returns the
+        // subsystem list, and six selectors each ask `\_SB.ADSP._STA` and five
+        // siblings for theirs. This table has none of those six devices - the two
+        // DSPs, the sensor island, the modem and the two secure processors are
+        // firmware on this board and not ACPI nodes - so the six are declared
+        // `External` above and every read is behind `CondRefOf`, which is what
+        // the corpus's own tables do: lisa's disassembly reads
+        // `Return (\_SB.SCSS._STA)` and annotates it "External reference". Each
+        // of the six selectors therefore answers Zero here, and the list below is
+        // the family's.
+        //
+        // That list is six entries - adsp, slpi, cdsp, modem, spss, wpss - copied
+        // from lisa verbatim, because lisa and a52sxq are the only two tables
+        // that carry it and both are family 0A. It is not a claim about this
+        // board, and the difference is worth being explicit about: the vendor
+        // tree declares three remoteprocs - adsp at 0x03000000, modem's mpss at
+        // 0x04080000, cdsp at 0x08300000 - and no slpi, spss or wpss node at
+        // all. The list says which subsystems the driver should ask about; the
+        // six selectors are what answer, and they answer Zero for the ones this
+        // board has not got. The modem is the case that matters: mpss exists in
+        // firmware and is declared in the tree, and it still cannot be driven
+        // from Windows, which is why the table has no AMSS node to answer for it.
+        //
+        // `_CRS` is eleven GSIs, and the set is a function of the `_HID` family
+        // byte rather than of the SoC: every QCOM0A17 table writes these eleven
+        // in this order, QCOM0819 writes nine, QCOM0C17 ten of a different set,
+        // and QCOM1A17 four tables that disagree among themselves. The first
+        // four are derived from this board rather than copied. The vendor tree's
+        // `qcom,pdc-ranges` maps PDC pins 0..0x5D onto GIC SPIs 0x1E0..0x23D,
+        // and pins 0x1A, 0x1B, 0x1C and 0x1D therefore arrive as INTIDs 0x21A,
+        // 0x21B, 0x21C and 0x21D - the four `ExclusiveAndWake` lines here - and
+        // those four pins are exactly the ones this board wires up: the two
+        // tsens blocks take 0x1A/0x1C and 0x1B/0x1D as their uplow and critical
+        // interrupts. The remaining seven have no counterpart anywhere in the
+        // vendor tree and are recorded as the family's.
+        //
+        // The field on `\_SB.ABD.ROP1` is how the PEP reaches the PMIC bus: one
+        // I2C channel at address 1, raw bytes of 0x15, a 168-bit field, verbatim
+        // from lisa. Our ABD declares the same GenericSerialBus region for it and
+        // gains its own `_DEP` on this node in this same step, which is what
+        // makes the region reachable in the first place.
+        //
+        // `GEPT` answers One here and 0x02 on PMAP above. That is not a
+        // discrepancy: both follow lisa, whose PEP0 reads One and whose PMAP
+        // reads 0x02, and the value is what the two drivers expect to read back
+        // rather than anything this board measured.
+        //
+        // `ROST` and `NPUR` are the pairing AGR0 completes. NPUR is how the
+        // platform tells the aggregation device what the power resource usage is:
+        // it writes the second `_PUR` entry and notifies AGR0, which is declared
+        // near the end of this file exactly as lisa's is declared after its PEP0.
+        // The forward reference is the corpus's shape, not a concession.
+        //
+        // `INTR` is twenty-four entries, and all but two pairs of them are the
+        // same in every table. The preamble - 0x02, One, 0x03, One, 0x06 and the
+        // MMIO base 0x17911008 - is twenty of twenty. Then come four (address,
+        // length) pairs. The first is the shared-memory window: lisa writes
+        // 0x86000000 with 0x00200000, and three tables - a52q's, miatoll's and
+        // surya's - write 0x80900000 with the same length. This board's is
+        // 0x80900000 and the board says so twice over: the vendor tree reserves
+        // exactly that address for two megabytes as a no-map region and the
+        // `smem` node consumes it. The same three tables also move the third pair
+        // together with it, writing 0x0C300000 with 0x0400 where the others write
+        // 0x1000; this board's AOSS QMP node is `power-management@c300000` with a
+        // length of 0x1000, so the pair here is the majority value and the
+        // board's. The fourth is 0x01FD4000 with a length of 8 in twenty of
+        // twenty, and the fifth 0x17C0000C in seventeen - neither has a node in
+        // the vendor tree, and the second sits in the 0x17C00000 page this
+        // board's own interrupt controller reaches at 0x17C000F0.
+        //
+        // `STND` returns `STNX`, the eleven D-state names, and that exact set is
+        // carried by exactly two tables, lisa and a52sxq - again the two at this
+        // `_HID`. Every other table's set is a different length or a different
+        // list, so the warrant here is the family's and not a majority's.
+        //
+        // `PPPP` is forty-six rails, and every one of them is a regulator node
+        // in this board's own tree rather than a copy: twenty-one under the
+        // pm6350 (SMPS1_A, SMPS2_A and nineteen LDOs), twelve under the pm6150l
+        // (SMPS8_E, which is `vreg_bob`, and eleven LDOs), seven under the
+        // pm8008, and the six DV triplets. The order is the corpus's - the SMPS
+        // of every bucket first, then the LDO of every bucket, then the DV
+        // triplet - and all forty-six names are in qcpep7280.sys's own
+        // vocabulary, which is the check that says the strings are the driver's
+        // and not ours. There is no CXO_BUFFERS or BUCK_BOOST entry, because
+        // this board's tree declares neither.
+        //
+        // `THTZ` is the zone dispatcher, four arguments: the zone, a value, a
+        // write flag and a selector. It is written over the thirteen zones this
+        // table declares and over no others, and each zone's selectors are the
+        // ones its own declarations carry - selector 0 for TPSV and `_PSV`, 1
+        // for TCRT and `_CRT`, 2 for TTSP and `_TSP`, 3 for TTC1 and `_TC1`, 4
+        // for TTC2 and `_TC2`, with 0xFFFF for anything unhandled at either
+        // level. That reading of the selectors is taken from lisa's TZ31, the
+        // one zone in the corpus that declares all five.
+        //
+        // The key set is where this node does not copy. The corpus's THTZ
+        // methods are written from the platform's own thermal inventory rather
+        // than from the zone bodies next to them - lisa's dispatches thirty-two
+        // keys and writes TPSV into TZ13, a zone that declares no member at all
+        // - so copying a key set would mean writing members into zones by number
+        // and hoping they match. This table's inventory is the thirteen zones it
+        // has, so the thirteen are the keys, and the per-zone selector sets come
+        // from the declarations directly. Each key block carries its own
+        // temporary for the selector copy - `_T_1` for the first key up to
+        // `_T_D` for the thirteenth - because the name is scoped to the method
+        // and not to the block, and lisa's compiled THTZ shows exactly that:
+        // thirty-three of them, `_T_0` for the zone copy and `_T_1` through
+        // `_T_W` for its thirty-two keys. It is the compiler's own numbering and
+        // it is also the ceiling on this shape of method: a key set larger than
+        // thirty-six blocks has no `_T_` digit left to name.
+        //
+        // The four groups this table does not
+        // have - the PMIC group, the ADC group, TZ99 and the nine 04C0-04C8 the
+        // modem's own driver binds - stay out of it, as they stay out of the
+        // thermal block above.
+        //
+        // No `_STA`. Nineteen of the twenty corpus tables declare none on PEP0 -
+        // vili is the one that does, and it puts it last, after MMRF - so this
+        // node is present whenever the table is, which is what the power engine
+        // needs.
+        Device (PEP0)
+        {
+            Name (_HID, "QCOM0A17")  // _HID: Hardware ID
+            Name (_CID, "PNP0D80")  // _CID: Compatible ID
+            Method (THTZ, 4, NotSerialized)
+            {
+                While (One)
+                {
+                    Name (_T_0, 0x00)
+                    _T_0 = ToInteger (Arg0)
+                    If((_T_0 == Zero))
+                    {
+                        While (One)
+                        {
+                            Name (_T_1, 0x00)
+                            _T_1 = ToInteger (Arg3)
+                            If((_T_1 == 0x02))
+                            {
+                                If (Arg2)
+                                {
+                                    \_SB.TZ0.TTSP = Arg1
+                                    Notify (\_SB.TZ0, 0x81) // Thermal Trip Point Change
+                                }
+
+                                Return (\_SB.TZ0._TSP ())
+                            }
+                            Else
+                            {
+                                Return (0xFFFF)
+                            }
+
+                            Break
+                        }
+                    }
+                    ElseIf((_T_0 == One))
+                    {
+                        While (One)
+                        {
+                            Name (_T_2, 0x00)
+                            _T_2 = ToInteger (Arg3)
+                            If((_T_2 == Zero))
+                            {
+                                If (Arg2)
+                                {
+                                    \_SB.TZ1.TPSV = Arg1
+                                    Notify (\_SB.TZ1, 0x81) // Thermal Trip Point Change
+                                }
+
+                                Return (\_SB.TZ1._PSV ())
+                            }
+                            ElseIf((_T_2 == One))
+                            {
+                                If (Arg2)
+                                {
+                                    \_SB.TZ1.TCRT = Arg1
+                                    Notify (\_SB.TZ1, 0x81) // Thermal Trip Point Change
+                                }
+
+                                Return (\_SB.TZ1._CRT ())
+                            }
+                            ElseIf((_T_2 == 0x02))
+                            {
+                                If (Arg2)
+                                {
+                                    \_SB.TZ1.TTSP = Arg1
+                                    Notify (\_SB.TZ1, 0x81) // Thermal Trip Point Change
+                                }
+
+                                Return (\_SB.TZ1._TSP ())
+                            }
+                            ElseIf((_T_2 == 0x03))
+                            {
+                                If (Arg2)
+                                {
+                                    \_SB.TZ1.TTC1 = Arg1
+                                    Notify (\_SB.TZ1, 0x81) // Thermal Trip Point Change
+                                }
+
+                                Return (\_SB.TZ1._TC1 ())
+                            }
+                            ElseIf((_T_2 == 0x04))
+                            {
+                                If (Arg2)
+                                {
+                                    \_SB.TZ1.TTC2 = Arg1
+                                    Notify (\_SB.TZ1, 0x81) // Thermal Trip Point Change
+                                }
+
+                                Return (\_SB.TZ1._TC2 ())
+                            }
+                            Else
+                            {
+                                Return (0xFFFF)
+                            }
+
+                            Break
+                        }
+                    }
+                    ElseIf((_T_0 == 0x02))
+                    {
+                        While (One)
+                        {
+                            Name (_T_3, 0x00)
+                            _T_3 = ToInteger (Arg3)
+                            If((_T_3 == 0x02))
+                            {
+                                If (Arg2)
+                                {
+                                    \_SB.TZ2.TTSP = Arg1
+                                    Notify (\_SB.TZ2, 0x81) // Thermal Trip Point Change
+                                }
+
+                                Return (\_SB.TZ2._TSP ())
+                            }
+                            Else
+                            {
+                                Return (0xFFFF)
+                            }
+
+                            Break
+                        }
+                    }
+                    ElseIf((_T_0 == 0x03))
+                    {
+                        While (One)
+                        {
+                            Name (_T_4, 0x00)
+                            _T_4 = ToInteger (Arg3)
+                            If((_T_4 == Zero))
+                            {
+                                If (Arg2)
+                                {
+                                    \_SB.TZ3.TPSV = Arg1
+                                    Notify (\_SB.TZ3, 0x81) // Thermal Trip Point Change
+                                }
+
+                                Return (\_SB.TZ3._PSV ())
+                            }
+                            ElseIf((_T_4 == One))
+                            {
+                                If (Arg2)
+                                {
+                                    \_SB.TZ3.TCRT = Arg1
+                                    Notify (\_SB.TZ3, 0x81) // Thermal Trip Point Change
+                                }
+
+                                Return (\_SB.TZ3._CRT ())
+                            }
+                            ElseIf((_T_4 == 0x02))
+                            {
+                                If (Arg2)
+                                {
+                                    \_SB.TZ3.TTSP = Arg1
+                                    Notify (\_SB.TZ3, 0x81) // Thermal Trip Point Change
+                                }
+
+                                Return (\_SB.TZ3._TSP ())
+                            }
+                            ElseIf((_T_4 == 0x03))
+                            {
+                                If (Arg2)
+                                {
+                                    \_SB.TZ3.TTC1 = Arg1
+                                    Notify (\_SB.TZ3, 0x81) // Thermal Trip Point Change
+                                }
+
+                                Return (\_SB.TZ3._TC1 ())
+                            }
+                            ElseIf((_T_4 == 0x04))
+                            {
+                                If (Arg2)
+                                {
+                                    \_SB.TZ3.TTC2 = Arg1
+                                    Notify (\_SB.TZ3, 0x81) // Thermal Trip Point Change
+                                }
+
+                                Return (\_SB.TZ3._TC2 ())
+                            }
+                            Else
+                            {
+                                Return (0xFFFF)
+                            }
+
+                            Break
+                        }
+                    }
+                    ElseIf((_T_0 == 0x04))
+                    {
+                        While (One)
+                        {
+                            Name (_T_5, 0x00)
+                            _T_5 = ToInteger (Arg3)
+                            If((_T_5 == 0x02))
+                            {
+                                If (Arg2)
+                                {
+                                    \_SB.TZ4.TTSP = Arg1
+                                    Notify (\_SB.TZ4, 0x81) // Thermal Trip Point Change
+                                }
+
+                                Return (\_SB.TZ4._TSP ())
+                            }
+                            Else
+                            {
+                                Return (0xFFFF)
+                            }
+
+                            Break
+                        }
+                    }
+                    ElseIf((_T_0 == 0x05))
+                    {
+                        While (One)
+                        {
+                            Name (_T_6, 0x00)
+                            _T_6 = ToInteger (Arg3)
+                            If((_T_6 == Zero))
+                            {
+                                If (Arg2)
+                                {
+                                    \_SB.TZ5.TPSV = Arg1
+                                    Notify (\_SB.TZ5, 0x81) // Thermal Trip Point Change
+                                }
+
+                                Return (\_SB.TZ5._PSV ())
+                            }
+                            ElseIf((_T_6 == One))
+                            {
+                                If (Arg2)
+                                {
+                                    \_SB.TZ5.TCRT = Arg1
+                                    Notify (\_SB.TZ5, 0x81) // Thermal Trip Point Change
+                                }
+
+                                Return (\_SB.TZ5._CRT ())
+                            }
+                            ElseIf((_T_6 == 0x02))
+                            {
+                                If (Arg2)
+                                {
+                                    \_SB.TZ5.TTSP = Arg1
+                                    Notify (\_SB.TZ5, 0x81) // Thermal Trip Point Change
+                                }
+
+                                Return (\_SB.TZ5._TSP ())
+                            }
+                            ElseIf((_T_6 == 0x03))
+                            {
+                                If (Arg2)
+                                {
+                                    \_SB.TZ5.TTC1 = Arg1
+                                    Notify (\_SB.TZ5, 0x81) // Thermal Trip Point Change
+                                }
+
+                                Return (\_SB.TZ5._TC1 ())
+                            }
+                            ElseIf((_T_6 == 0x04))
+                            {
+                                If (Arg2)
+                                {
+                                    \_SB.TZ5.TTC2 = Arg1
+                                    Notify (\_SB.TZ5, 0x81) // Thermal Trip Point Change
+                                }
+
+                                Return (\_SB.TZ5._TC2 ())
+                            }
+                            Else
+                            {
+                                Return (0xFFFF)
+                            }
+
+                            Break
+                        }
+                    }
+                    ElseIf((_T_0 == 0x06))
+                    {
+                        While (One)
+                        {
+                            Name (_T_7, 0x00)
+                            _T_7 = ToInteger (Arg3)
+                            If((_T_7 == Zero))
+                            {
+                                If (Arg2)
+                                {
+                                    \_SB.TZ6.TPSV = Arg1
+                                    Notify (\_SB.TZ6, 0x81) // Thermal Trip Point Change
+                                }
+
+                                Return (\_SB.TZ6._PSV ())
+                            }
+                            ElseIf((_T_7 == One))
+                            {
+                                If (Arg2)
+                                {
+                                    \_SB.TZ6.TCRT = Arg1
+                                    Notify (\_SB.TZ6, 0x81) // Thermal Trip Point Change
+                                }
+
+                                Return (\_SB.TZ6._CRT ())
+                            }
+                            ElseIf((_T_7 == 0x02))
+                            {
+                                If (Arg2)
+                                {
+                                    \_SB.TZ6.TTSP = Arg1
+                                    Notify (\_SB.TZ6, 0x81) // Thermal Trip Point Change
+                                }
+
+                                Return (\_SB.TZ6._TSP ())
+                            }
+                            ElseIf((_T_7 == 0x03))
+                            {
+                                If (Arg2)
+                                {
+                                    \_SB.TZ6.TTC1 = Arg1
+                                    Notify (\_SB.TZ6, 0x81) // Thermal Trip Point Change
+                                }
+
+                                Return (\_SB.TZ6._TC1 ())
+                            }
+                            ElseIf((_T_7 == 0x04))
+                            {
+                                If (Arg2)
+                                {
+                                    \_SB.TZ6.TTC2 = Arg1
+                                    Notify (\_SB.TZ6, 0x81) // Thermal Trip Point Change
+                                }
+
+                                Return (\_SB.TZ6._TC2 ())
+                            }
+                            Else
+                            {
+                                Return (0xFFFF)
+                            }
+
+                            Break
+                        }
+                    }
+                    ElseIf((_T_0 == 0x07))
+                    {
+                        While (One)
+                        {
+                            Name (_T_8, 0x00)
+                            _T_8 = ToInteger (Arg3)
+                            If((_T_8 == One))
+                            {
+                                If (Arg2)
+                                {
+                                    \_SB.TZ7.TCRT = Arg1
+                                    Notify (\_SB.TZ7, 0x81) // Thermal Trip Point Change
+                                }
+
+                                Return (\_SB.TZ7._CRT ())
+                            }
+                            ElseIf((_T_8 == 0x02))
+                            {
+                                If (Arg2)
+                                {
+                                    \_SB.TZ7.TTSP = Arg1
+                                    Notify (\_SB.TZ7, 0x81) // Thermal Trip Point Change
+                                }
+
+                                Return (\_SB.TZ7._TSP ())
+                            }
+                            Else
+                            {
+                                Return (0xFFFF)
+                            }
+
+                            Break
+                        }
+                    }
+                    ElseIf((_T_0 == 0x09))
+                    {
+                        While (One)
+                        {
+                            Name (_T_9, 0x00)
+                            _T_9 = ToInteger (Arg3)
+                            If((_T_9 == One))
+                            {
+                                If (Arg2)
+                                {
+                                    \_SB.TZ9.TCRT = Arg1
+                                    Notify (\_SB.TZ9, 0x81) // Thermal Trip Point Change
+                                }
+
+                                Return (\_SB.TZ9._CRT ())
+                            }
+                            ElseIf((_T_9 == 0x02))
+                            {
+                                If (Arg2)
+                                {
+                                    \_SB.TZ9.TTSP = Arg1
+                                    Notify (\_SB.TZ9, 0x81) // Thermal Trip Point Change
+                                }
+
+                                Return (\_SB.TZ9._TSP ())
+                            }
+                            Else
+                            {
+                                Return (0xFFFF)
+                            }
+
+                            Break
+                        }
+                    }
+                    ElseIf((_T_0 == 0x0A))
+                    {
+                        While (One)
+                        {
+                            Name (_T_A, 0x00)
+                            _T_A = ToInteger (Arg3)
+                            If((_T_A == Zero))
+                            {
+                                If (Arg2)
+                                {
+                                    \_SB.TZ10.TPSV = Arg1
+                                    Notify (\_SB.TZ10, 0x81) // Thermal Trip Point Change
+                                }
+
+                                Return (\_SB.TZ10._PSV ())
+                            }
+                            ElseIf((_T_A == One))
+                            {
+                                If (Arg2)
+                                {
+                                    \_SB.TZ10.TCRT = Arg1
+                                    Notify (\_SB.TZ10, 0x81) // Thermal Trip Point Change
+                                }
+
+                                Return (\_SB.TZ10._CRT ())
+                            }
+                            ElseIf((_T_A == 0x02))
+                            {
+                                If (Arg2)
+                                {
+                                    \_SB.TZ10.TTSP = Arg1
+                                    Notify (\_SB.TZ10, 0x81) // Thermal Trip Point Change
+                                }
+
+                                Return (\_SB.TZ10._TSP ())
+                            }
+                            ElseIf((_T_A == 0x03))
+                            {
+                                If (Arg2)
+                                {
+                                    \_SB.TZ10.TTC1 = Arg1
+                                    Notify (\_SB.TZ10, 0x81) // Thermal Trip Point Change
+                                }
+
+                                Return (\_SB.TZ10._TC1 ())
+                            }
+                            ElseIf((_T_A == 0x04))
+                            {
+                                If (Arg2)
+                                {
+                                    \_SB.TZ10.TTC2 = Arg1
+                                    Notify (\_SB.TZ10, 0x81) // Thermal Trip Point Change
+                                }
+
+                                Return (\_SB.TZ10._TC2 ())
+                            }
+                            Else
+                            {
+                                Return (0xFFFF)
+                            }
+
+                            Break
+                        }
+                    }
+                    ElseIf((_T_0 == 0x0B))
+                    {
+                        While (One)
+                        {
+                            Name (_T_B, 0x00)
+                            _T_B = ToInteger (Arg3)
+                            If((_T_B == One))
+                            {
+                                If (Arg2)
+                                {
+                                    \_SB.TZ11.TCRT = Arg1
+                                    Notify (\_SB.TZ11, 0x81) // Thermal Trip Point Change
+                                }
+
+                                Return (\_SB.TZ11._CRT ())
+                            }
+                            ElseIf((_T_B == 0x02))
+                            {
+                                If (Arg2)
+                                {
+                                    \_SB.TZ11.TTSP = Arg1
+                                    Notify (\_SB.TZ11, 0x81) // Thermal Trip Point Change
+                                }
+
+                                Return (\_SB.TZ11._TSP ())
+                            }
+                            ElseIf((_T_B == 0x03))
+                            {
+                                If (Arg2)
+                                {
+                                    \_SB.TZ11.TTC1 = Arg1
+                                    Notify (\_SB.TZ11, 0x81) // Thermal Trip Point Change
+                                }
+
+                                Return (\_SB.TZ11._TC1 ())
+                            }
+                            ElseIf((_T_B == 0x04))
+                            {
+                                If (Arg2)
+                                {
+                                    \_SB.TZ11.TTC2 = Arg1
+                                    Notify (\_SB.TZ11, 0x81) // Thermal Trip Point Change
+                                }
+
+                                Return (\_SB.TZ11._TC2 ())
+                            }
+                            Else
+                            {
+                                Return (0xFFFF)
+                            }
+
+                            Break
+                        }
+                    }
+                    ElseIf((_T_0 == 0x0C))
+                    {
+                        While (One)
+                        {
+                            Name (_T_C, 0x00)
+                            _T_C = ToInteger (Arg3)
+                            If((_T_C == One))
+                            {
+                                If (Arg2)
+                                {
+                                    \_SB.TZ12.TCRT = Arg1
+                                    Notify (\_SB.TZ12, 0x81) // Thermal Trip Point Change
+                                }
+
+                                Return (\_SB.TZ12._CRT ())
+                            }
+                            ElseIf((_T_C == 0x02))
+                            {
+                                If (Arg2)
+                                {
+                                    \_SB.TZ12.TTSP = Arg1
+                                    Notify (\_SB.TZ12, 0x81) // Thermal Trip Point Change
+                                }
+
+                                Return (\_SB.TZ12._TSP ())
+                            }
+                            Else
+                            {
+                                Return (0xFFFF)
+                            }
+
+                            Break
+                        }
+                    }
+                    ElseIf((_T_0 == 0x0D))
+                    {
+                        While (One)
+                        {
+                            Name (_T_D, 0x00)
+                            _T_D = ToInteger (Arg3)
+                            If((_T_D == One))
+                            {
+                                If (Arg2)
+                                {
+                                    \_SB.TZ13.TCRT = Arg1
+                                    Notify (\_SB.TZ13, 0x81) // Thermal Trip Point Change
+                                }
+
+                                Return (\_SB.TZ13._CRT ())
+                            }
+                            Else
+                            {
+                                Return (0xFFFF)
+                            }
+
+                            Break
+                        }
+                    }
+                    Else
+                    {
+                        Return (0xFFFF)
+                    }
+
+                    Break
+                }
+            }
+            Name (_DEP, Package (One)  // _DEP: Dependencies
+            {
+                \_SB.IPCC
+            })
+            Method (_SUB, 0, NotSerialized)  // _SUB: Subsystem ID
+            {
+                If ((\_SB.PSUB == "MTP07225"))
+                {
+                    Return ("MTP07225")
+                }
+            }
+
+            Method (_DSM, 4, NotSerialized)  // _DSM: Device-Specific Method
+            {
+                While (One)
+                {
+                    Name (_T_0, Buffer (0x01)
+                    {
+                         0x00
+                    })
+                    CopyObject (ToBuffer (Arg0), _T_0)
+                    If ((_T_0 == ToUUID ("8d5ca34c-ae83-4a2a-9dd1-a74ffead548b")))
+                    {
+                        While (One)
+                        {
+                            Name (_T_1, 0x00)
+                            _T_1 = ToInteger (Arg2)
+                            If ((_T_1 == Zero))
+                            {
+                                While (One)
+                                {
+                                    Name (_T_2, 0x00)
+                                    _T_2 = ToInteger (Arg1)
+                                    If ((_T_2 == Zero))
+                                    {
+                                        Return (0x7E)
+                                    }
+
+                                    Break
+                                }
+
+                                Return (Zero)
+                            }
+                            ElseIf ((_T_1 == One))
+                            {
+                                Name (SUBI, Package (0x06)
+                                {
+                                    Package (0x03)
+                                    {
+                                        "adsp",
+                                        One,
+                                        0x02
+                                    },
+
+                                    Package (0x03)
+                                    {
+                                        "slpi",
+                                        Zero,
+                                        0x03
+                                    },
+
+                                    Package (0x03)
+                                    {
+                                        "cdsp",
+                                        One,
+                                        0x04
+                                    },
+
+                                    Package (0x03)
+                                    {
+                                        "modem",
+                                        One,
+                                        0x05
+                                    },
+
+                                    Package (0x03)
+                                    {
+                                        "spss",
+                                        Zero,
+                                        0x06
+                                    },
+
+                                    Package (0x03)
+                                    {
+                                        "wpss",
+                                        One,
+                                        0x07
+                                    }
+                                })
+                                Return (SUBI)
+                            }
+                            ElseIf ((_T_1 == 0x02))
+                            {
+                                If (CondRefOf (\_SB.ADSP))
+                                {
+                                    If (CondRefOf (\_SB.ADSP._STA))
+                                    {
+                                        Return (\_SB.ADSP._STA ())
+                                    }
+                                    Else
+                                    {
+                                        Return (0x0F)
+                                    }
+                                }
+                                Else
+                                {
+                                    Return (Zero)
+                                }
+                            }
+                            ElseIf ((_T_1 == 0x03))
+                            {
+                                If (CondRefOf (\_SB.SCSS))
+                                {
+                                    If (CondRefOf (\_SB.SCSS._STA))
+                                    {
+                                        Return (\_SB.SCSS._STA ())
+                                    }
+                                    Else
+                                    {
+                                        Return (0x0F)
+                                    }
+                                }
+                                Else
+                                {
+                                    Return (Zero)
+                                }
+                            }
+                            ElseIf ((_T_1 == 0x04))
+                            {
+                                If (CondRefOf (\_SB.NSP0))
+                                {
+                                    If (CondRefOf (\_SB.NSP0._STA))
+                                    {
+                                        Return (\_SB.NSP0._STA ())
+                                    }
+                                    Else
+                                    {
+                                        Return (0x0F)
+                                    }
+                                }
+                                Else
+                                {
+                                    Return (Zero)
+                                }
+                            }
+                            ElseIf ((_T_1 == 0x05))
+                            {
+                                If (CondRefOf (\_SB.AMSS))
+                                {
+                                    If (CondRefOf (\_SB.AMSS._STA))
+                                    {
+                                        Return (\_SB.AMSS._STA ())
+                                    }
+                                    Else
+                                    {
+                                        Return (0x0F)
+                                    }
+                                }
+                                Else
+                                {
+                                    Return (Zero)
+                                }
+                            }
+                            ElseIf ((_T_1 == 0x06))
+                            {
+                                If (CondRefOf (\_SB.SPSS))
+                                {
+                                    If (CondRefOf (\_SB.SPSS._STA))
+                                    {
+                                        Return (\_SB.SPSS._STA ())
+                                    }
+                                    Else
+                                    {
+                                        Return (0x0F)
+                                    }
+                                }
+                                Else
+                                {
+                                    Return (Zero)
+                                }
+                            }
+                            ElseIf ((_T_1 == 0x07))
+                            {
+                                If (CondRefOf (\_SB.WPSS))
+                                {
+                                    If (CondRefOf (\_SB.WPSS._STA))
+                                    {
+                                        Return (\_SB.WPSS._STA ())
+                                    }
+                                    Else
+                                    {
+                                        Return (0x0F)
+                                    }
+                                }
+                                Else
+                                {
+                                    Return (Zero)
+                                }
+                            }
+                            Else
+                            {
+                                Return (Zero)
+                            }
+
+                            Break
+                        }
+                    }
+                    Else
+                    {
+                        Return (Zero)
+                    }
+
+                    Break
+                }
+            }
+
+            Method (_CRS, 0, NotSerialized)  // _CRS: Current Resource Settings
+            {
+                Name (RBUF, ResourceTemplate ()
+                {
+                    Interrupt (ResourceConsumer, Level, ActiveHigh, ExclusiveAndWake, ,, )
+                    {
+                        0x0000021A,
+                    }
+                    Interrupt (ResourceConsumer, Level, ActiveHigh, ExclusiveAndWake, ,, )
+                    {
+                        0x0000021C,
+                    }
+                    Interrupt (ResourceConsumer, Level, ActiveHigh, ExclusiveAndWake, ,, )
+                    {
+                        0x0000021B,
+                    }
+                    Interrupt (ResourceConsumer, Level, ActiveHigh, ExclusiveAndWake, ,, )
+                    {
+                        0x0000021D,
+                    }
+                    Interrupt (ResourceConsumer, Level, ActiveHigh, Exclusive, ,, )
+                    {
+                        0x00000025,
+                    }
+                    Interrupt (ResourceConsumer, Level, ActiveHigh, Exclusive, ,, )
+                    {
+                        0x0000003E,
+                    }
+                    Interrupt (ResourceConsumer, Level, ActiveHigh, Exclusive, ,, )
+                    {
+                        0x0000003F,
+                    }
+                    Interrupt (ResourceConsumer, Level, ActiveHigh, Exclusive, ,, )
+                    {
+                        0x00000033,
+                    }
+                    Interrupt (ResourceConsumer, Edge, ActiveHigh, Exclusive, ,, )
+                    {
+                        0x00000265,
+                    }
+                    Interrupt (ResourceConsumer, Edge, ActiveHigh, Exclusive, ,, )
+                    {
+                        0x0000010D,
+                    }
+                    Interrupt (ResourceConsumer, Edge, ActiveHigh, Exclusive, ,, )
+                    {
+                        0x00000113,
+                    }
+                })
+                Return (RBUF) /* \_SB_.PEP0._CRS.RBUF */
+            }
+
+            Field (\_SB.ABD.ROP1, BufferAcc, NoLock, Preserve)
+            {
+                Connection (
+                    I2cSerialBusV2 (0x0001, ControllerInitiated, 0x00000000,
+                        AddressingMode7Bit, "\\_SB.ABD",
+                        0x00, ResourceConsumer, , Exclusive,
+                        )
+                ),
+                AccessAs (BufferAcc, AttribRawBytes (0x15)),
+                FLD0,   168
+            }
+
+            Method (GEPT, 0, NotSerialized)
+            {
+                Name (BUFF, Buffer (0x04){})
+                CreateByteField (BUFF, Zero, STAT)
+                CreateWordField (BUFF, 0x02, DATA)
+                DATA = One
+                Return (DATA) /* \_SB_.PEP0.GEPT.DATA */
+            }
+
+            Name (ROST, Zero)
+            Method (NPUR, 1, NotSerialized)
+            {
+                \_SB.AGR0._PUR [One] = Arg0
+                Notify (\_SB.AGR0, 0x80)
+            }
+
+            Method (INTR, 0, NotSerialized)
+            {
+                Name (RBUF, Package (0x18)
+                {
+                    0x02,
+                    One,
+                    0x03,
+                    One,
+                    0x06,
+                    0x17911008,
+                    One,
+                    Zero,
+                    0x80900000,
+                    0x00200000,
+                    Zero,
+                    Zero,
+                    0x0C300000,
+                    0x1000,
+                    Zero,
+                    Zero,
+                    0x01FD4000,
+                    0x08,
+                    Zero,
+                    Zero,
+                    0x17C0000C,
+                    Zero,
+                    Zero,
+                    Zero
+                })
+                Return (RBUF)
+            }
+
+            Method (STND, 0, NotSerialized)
+            {
+                Return (STNX)
+            }
+
+            Name (STNX, Package (0x0B)
+            {
+                "DMPO",
+                "MMVD",
+                "DMSB",
+                "DMPA",
+                "DMPB",
+                "DMDS",
+                "DMPL",
+                "DMWE",
+                "XMPL",
+                "XMPT",
+                "DMEP"
+            })
+            Name (DCVS, Zero)
+            Method (PGDS, 0, NotSerialized)
+            {
+                Return (DCVS)
+            }
+
+            Name (PPPP, Package (0x2E)
+            {
+                Package (0x01)
+                {
+                    "PPP_RESOURCE_ID_SMPS1_A"
+                },
+
+                Package (0x01)
+                {
+                    "PPP_RESOURCE_ID_SMPS2_A"
+                },
+
+                Package (0x01)
+                {
+                    "PPP_RESOURCE_ID_SMPS8_E"
+                },
+
+                Package (0x01)
+                {
+                    "PPP_RESOURCE_ID_LDO2_A"
+                },
+
+                Package (0x01)
+                {
+                    "PPP_RESOURCE_ID_LDO3_A"
+                },
+
+                Package (0x01)
+                {
+                    "PPP_RESOURCE_ID_LDO4_A"
+                },
+
+                Package (0x01)
+                {
+                    "PPP_RESOURCE_ID_LDO5_A"
+                },
+
+                Package (0x01)
+                {
+                    "PPP_RESOURCE_ID_LDO6_A"
+                },
+
+                Package (0x01)
+                {
+                    "PPP_RESOURCE_ID_LDO7_A"
+                },
+
+                Package (0x01)
+                {
+                    "PPP_RESOURCE_ID_LDO8_A"
+                },
+
+                Package (0x01)
+                {
+                    "PPP_RESOURCE_ID_LDO9_A"
+                },
+
+                Package (0x01)
+                {
+                    "PPP_RESOURCE_ID_LDO11_A"
+                },
+
+                Package (0x01)
+                {
+                    "PPP_RESOURCE_ID_LDO12_A"
+                },
+
+                Package (0x01)
+                {
+                    "PPP_RESOURCE_ID_LDO13_A"
+                },
+
+                Package (0x01)
+                {
+                    "PPP_RESOURCE_ID_LDO14_A"
+                },
+
+                Package (0x01)
+                {
+                    "PPP_RESOURCE_ID_LDO15_A"
+                },
+
+                Package (0x01)
+                {
+                    "PPP_RESOURCE_ID_LDO16_A"
+                },
+
+                Package (0x01)
+                {
+                    "PPP_RESOURCE_ID_LDO18_A"
+                },
+
+                Package (0x01)
+                {
+                    "PPP_RESOURCE_ID_LDO19_A"
+                },
+
+                Package (0x01)
+                {
+                    "PPP_RESOURCE_ID_LDO20_A"
+                },
+
+                Package (0x01)
+                {
+                    "PPP_RESOURCE_ID_LDO21_A"
+                },
+
+                Package (0x01)
+                {
+                    "PPP_RESOURCE_ID_LDO22_A"
+                },
+
+                Package (0x01)
+                {
+                    "PPP_RESOURCE_ID_LDO1_E"
+                },
+
+                Package (0x01)
+                {
+                    "PPP_RESOURCE_ID_LDO2_E"
+                },
+
+                Package (0x01)
+                {
+                    "PPP_RESOURCE_ID_LDO3_E"
+                },
+
+                Package (0x01)
+                {
+                    "PPP_RESOURCE_ID_LDO4_E"
+                },
+
+                Package (0x01)
+                {
+                    "PPP_RESOURCE_ID_LDO5_E"
+                },
+
+                Package (0x01)
+                {
+                    "PPP_RESOURCE_ID_LDO6_E"
+                },
+
+                Package (0x01)
+                {
+                    "PPP_RESOURCE_ID_LDO7_E"
+                },
+
+                Package (0x01)
+                {
+                    "PPP_RESOURCE_ID_LDO8_E"
+                },
+
+                Package (0x01)
+                {
+                    "PPP_RESOURCE_ID_LDO9_E"
+                },
+
+                Package (0x01)
+                {
+                    "PPP_RESOURCE_ID_LDO10_E"
+                },
+
+                Package (0x01)
+                {
+                    "PPP_RESOURCE_ID_LDO11_E"
+                },
+
+                Package (0x01)
+                {
+                    "PPP_RESOURCE_ID_LDO1_P"
+                },
+
+                Package (0x01)
+                {
+                    "PPP_RESOURCE_ID_LDO2_P"
+                },
+
+                Package (0x01)
+                {
+                    "PPP_RESOURCE_ID_LDO3_P"
+                },
+
+                Package (0x01)
+                {
+                    "PPP_RESOURCE_ID_LDO4_P"
+                },
+
+                Package (0x01)
+                {
+                    "PPP_RESOURCE_ID_LDO5_P"
+                },
+
+                Package (0x01)
+                {
+                    "PPP_RESOURCE_ID_LDO6_P"
+                },
+
+                Package (0x01)
+                {
+                    "PPP_RESOURCE_ID_LDO7_P"
+                },
+
+                Package (0x01)
+                {
+                    "PPP_RESOURCE_ID_PMIC_GPIO_DV1"
+                },
+
+                Package (0x01)
+                {
+                    "PPP_RESOURCE_ID_PMIC_GPIO_DV2"
+                },
+
+                Package (0x01)
+                {
+                    "PPP_RESOURCE_ID_PMIC_GPIO_DV3"
+                },
+
+                Package (0x01)
+                {
+                    "PPP_RESOURCE_ID_TLMM_GPIO_DV1"
+                },
+
+                Package (0x01)
+                {
+                    "PPP_RESOURCE_ID_TLMM_GPIO_DV2"
+                },
+
+                Package (0x01)
+                {
+                    "PPP_RESOURCE_ID_TLMM_GPIO_DV3"
+                }
+            })
+            Method (PPPM, 0, NotSerialized)
+            {
+                Return (PPPP)
+            }
+
+            Name (PRRP, Package (0x00){})
+            Method (PPRR, 0, NotSerialized)
+            {
+                Return (PRRP)
+            }
+
+            Name (FPDP, Zero)
+            Method (FPMD, 0, NotSerialized)
+            {
+                Return (FPDP)
+            }
+
+            Method (DPRF, 0, NotSerialized)
+            {
+                Return (\_SB.DPP0)
+            }
+
+            Method (DMRF, 0, NotSerialized)
+            {
+                Return (\_SB.DPP1)
+            }
+
+            Method (MPRF, 0, NotSerialized)
+            {
+                Return (\_SB.MPP0)
+            }
+
+            Method (MMRF, 0, NotSerialized)
+            {
+                Return (\_SB.MPP1)
             }
         }
 
@@ -2260,10 +3654,17 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
         // flip first.
         //
         // Three things every corpus SMMU carries are deliberately not here. The
-        // _DEP is {PEP0} in all 40 nodes, PEP0 is absent, and the entry names a
-        // node this table has not got, so it cannot be written - the rule the
-        // QUP engines and the QGP nodes above already follow, and the one thing
-        // that changes for all of them on the day PEP0 lands. (This used to add
+        // _DEP, and this is the entry Step 4.93 changed the reason for without
+        // changing the decision. PEP0 landed in that step, so the referent every
+        // SMMU _DEP in the corpus names now exists in this table and the entry
+        // is writable for the first time - the rule the QUP engines and the QGP
+        // nodes above already followed is satisfied. What holds it back now is
+        // not a missing node but a split: re-counted in Step 4.93 over the 20
+        // tables that carry both SMMUs, MMU1 writes {PEP0} in all 20 while MMU0
+        // writes {PEP0} in 11 and {MMU1} in 9. This file said "the _DEP is
+        // {PEP0} in all 40 nodes" and that count was wrong - 9 of the 40 name
+        // the peer SMMU instead - so the entry waits on which of the two the
+        // family means, and that is the next step's question. (This used to add
         // "and a one-entry _DEP is a shape no table has", which was true of the
         // tables read when it was written and is false: Step 4.75 measured ABD's
         // _DEP at one entry in 19 of 21 tables and PRTC's at one entry naming
@@ -3197,16 +4598,27 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
         // coefficients and periods with no counterpart on either side of the
         // join, and the driver's thermal engine reads them as policy.
         //
-        // _TZD is not written. lisa's GPU zone lists \_SB.GPU0 and its PMIC
-        // group lists \_SB.PEP0; this table has neither device, and a _TZD
-        // that names a device this table does not have is worse than no _TZD.
-        // _DEP is the one every corpus zone carries and the one every omitted
-        // node here is waiting on: {PEP0} alone on all but the PMIC group, and
-        // the referent is a node this table has not got - the same rule the QUP
-        // engines, the QGP nodes and the two SMMUs already follow, and the same
-        // thing that changes for all of them on the day PEP0 lands. (This used
-        // to read "and a one-entry _DEP is a shape no table has", which Step
-        // 4.75 falsified - see the ABD node above.)
+        // _TZD is written on three zones and withheld from ten, and both halves
+        // are measured at each zone's own (id, _UID) pair. lisa's UID-One zones
+        // - 0A58, 0A59 and 0AD4, which are this table's TZ1, TZ3 and TZ5 - carry
+        // `Name (_TZD, Package (0x01) { \_SB.PEP0 })`, and so do both other
+        // tables that declare that pair, so those three get it. The other ten
+        // either carry no _TZD at all - 0A51, 0A4C, 0A4B and both UID-Zero
+        // halves of the UID-One pairs - or name devices this table has not got:
+        // 0A91 names \_SB.GPU0, 0A92 names \_SB.MJCT, 0ABF names \_SB.CSW0 and
+        // 0A57 names \_SB.WLTM, \_SB.CSW0 and \_SB.GPU0 together. A _TZD that
+        // names a device this table does not have is worse than no _TZD.
+        //
+        // _DEP is written now that its referent exists. Twelve of the thirteen
+        // zones carry `Method (_DEP) { Return (Package (0x01) { \_SB.PEP0 }) }`
+        // - the form and the entry every corpus zone at those (id, _UID) pairs
+        // uses, and the line the QUP engines, the QGP nodes and the two SMMUs
+        // were each waiting on for the same reason. The thirteenth is TZ13,
+        // whose corpus form is `{ \_SB.PEP0, \_SB.BCL1 }`: this table has no
+        // BCL1, and a _DEP that evaluates to AE_NOT_FOUND is worth what no _DEP
+        // is worth while costing more to read, so it is the one zone left
+        // without. (This used to read "a one-entry _DEP is a shape no table
+        // has", which Step 4.75 falsified - see the ABD node above.)
         //
         // Four groups are deliberately not here yet, and each is its own
         // measurement: the PMIC group 0AC8/0AC9/0ACB, which is the only one
@@ -3220,6 +4632,14 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
         {
             Name (_HID, "QCOM0A58")
             Name (_UID, Zero)
+
+            Method (_DEP, 0, NotSerialized)  // _DEP: Dependencies
+            {
+                Return (Package (0x01)
+                {
+                    \_SB.PEP0
+                })
+            }
             Name (TTSP, One)
             Method (_TSP, 0, NotSerialized) { Return (\_SB.TZ0.TTSP) }
             Name (_TZP, Zero)
@@ -3229,6 +4649,18 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
         {
             Name (_HID, "QCOM0A58")
             Name (_UID, One)
+
+            Name (_TZD, Package (0x01)  // _TZD: Thermal Zone Devices
+            {
+                \_SB.PEP0
+            })
+            Method (_DEP, 0, NotSerialized)  // _DEP: Dependencies
+            {
+                Return (Package (0x01)
+                {
+                    \_SB.PEP0
+                })
+            }
             Name (TPSV, 0x0EF6)
             Method (_PSV, 0, NotSerialized) { Return (\_SB.TZ1.TPSV) }
             Name (TCRT, 0x0F28)
@@ -3247,6 +4679,14 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
         {
             Name (_HID, "QCOM0A59")
             Name (_UID, Zero)
+
+            Method (_DEP, 0, NotSerialized)  // _DEP: Dependencies
+            {
+                Return (Package (0x01)
+                {
+                    \_SB.PEP0
+                })
+            }
             Name (TTSP, One)
             Method (_TSP, 0, NotSerialized) { Return (\_SB.TZ2.TTSP) }
             Name (_TZP, Zero)
@@ -3256,6 +4696,18 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
         {
             Name (_HID, "QCOM0A59")
             Name (_UID, One)
+
+            Name (_TZD, Package (0x01)  // _TZD: Thermal Zone Devices
+            {
+                \_SB.PEP0
+            })
+            Method (_DEP, 0, NotSerialized)  // _DEP: Dependencies
+            {
+                Return (Package (0x01)
+                {
+                    \_SB.PEP0
+                })
+            }
             Name (TPSV, 0x0EF6)
             Method (_PSV, 0, NotSerialized) { Return (\_SB.TZ3.TPSV) }
             Name (TCRT, 0x0F28)
@@ -3274,6 +4726,14 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
         {
             Name (_HID, "QCOM0AD4")
             Name (_UID, Zero)
+
+            Method (_DEP, 0, NotSerialized)  // _DEP: Dependencies
+            {
+                Return (Package (0x01)
+                {
+                    \_SB.PEP0
+                })
+            }
             Name (TTSP, One)
             Method (_TSP, 0, NotSerialized) { Return (\_SB.TZ4.TTSP) }
             Name (_TZP, Zero)
@@ -3283,6 +4743,18 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
         {
             Name (_HID, "QCOM0AD4")
             Name (_UID, One)
+
+            Name (_TZD, Package (0x01)  // _TZD: Thermal Zone Devices
+            {
+                \_SB.PEP0
+            })
+            Method (_DEP, 0, NotSerialized)  // _DEP: Dependencies
+            {
+                Return (Package (0x01)
+                {
+                    \_SB.PEP0
+                })
+            }
             Name (TPSV, 0x0EF6)
             Method (_PSV, 0, NotSerialized) { Return (\_SB.TZ5.TPSV) }
             Name (TCRT, 0x0F28)
@@ -3301,6 +4773,14 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
         {
             Name (_HID, "QCOM0A91")
             Name (_UID, Zero)
+
+            Method (_DEP, 0, NotSerialized)  // _DEP: Dependencies
+            {
+                Return (Package (0x01)
+                {
+                    \_SB.PEP0
+                })
+            }
             Name (TPSV, 0x0E60)
             Method (_PSV, 0, NotSerialized) { Return (\_SB.TZ6.TPSV) }
             Name (TCRT, 0x0F28)
@@ -3318,6 +4798,14 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
         {
             Name (_HID, "QCOM0A51")
             Name (_UID, Zero)
+
+            Method (_DEP, 0, NotSerialized)  // _DEP: Dependencies
+            {
+                Return (Package (0x01)
+                {
+                    \_SB.PEP0
+                })
+            }
             Name (TTSP, 0x32)
             Method (_TSP, 0, NotSerialized) { Return (\_SB.TZ7.TTSP) }
             Name (TCRT, 0x0F28)
@@ -3329,6 +4817,14 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
         {
             Name (_HID, "QCOM0A4C")
             Name (_UID, Zero)
+
+            Method (_DEP, 0, NotSerialized)  // _DEP: Dependencies
+            {
+                Return (Package (0x01)
+                {
+                    \_SB.PEP0
+                })
+            }
             Name (TTSP, 0x32)
             Method (_TSP, 0, NotSerialized) { Return (\_SB.TZ9.TTSP) }
             Name (TCRT, 0x0F28)
@@ -3340,6 +4836,14 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
         {
             Name (_HID, "QCOM0A92")
             Name (_UID, Zero)
+
+            Method (_DEP, 0, NotSerialized)  // _DEP: Dependencies
+            {
+                Return (Package (0x01)
+                {
+                    \_SB.PEP0
+                })
+            }
             Name (TPSV, 0x0E60)
             Method (_PSV, 0, NotSerialized) { Return (\_SB.TZ10.TPSV) }
             Name (TCRT, 0x0F28)
@@ -3357,6 +4861,14 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
         {
             Name (_HID, "QCOM0ABF")
             Name (_UID, Zero)
+
+            Method (_DEP, 0, NotSerialized)  // _DEP: Dependencies
+            {
+                Return (Package (0x01)
+                {
+                    \_SB.PEP0
+                })
+            }
             Name (TTC1, Zero)
             Method (_TC1, 0, NotSerialized) { Return (\_SB.TZ11.TTC1) }
             Name (TTC2, One)
@@ -3372,6 +4884,14 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
         {
             Name (_HID, "QCOM0A4B")
             Name (_UID, Zero)
+
+            Method (_DEP, 0, NotSerialized)  // _DEP: Dependencies
+            {
+                Return (Package (0x01)
+                {
+                    \_SB.PEP0
+                })
+            }
             Name (TTSP, 0x32)
             Method (_TSP, 0, NotSerialized) { Return (\_SB.TZ12.TTSP) }
             Name (TCRT, 0x0F28)
@@ -3825,20 +5345,36 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
         // {GIO0, I2C4} in three, {AFT1, GIO0, IC10} in one - so the reference
         // would be writable here, this table having declared GIO0 as its twelfth
         // device. It is not written because every UART shape the family writes
-        // begins with PEP0, which is absent.
+        // begins with PEP0, which was absent when this was written.
         //
         // This table therefore writes no engine _DEP at all, for the same reason
-        // the IC nodes above do not: every family shape here needs PEP0, which
-        // is absent, and the entries the family writes beside it - GIO0's today,
-        // MMU0's since Step 4.72 - are the family's second and third entries
-        // rather than entries of their own. One alone would be a shape no engine
-        // in the corpus writes. That is a preference about the shape and is
-        // recorded as one, not a claim that the entry is un-writable.
+        // the IC nodes above do not: every family shape here needs PEP0, and the
+        // entries the family writes beside it - GIO0's today, MMU0's since Step
+        // 4.72 - are the family's second and third entries rather than entries
+        // of their own. One alone would be a shape no engine in the corpus
+        // writes. That is a preference about the shape and is recorded as one,
+        // not a claim that the entry is un-writable.
+        //
+        // Step 4.93 landed PEP0, so the missing referent is missing no longer
+        // and these entries are writable as they stand. They are held for one
+        // more step anyway, and the reason is the count rather than the shape:
+        // writing them is a per-node decision, because the family's own entries
+        // disagree where this table would have to choose. The UARTs are the
+        // settled part - 31 of the corpus's 34 nodes write {PEP0} alone, UAR8
+        // included at 4 of 4 and UARD at 13 of 13 - but the IC nodes are not
+        // (I2C8 writes {PEP0} in 4 of 5 and {PEP0, QGP1} in the fifth), the SPI
+        // nodes are not (SPI5 writes {PEP0, QGP1, MMU0} twice and {PEP0, QGP0,
+        // MMU0} once), and the two nodes the family writes as the second entry
+        // are themselves split - MMU0 at 11 {PEP0} against 9 {MMU1}, SCM0 at 11
+        // {PEP0} against 10 with none at all. Those four counts are Step 4.94's
+        // question, and they are the reason this step is PEP0 and not PEP0's
+        // dependents.
         // The consequence is worth stating rather than hiding - qci2c7280.inf
         // and qcgpi7280.inf are both in the Windows driver set, so once those
         // two bind, nothing in this table orders the GPI DMA ahead of the
-        // engines that DMA for it. Engine _DEPs wait on PEP0, and when it lands
-        // all four shapes can be written in the family's own form at once.
+        // engines that DMA for it. Engine _DEPs waited on PEP0, and PEP0 landed
+        // in Step 4.93, so what holds them now is the count and not the
+        // referent: the shapes are writable and the next step writes them.
         // Neither QGP node carries _STA either; both nodes in the board's tree
         // are ok and a52sxq's QGP0 and QGP1 are literally byte-identical in the
         // two tables of that family, so there is nothing about this block for a
@@ -3930,6 +5466,11 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
             Alias (PSUB, _SUB)
             Name (_UID, Zero)  // _UID: Unique ID
             Name (_CCA, Zero)  // _CCA: Cache Coherency Attribute
+            Name (_DEP, Package (0x02)  // _DEP: Dependencies
+            {
+                \_SB.PEP0,
+                \_SB.UCS0
+            })
             Name (_CRS, ResourceTemplate ()  // _CRS: Current Resource Settings
             {
                 Memory32Fixed (ReadWrite,
@@ -4470,16 +6011,17 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
          * `HKR,Resources,"BinaryPath",%REG_SZ%, %13%\UCS0.bin` line that
          * hands the driver its own firmware blob.
          *
-         * `_DEP` is deliberately absent, and it is the one place this node
-         * does not copy lisa. lisa's reads `Package (One) { \_SB.PEP0 }`, and
+         * `_DEP` was deliberately absent until Step 4.93 wrote it, and it was
+         * the one place this node did not copy lisa. lisa's reads
+         * `Package (One) { \_SB.PEP0 }`, and
          * PEP0 is the power engine: 2,501 lines and 96,100 bytes in lisa, and
          * the same size in a52sxq's with exactly two lines differing - both in
          * `_SUB`, which returns `"CRD07280"` on lisa and `"QRD07280"` on
          * a52sxq from a branch keyed on `\_SB.PSUB`. That is generator output
          * with a reference-platform string in it and not board data, and it is
          * the sort of thing a port has to notice: this table's own PSUB is
-         * `"MTP07225"`, so lisa's `_SUB` verbatim would fall off the end of
-         * both branches and answer zero. PEP0 is dominated by one method of
+         * `"MTP07225"`, so lisa's `_SUB` verbatim would have fallen off the end
+         * of both branches and answered zero. PEP0 is dominated by one method of
          * its own, and the domination is measurable rather than rhetorical:
          * `THTZ` is a dispatch on (zone, trip point) and is 1,826 of lisa's
          * 2,501 lines, and the node's total is a linear function of the number
@@ -4489,17 +6031,19 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
          * `Return (0xFFFF)`. Nothing in any of the 20 tables that declare
          * `THTZ` calls it, so it is an interface for the OS side and not
          * internal logic. Its `_DEP` names `\_SB.IPCC`, and its skeleton also
-         * reaches `\_SB.ABD.ROP1` and `\_SB.AGR0`; none of the three is in this
-         * table. No part of it is in this table. Naming it anyway would put
-         * a reference into the namespace that cannot resolve, and an `_DEP`
+         * reaches `\_SB.ABD.ROP1` and `\_SB.AGR0`; none of the three was in
+         * this table when this node was written, and all three are now - AGR0
+         * from this step. Naming it before it landed would have put
+         * a reference into the namespace that could not resolve, and an `_DEP`
          * that evaluates to AE_NOT_FOUND is worth exactly what no `_DEP` is
          * worth while costing more to read: a later step would meet it as a
          * dangling name rather than as a node known to be missing. `_DEP` is
-         * advisory start ordering and there is nothing here to order against.
-         * The line to add when PEP0 lands is
-         * `Name (_DEP, Package (One) { \_SB.PEP0 })`, and it belongs
-         * alongside the matching one on URS0 - lisa's URS0 depends on both
-         * PEP0 and UCS0, and this file's URS0 carries no `_DEP` either.
+         * advisory start ordering and there was nothing here to order against.
+         * Step 4.93 landed PEP0 and wrote the line this paragraph used to
+         * reserve - `Name (_DEP, Package (One) { \_SB.PEP0 })` - together with
+         * the matching one on URS0, which now carries
+         * `Package (0x02) { \_SB.PEP0, \_SB.UCS0 }` because lisa's URS0
+         * depends on both and this table's URS0 is the same node.
          *
          * `_CRS` is one `GpioIo` on GIO0 pin 0x23. That makes it the first
          * GpioIo this table has placed on GIO0 - everything on that node so
@@ -4549,6 +6093,10 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
         Device (UCS0)
         {
             Name (_HID, "QCOM0AA4")  // _HID: Hardware ID
+            Name (_DEP, Package (One)  // _DEP: Dependencies
+            {
+                \_SB.PEP0
+            })
             Method (_CRS, 0, NotSerialized)  // _CRS: Current Resource Settings
             {
                 Name (RBUF, ResourceTemplate ()
@@ -4586,6 +6134,34 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
             Method (HPDI, 0, NotSerialized)
             {
                 Return (\_SB.HIRQ)
+            }
+        }
+
+        // AGR0 - the aggregation device, and the other half of the pair PEP0's
+        // NPUR method writes into. Twenty of the sixty-six corpus tables carry
+        // it, every one of them with `_HID` "ACPI000C", `_PUR` a two-entry
+        // package of One and Zero, and `_OST` storing Arg2 into the PEP's own
+        // ROST - the three members are identical in all twenty, and nineteen of
+        // the twenty add nothing else. This node is the only place ROST is read
+        // back from, which is what makes the pair a pair.
+        //
+        // Placement is the corpus's most common one: seven of the twenty put
+        // AGR0 immediately after UCS0, and the devices that follow it in the
+        // corpus instead of UCS0 - MJCT, MBCL, UFN0 - are nodes this table has
+        // not got. It is declared after PEP0 rather than beside it because
+        // lisa's is: PEP0 sits near the head of the file and AGR0 near the end,
+        // and the reference between them is forward, which iasl resolves.
+        Device (AGR0)
+        {
+            Name (_HID, "ACPI000C")  // _HID: Hardware ID
+            Name (_PUR, Package (0x02)  // _PUR: Power Resource Usage
+            {
+                One,
+                Zero
+            })
+            Method (_OST, 3, NotSerialized)  // _OST: Operating Status
+            {
+                \_SB.PEP0.ROST = Arg2
             }
         }
 
