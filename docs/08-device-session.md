@@ -20232,3 +20232,172 @@ Apriori entry could have matched in it.
 - Standing rules unchanged: `userdata`, the partition table and the firmware LUN are untouched; writes go
   to `boot` only; the control image is read before anything is overwritten; and the screen is read before
   the next flash.
+
+## Step 4.103 — the P3 candidate is the record plus three files and no Apriori entry, and two of the three cannot be scheduled at all
+
+### What this step was
+
+A host-only audit of the one artifact this project holds for P3,
+`work/out/usb-host/Mu-gauguin-xhci-host-gzip.img` — 1,169,408 B, `efc8e10d09f0f286…`,
+built with `USE_XHCI_HOST_DRIVER=1` and **never flashed**. Nothing was built, staged,
+flashed or written to any partition. Every number below is read out of that image, out
+of the three staged `.inf`/`.depex` pairs under
+`Binaries/bitra/QcomPkg/Drivers/`, and out of `MdeModulePkg/Core/Dxe/`.
+
+The audit had one intended question — *what does the candidate add?* — and the answer
+turned out to carry a second one, because the three files it adds are three files whose
+own dependency expressions name the protocols the P2 assert is about.
+
+### The candidate is the record plus exactly three files, and minus none
+
+| | record `p2-4.94` | candidate `usb-host` |
+|---|---|---|
+| inner FV `FvLength` | `0x706000` = 7,364,608 | `0x72d000` = 7,524,352 |
+| inner FV sha256 | `7e1d4b8445af4c18…` | `2bb53e6cb0f2f090…` |
+| FFS files | 123 | 126 |
+| DRIVER `0x07` | 80 | 83 |
+| FREEFORM `0x02` | 37 | 37 |
+| APPLICATION `0x09` | 5 | 5 |
+| DXE_CORE `0x05` | 1 | 1 |
+
+The set difference is three additions and **zero removals**: `XhciPciEmulation`
+(`BEB12BEE-F6E1-11E1-9FB8-6C626DE4AEB1`, `BASE_NAME XhciPciEmulation` in
+`XhciPciEmulationDxe.inf`), `XhciDxe` (`B7F50E91-A759-412C-ADE4-DCD03E7F7C28`) and
+`UsbInitDxe` (`0A134F0E-075E-40B3-9C63-3B3906804663`) — the three blobs `build.log`
+records as staged `bitra -> gauguin`. The DRIVER count moves 80 → 83; no third type
+moves at all, so the candidate is not a rearrangement of the record's volume. `UFSDxe`,
+`DiskIoDxe` and `PartitionDxe` are in both builds, so nothing about the "sees the
+internal UFS" half of the P3 gate is changed by this artifact either way.
+
+### The Apriori array is the record's, byte for byte
+
+The array is the FFS file at volume offset `0x78`, `FC510EE7-FFDC-11D4-BD41-0080C73C8881`,
+type `0x02`, size 1148, one `EFI_SECTION_RAW` of 1120 bytes. In both payloads it is
+identical: **70 GUIDs, 1120 bytes, sha256 of the RAW section
+`c25c6d1675307959194ba361e7c1108ac1f620efd3e5af5223235202a43f78a6`**, first
+`D6A2CB7F-6A18-4E2F-B43B-9920A733700A` (DxeCore), last
+`CCCB0C28-4B24-11D5-9A5A-0090273FC14D` (GraphicsConsoleDxe), 70 distinct. `cmp` on the
+two extracted sections returns 0.
+
+That is not an accident of the build script. `uefi/Platforms/Xiaomi/gauguinPkg/Include/APRIORI.inc`
+carries 72 `INF` lines and emits 70 entries, because lines 85-90 are the
+`USE_CUSTOM_DISPLAY_DRIVER` block — `INF DisplayDxe` / `INF DisplayReEnablerDxe` in the
+`== 1` arm, `INF SimpleFbDxe` in the `!else` arm, two lines resolving to one entry. The
+three USB-host `INF` lines that `USE_XHCI_HOST_DRIVER == 1` adds go into **`DXE.inc`**
+(58 drivers in that build), which is the volume's file list and not the promotion list.
+The build's own copy, `work/out/usb-host/APRIORI.xhci-host.inc`, `diff`s against the
+tracked `APRIORI.inc` with rc=0.
+
+So the three new drivers are **not a-priori**, and the promotion loop's inner scan
+(`Dispatcher.c:2103-2124`) can never see them: a driver enters `mScheduledQueue` through
+that loop only by matching an `AprioriFile[Index]`. Everything the panel's `P2 SEQ`,
+`P2 WHY` and `P2 APRI` say is therefore *unaffected* by this candidate — slot by slot,
+including `ap31` Variable and Variable Write, `ap34` Reset, `ap36` Watchdog Timer,
+`ap37` Security, `ap38` Monotonic Counter, `ap39` Real Time Clock, `ap42` Capsule and
+`ap44` Bds. `tools/arch-protocol-census.py` run against the candidate prints the same
+thirteen-row table, with the same `ap`/`pos` pair on every row, as it prints against the
+record. Step 4.12's panel-to-`ap` join transfers to the candidate unchanged; the
+candidate adds no name the join could land on.
+
+### The three files' own dependency expressions, and two of the three cannot run
+
+Each new FFS file carries the depex the build emitted for it, and the emitted sections
+are byte-identical to the staged `.depex` files (234 B and 18 B; `cmp` rc=0). The two
+that have one, decoded:
+
+| file | depex | the pushes |
+|---|---|---|
+| `XhciPciEmulation` | 234 B, 13 `PUSH` + 12 `AND` + `END` | DriverBinding, **Bds**, Cpu, Metronome, **Monotonic Counter**, **Real Time Clock**, **Reset**, Runtime, **Security**, Timer, **Variable Write**, **Variable**, **Watchdog Timer** |
+| `UsbInitDxe` | 18 B, one `PUSH` + `END` | `E722B03F-B250-42CE-8EBD-5BD51812D037` |
+| `XhciDxe` | none | the FFS file's first section is the `PE32+`; there is no `EFI_SECTION_DXE_DEPEX` (`0x13`) section anywhere in its 94,246-byte body |
+
+Eight of `XhciPciEmulation`'s thirteen pushes are protocols **the panel reports as
+absent**: Bds, Monotonic Counter, Real Time Clock, Reset, Security, Variable Write,
+Variable and Watchdog Timer. Only Capsule, of the missing nine, is not in the list. So
+this driver's depex can never evaluate TRUE on the record's driver set, and since it is
+not a-priori it has no other route onto the queue.
+
+`XhciDxe` has no depex at all, and that is worse rather than better. `CoreGetDepexSectionAndPreProccess`
+(`Dispatcher.c:860-905`) sets `Depex = NULL; Dependent = TRUE` when the `DXE_DEPEX` read
+fails with anything but `EFI_PROTOCOL_ERROR`; and for a NULL depex `CoreIsSchedulable`
+(`Dependency.c:214-234`) does not return TRUE — it calls **`CoreAllEfiServicesAvailable ()`**
+and returns FALSE if that errors. `CoreAllEfiServicesAvailable` is the same function
+whose failure is the assert at `DxeMain.c:582`/`:593`. A depex-less driver is therefore
+schedulable only once all thirteen architectural protocols exist, which on this payload
+they do not.
+
+`UsbInitDxe`'s single push is at least satisfiable in principle: the GUID appears nowhere
+in this tree (no `.dec`, `.h`, `.inf`, `.dsc` or `.c` defines it), but it *does* appear in
+the bytes of the volume's own `UsbfnDwc3Dxe` (`F056673C-…`, `ap51`) and `UsbConfigDxe`
+(`0983C7F2-…`, `ap57`), so it is a Qualcomm USB protocol those prebuilt binaries
+reference. Both are in the record's `L` tail, so the push is unmet today for the ordinary
+reason rather than a missing producer.
+
+### What that does to the P3 gate, and what it does not
+
+The gate is "a Windows 11 ARM64 installer boots off a USB stick and sees the internal
+UFS". BDS is what would run the installer, and BDS is reached at `DxeMain.c:606`
+*gBds->Entry (gBds)* — after `CoreAllEfiServicesAvailable ()` at `:582` and its
+`ASSERT_EFI_ERROR` at `:593`. The USB stack is behind the same door by depex. So on this
+platform the P3 work item at `docs/00-plan.md:319`, "Bring up USB host (`UsbBusDxe`) —
+needed to install from a USB stick", is not a driver-addition problem: **the twelve
+storage and USB a-priori entries (`ap24` DiskIoDxe, `ap25` PartitionDxe, `ap28` UFSDxe,
+`ap48` UsbPwrCtrlDxe, `ap51` UsbfnDwc3Dxe, `ap52` UsbBusDxe, `ap53` UsbKbDxe,
+`ap54` UsbMassStorageDxe, `ap55` UsbMsdDxe, `ap56` UsbDeviceDxe, `ap57` UsbConfigDxe) and
+the three files this candidate adds are all gated on the same nine missing architectural
+protocols**, five of whose producers carry `L` in the record's `P2 SEQ`. `build.log`'s own
+warning — the artifact "is not the payload that answers the open P2 question and must not
+take the place of the one in `boot` until that reading has been taken" — is therefore
+stronger than it was written to be: even after that reading, this artifact cannot reach
+the gate it was built for.
+
+### The arithmetic the array read closes, which the candidate does not touch
+
+Applying the same census to the record gives a third door closed on the question of why
+the batch is 46 long. **All 70 Apriori entries name files that are present in the
+volume** — 69 DRIVER files and the `DXE_CORE`, zero absent. `CoreAddToDriverList`
+(`Dispatcher.c:1509-1548`) inserts every file the walk hands it, unconditionally, and
+increments `mP2Discovered`; a complete `EFI_FV_FILETYPE_DRIVER` scan of FVMAIN therefore
+puts 80 entries in `mDiscoveredList`, and the promotion loop matches 69 of the 70 array
+entries. The only entry that cannot match is index 0: it is `gDxeCoreFileName`, and the
+DXE_CORE branch of the walk fills in `gDxeCoreLoadedImage->FilePath` instead of calling
+`CoreAddToDriverList`.
+
+So a complete walk prints `apriori=69/70` and `unhit=1`, and **the observed
+`apriori=46/70` and the predicted `t=0 seen=80` cannot both describe this image.** One is
+the walk's file count and the other is the promotion count, and on this volume the two
+are separated by a fixed, computable gap of 11 (`80 − 69`), not 34 (`80 − 46`). Step
+4.101's `seen=80` was a host prediction and `apriori=46` is an observed numerator, so the
+pair is not a contradiction in the file's readings — it is a contradiction between a
+prediction and a reading, and it is one the next `P2 WALK` line settles in a single
+number: `t=0 seen=80` means the array question is a different question than this file
+thinks it is, and `t=0 seen` at or below 49 means the DRIVER scan stopped, with
+`miss=14 PlatformInfoDxeDriver` the value Step 4.17's decoder band already associates
+with exactly 46 promotions.
+
+### Nothing was built and nothing was flashed
+
+- `docs/08-device-session.md` is the only file this step changes. No `.c`, `.inf`, `.asl`,
+  `APRIORI.inc`, FFS file or payload was written. The build tree was opened read-only, and
+  its `Build/gauguinPkg/DEBUG_CLANGPDB/FV/FVMAIN.Fv` — sha256
+  `7e1d4b8445af4c18c2b29905ef0b528efd7661f9ef815aba11825dca415a9727` — is byte-identical to
+  the record payload's inner volume, which also makes the candidate `.img` the only
+  surviving copy of the volume it was built from.
+- **The device is absent from this host throughout** — `adb devices` is empty, there is no
+  Qualcomm function on the USB bus and no `/dev/ttyUSB*`/`/dev/ttyACM*`. The reading owed on
+  the payload in `boot` (`90B21643…`, rung 7260) under 先读屏，再刷下一次 remains owed, and
+  nothing was flashed.
+- Digests unchanged: record `work/out/p2-4.94/Mu-gauguin-silicon-gzip.img`, 1,144,832 B,
+  `d621f732f4763a303e980c5af04451479c2ace31801e796993a258f226c177a5`; `boot`'s
+  `work/out/p2-variants/Mu-gauguin-silicon-gzip.img`, 1,142,784 B,
+  `90b21643e3450c326fb3d24baf64d58d4692a5d155c36b76d2e020ff04a96b59` — twenty-first step
+  running; candidate 1,169,408 B, `efc8e10d09f0f286011e1aacc638a7edd2ed5fcd86884640b28d14628f58f9f3`,
+  unflashed.
+- Cited, re-read rather than remembered: `Dispatcher.c:860-905`, `:1509-1548`, `:1961-1967`,
+  `:2040-2053`, `:2063-2096`, `:2103-2124`; `Dependency.c:197-234`; `PiFirmwareFile.h:59-71`;
+  `tools/fv-inventory.py`'s `fv_files`/`sections`/`unpack`; `tools/arch-protocol-census.py`;
+  and, in this document, Step 4.17's stop table, Step 4.47's closed short-read fork, and
+  Step 4.101's `P2 WALK` prediction row.
+- Standing rules unchanged: `userdata`, the partition table and the firmware LUN are
+  untouched; writes go to `boot` only; the control image is read before anything is
+  overwritten; and the screen is read before the next flash.
