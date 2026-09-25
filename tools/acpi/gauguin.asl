@@ -879,19 +879,22 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
          * _STA returning 0x0F is this file's convention on every device it
          * defines; the reference tables leave it out and are present by default.
          *
-         * Deliberately not added here, with the reason each time. PMAP exists in
-         * 19 tables and the 7280 set claims QCOM0A2C, but its _DEP is a
-         * three-entry package naming \_SB.PMIC, \_SB.ABD and \_SB.SCM0, and two
-         * of the three were absent from this file, so it would have been a
-         * dangling dependency. Step 4.75 wrote ABD, so one entry is left:
-         * \_SB.SCM0, which is a device *name* and not only an id, and whose id
-         * in the 0A family the corpus does not carry - though qcscm.inf claims
-         * ACPI\QCOM04DD and no other id, so SCM0 is reachable the way ABD was,
-         * by taking the driver's spelling rather than a corpus index. PMBM (QCOM0A2A) and PMGK (QCOM0A8E) are in
-         * the corpus and are NOT claimed by the 7280 set, so adding them would
-         * put two devices in Device Manager that nothing binds. PML0
-         * (QCOM0AD3) is claimed, but it is an I2C-attached PMIC - lisa's _CRS
-         * gives it four I2C addresses on \_SB.I2C2 - and this file has no I2C
+         * Deliberately not added here, with the reason each time. PMAP was the
+         * first entry on this list and is no longer on it: its _DEP is a
+         * three-entry package naming \_SB.PMIC, \_SB.ABD and \_SB.SCM0, two of
+         * which were absent from this file when that was written, so it would
+         * have been a dangling dependency. Steps 4.75 and 4.76 wrote ABD and
+         * SCM0, the last referent arrived, and Step 4.77 wrote the node; its
+         * own comment, below, carries the id and the GEPT that three sibling
+         * nodes share.
+         *
+         *   PMBM and PMGK are in the corpus, and no id of either is claimed by
+         * the 7280 set - eight ids over 17 declarations and five over 11, with
+         * QCOM0A2A and QCOM0A8E the two the lisa/a52sxq pair writes - so
+         * adding them would put two devices in Device Manager that nothing
+         * binds. PML0 (QCOM0AD3, which qcpmic7280.inf does claim) is
+         * reachable, but it is an I2C-attached PMIC - lisa's _CRS gives it
+         * four I2C addresses on \_SB.I2C2 - and this file has no I2C
          * controller and gauguin's pm8008 is at a different address. PEP0
          * (QCOM0A17, qcpep.wd7280.inf) is claimed and is the largest remaining
          * single node in the reference, 2,501 lines in lisa - but only 629 of
@@ -1078,6 +1081,181 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
                          0x00
                     })
                 }
+            }
+        }
+
+        // The PMIC Apps device - the block Windows binds as "Qualcomm(R)
+        // Power Management PMIC Apps Device", binary qcpmicapps7280.sys. It is
+        // the PMIC's peer rather than its child: PMIC above is the SPMI group
+        // this file wrote for the arbiter and its two slaves, and PMAP is the
+        // apps-side subsystem the same silicon reports through, bound by its
+        // own driver and not by the PMIC's.
+        //
+        // Why it is written now. PMIC's comment lists what that node leaves
+        // out, and PMAP was the first entry on that list for one reason only:
+        // its _DEP is a three-entry package naming \_SB.PMIC, \_SB.ABD and
+        // \_SB.SCM0, and two of the three did not exist when the list was
+        // written. Step 4.75 wrote ABD, which left SCM0, and Step 4.76 wrote
+        // that. All three referents are in this table now, so the package can
+        // be written whole - and the corpus writes it whole: all 20 PMAP nodes
+        // carry that identical three-entry package, with no exception
+        // anywhere. That is the opposite of ABD and SCM0, where the _DEP was
+        // withheld for want of a referent; here there is nothing to withhold.
+        // It is this file's first three-entry _DEP - PMIC's and PM01's are
+        // one-entry - and its first naming ABD or SCM0.
+        //
+        // The id. Nine ids across those 20 declarations:
+        //
+        //   QCOM052F  5   mh2, cepheus, nabu, pipa, vayu
+        //   QCOM0C2C  3   Kailua (both), Waipio
+        //   QCOM1A2C  3   lemonade, venus, Lahaina
+        //   QCOM082F  2   a52q, miatoll
+        //   QCOM092C  2   renoir, Cedros
+        //   QCOM0A2C  2   a52sxq, lisa
+        //   QCOM0268  1   caymanslm
+        //   QCOM142F  1   surya
+        //   QCOM252C  1   alioth
+        //
+        // and exactly one of the nine is claimed by the shipped driver set -
+        // QCOM0A2C, by QcPmicApps7280.inf, whose DeviceDesc is the name quoted
+        // at the top of this comment:
+        //
+        //   %DeviceDesc%=PMIC_Inst,ACPI\QCOM0A2C
+        //   %DeviceDesc%=PMIC_Inst,ACPI\VEN_QCOM&DEV_0A2C
+        //
+        // The check this time is stronger than the one Steps 4.75 and 4.76
+        // used: those read the loose inf tree, and this one extracted all 112
+        // .inf files from the 112 .cab files of the 7280 driver set and
+        // grepped each id in all of them. QCOM04DD comes back qcscm.inf and
+        // QCOM0427 qcabd.inf, which re-derives both of those decisions by the
+        // same route, and the other eight PMAP ids come back unclaimed.
+        //
+        // Here, and for the first time, the two witnesses agree. QCOM0A2C is
+        // family 0A, gauguin's own family, and the two tables that write it -
+        // lisa and a52sxq - are the pair every other PMIC-family decision in
+        // this file has been taken from. ABD was decided on the family alone
+        // and SCM0 on the driver's spelling alone, each against the corpus
+        // majority; PMAP is the first node where the claimed id and the family
+        // id are the same id. The a52q table, which has been the
+        // counterexample twice, is one here too: it is SM7225, the same SoC as
+        // gauguin, and it writes QCOM082F, one of the eight ids nothing
+        // claims. Same SoC, wrong family byte, the same finding as on the
+        // thermal zones and on SCM0.
+        //
+        // Where it goes. PMAP immediately follows PM01 in all 20 tables.
+        // Whether any other node's position is invariant in that way has not
+        // been measured; this one was, so this one is taken.
+        //
+        // The shape is uniform. All 20 carry exactly these members, in this
+        // order - _HID, the _SUB alias, _DEP, _STA in the four that have it,
+        // GEPT, _CRS - with one node's worth of variation and it is Waipio's:
+        // it drops _CRS, makes _SUB a method rather than an alias, and keeps
+        // an explicit _STA of 0x0F. No PMAP in the corpus carries a _UID, and
+        // this one needs none: its id is unique here, so there is nothing to
+        // disambiguate.
+        //
+        // GEPT is not PMAP's own. The same method, spelled the same way, is on
+        // two other nodes across the corpus, and the only difference between
+        // the three is the constant returned:
+        //
+        //   PMAP.GEPT   0x02   in 20 declarations, all identical
+        //   PEP0.GEPT   One    in 20 declarations, all identical
+        //   PMGK.GEPT   0x03   in 10 declarations, and an eleventh that is
+        //                      not: Waipio's returns Buffer (0x03)
+        //                      { 0x03, 0x04, 0x06 } through a different body
+        //
+        // so PMAP's and PEP0's are uniform across their whole families and
+        // PMGK's is not, and the table that breaks it is Waipio - the same
+        // table that is the exception on PMAP itself, on ABD, and on SCM0.
+        // PMAP's is the only one of the three this file can write today: PEP0
+        // is the largest node still to come and PMGK is one nothing in the
+        // driver set claims, and both are absent. The other two belong beside
+        // those nodes.
+        //
+        // Nothing calls GEPT. Outside each node's own declaration the name
+        // occurs in no table - the only other lines are the reference comments
+        // iasl writes back on the Return it annotates. So the caller is not
+        // ASL, and whether the driver evaluates it was tested rather than
+        // assumed: the test is the one that established OFNI on GIO0, and it
+        // fails here. qcpmicapps7280.sys has no four-character uppercase run
+        // that can be an ACPI method name. Its runs of that form are RSDS,
+        // PAGE, NULL, INIT, GCTL and DITM - a debug directory signature,
+        // section names, and two that name nothing in any of the 66 tables;
+        // GCTL is in qcgpio.sys as well, which is what a shared compiler
+        // artefact looks like and a method name does not. GEPT occurs once,
+        // inside the eight-byte run AeiBGEPT, which is what a compiler makes
+        // of the adjacent literals "AeiB" and "GEPT"; the same image carries
+        // AeoB, qcgpio.sys carries AeiA and AeoB with OFNI standing alone, and
+        // qcabd.sys carries AeiBSSID - SSID being a name in none of the 66
+        // tables either. The glued form does not name methods, whatever else
+        // it is, so no claim is made from it in either direction. GEPT is here
+        // because all 20 corpus PMAP nodes carry it, identically.
+        //
+        // STAT, inside it, is created and then never written or read: the
+        // method returns the word at offset 2 and byte 0 stays zero. It is a
+        // leftover of the generator's shape and it is carried, because
+        // dropping it would be an AML difference from the reference that buys
+        // nothing.
+        //
+        // _STA returning 0x0F is this file's convention on every device it
+        // defines, and here the corpus agrees by default rather than by vote:
+        // 16 of the 20 leave _STA out entirely, which the specification reads
+        // as present, enabled, shown and working - the same four bits - and a
+        // seventeenth, Waipio, writes 0x0F outright. The three that write
+        // something else write 0x0B, which clears the UI bit and so hides the
+        // device from Device Manager while still starting it, and they are
+        // a52q, miatoll and surya: families 08, 08 and 14, the pre-0A
+        // families, with no 0A table among them. gauguin is 0A. If this device
+        // ever needs hiding, 0x0B is the same-SoC alternative and it is one
+        // byte.
+        //
+        // _CRS carrying no resources, in the reference's own words: a two-byte
+        // buffer holding only the end tag, 0x79 0x00. 18 of the 20 write
+        // exactly that. The nineteenth is caymanslm, whose _CRS is a real
+        // GpioInt on \_SB.PM01 - the PMIC's own GPIO controller, which gauguin
+        // also has - at pin 0x01C0, edge, active-both, pull-up. That pin is
+        // board data and there is no counterpart for it here: gauguin's device
+        // tree gives the SPMI arbiter one interrupt, PDC pin 1 = 0x201, which
+        // PM01's own _CRS already carries, and names no line for the apps
+        // subsystem at all. The empty template is the reference's way of saying
+        // the device has no resources of its own, which is what gauguin's tree
+        // says too.
+        //
+        // _SUB is the corpus's \_SB.PSUB, spelled ^PSUB as everywhere else in
+        // this file. PMAP does not branch on it - only PEP0 does that, and only
+        // for IDP07280 and CRD07280 - so gauguin's "MTP07225" passes through
+        // unread here, as it does on all 20 tables.
+        Device (PMAP)
+        {
+            Name (_HID, "QCOM0A2C")  // _HID: Hardware ID
+            Alias (^PSUB, _SUB)  // _SUB: Subsystem ID
+            Name (_DEP, Package (0x03)  // _DEP: Dependencies
+            {
+                \_SB.PMIC,
+                \_SB.ABD,
+                \_SB.SCM0
+            })
+            Method (_STA, 0, NotSerialized)  // _STA: Status
+            {
+                Return (0x0F)
+            }
+
+            Method (GEPT, 0, NotSerialized)
+            {
+                Name (BUFF, Buffer (0x04){})
+                CreateByteField (BUFF, Zero, STAT)
+                CreateWordField (BUFF, 0x02, DATA)
+                DATA = 0x02
+                Return (DATA) /* \_SB_.PMAP.GEPT.DATA */
+            }
+
+            Method (_CRS, 0, NotSerialized)  // _CRS: Current Resource Settings
+            {
+                Name (RBUF, Buffer (0x02)
+                {
+                     0x79, 0x00                                       // y.
+                })
+                Return (RBUF) /* \_SB_.PMAP._CRS.RBUF */
             }
         }
 
@@ -2392,10 +2570,14 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
         // PRTC is the one that matters most, and it is a device Windows already
         // has a driver for: its _HID is ACPI000E, the standard Time and Alarm
         // Device, and its _GRT and _SRT read and write the real time over
-        // channel 0x0002. None of the three clients is in this table yet -
-        // PRTC's _DEP names PMAP as well as this node, PMGK is QCOM0A8E and no
-        // .inf in this set claims it, and PEP0 is the remaining large node - so
-        // what this step unblocks is the reference and not the client.
+        // channel 0x0002. All 20 corpus PRTCs carry that _HID, and every one of
+        // them carries a one-entry _DEP naming \_SB.PMAP - 19 as the string
+        // "\\_SB.PMAP" and one as the path - so PMAP was PRTC's only
+        // dependency. Step 4.77 wrote PMAP, which makes PRTC's _DEP writable
+        // now, and PRTC the next node of this family rather than a blocked one.
+        // Of the other two clients, PMGK is QCOM0A8E and no .inf in this set
+        // claims it, and PEP0 is the remaining large node - so what this step
+        // unblocked was the reference, and the client is one step nearer.
         //
         // The one table that differs on PEP0's channel is Kailua, which writes
         // AttribRawBytes (0x1A) - 26 bytes - against the same 168-bit field the
@@ -2447,10 +2629,12 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
 
         // SCM0 - the Secure Channel Manager, the firmware-call interface that
         // sits on no bus and has no window, and the node PMAP's _DEP names
-        // beside PMIC and ABD. It is written here rather than with PMAP because
-        // it is the third of PMAP's three dependencies and the last one this
-        // table was missing: PMIC is Step 4.63's, ABD is the node above, and
-        // until this one lands a _DEP for PMAP has an entry it cannot write.
+        // beside PMIC and ABD. It was written here, and a step before PMAP,
+        // because it is the third of PMAP's three dependencies and the last one
+        // this table was missing: PMIC is Step 4.63's, ABD is the node above,
+        // and until this one landed a _DEP for PMAP had an entry it could not
+        // write. PMAP followed in Step 4.77 and sits where the corpus puts it,
+        // immediately after PM01, so the two are not adjacent in this file.
         // It is also wider than PMAP: across the corpus \_SB.SCM0 is named by
         // PMAP in 20 tables, MON0 in 19 and ARPC in 19, plus NSPM twice and
         // VFE0 twice, so this is a hub and not a leaf, and the reason to write

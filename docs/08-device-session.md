@@ -13795,3 +13795,273 @@ which is the same reason there is nothing for a `_CRS` to describe.
 - The device is absent from this host throughout — `adb devices` and `fastboot devices`
   both empty — so nothing here is a hardware reading. The payload in `boot` is still
   the **4.74** set and its panel reading is **still owed** under 先读屏，再刷下一次.
+
+## Step 4.77 — the first `_DEP` written whole, and the first string test that failed
+
+### What this step was
+
+`PMAP` is the PMIC Apps device, and it has been the first entry on every list of
+"measured but not written" since Step 4.73. It was on those lists for one reason and
+it was not the id: its `_DEP` names three nodes, and two of them were absent from this
+table. `PMIC` is Step 4.63's. `ABD` is 4.75's. `SCM0` is 4.76's. With those three
+present the package can be written whole, which is what all 20 corpus tables do, with
+no exception — the opposite of `ABD` and `SCM0`, where the family itself sometimes
+withholds the entry and this table followed.
+
+What it unblocks is `PRTC`, the standard Time and Alarm Device. All 20 corpus `PRTC`s
+carry `ACPI000E` and a one-entry `_DEP` naming `\_SB.PMAP` — 19 of them as the string
+`"\\_SB.PMAP"`, one as the path `\_SB.PMAP` — so from this step on that entry is
+satisfiable rather than blocked, and `PRTC` moves from the blocked list to the work
+list.
+
+`PMAP` is also the third and last of the family's `GEPT` nodes, and that is the part of
+the step that produced a negative result worth keeping.
+
+### Nine ids, one claimed, and the two witnesses agreeing for the first time
+
+Every node since 4.63 has been decided by one of two arguments. Sometimes the corpus
+majority and the `.inf` claim agree and the agreement is noted. Sometimes they diverge
+and the `.inf` decides, because the id belongs to the driver set and not to the
+silicon. `PMAP` is the first node where both arguments are *independently* conclusive
+and land on the same id.
+
+The corpus gives it nine ids across 20 declarations:
+
+| id | tables |
+|---|---|
+| `QCOM052F` | 5 — mh2, cepheus, nabu, pipa, vayu |
+| `QCOM0C2C` | 3 — Kailua ×2, Waipio |
+| `QCOM1A2C` | 3 — lemonade, venus, Lahaina |
+| `QCOM082F` | 2 — a52q, miatoll |
+| `QCOM092C` | 2 — renoir, Cedros |
+| `QCOM0A2C` | 2 — a52sxq, lisa |
+| `QCOM0268` | 1 — caymanslm |
+| `QCOM142F` | 1 — surya |
+| `QCOM252C` | 1 — alioth |
+
+**Exactly one of the nine is claimed**, and it is `QCOM0A2C`, by
+`QcPmicApps7280.inf`. The other eight have no driver in any of the five trees on this
+host, so as on `SCM0` the claim is the only answer available.
+
+The difference from `SCM0` is that the majority argument now agrees instead of
+scattering. `QCOM0A2C` is family **`0A`**, which is gauguin's own family — the byte
+measured in Step 4.63 against the SC7280/Kodiak driver set and corroborated by the two
+corpus tables that carry the family at all, `Xiaomi/lisa` and `Samsung/a52sxq`. Those
+are the same two tables that write `QCOM0A2C` here. So the id that the driver set
+claims is written by the two tables that write family `0A`, and there is no third
+reading of the evidence to reconcile: the corpus's instances and the driver's `_HID`
+line name the same device under the same id.
+
+The same-SoC counterexample is present anyway, and it is the same table a third time.
+**a52q is SM7225 — gauguin's own SoC — and writes `QCOM082F`**, one of the eight
+nothing claims. That is Step 4.73's and Step 4.76's finding repeating on a third
+device: `a52q` is a board whose vendor wrote its own id family, and every id it writes
+is an id no Windows driver binds. It has now been the counterexample for the thermal
+zones, for `SCM0` and for `PMAP`.
+
+`PMAP` is not exclusive to this device the way `QCOM04DD` was: `QCOM0A2C` occurs twice
+and both are `PMAP`, but eight other ids are also `PMAP` on other boards, which is what
+makes this node the clearest illustration of the rule rather than an exception to it.
+
+### The claim check, and why this step ran it differently
+
+Steps 4.75 and 4.76 grepped the loose `.inf` tree in `~/work/woa-ref/`. This step
+rebuilt the pool from the packages instead: all **112 `.cab` files** in
+`~/work/woa-ref/qrd/7280_CLS/200.0.4.0/` were extracted with
+
+```
+7z e -o/tmp/allinf/<cab> "$f" '*.inf' -r
+```
+
+giving **112 `.inf` files**, all UTF-16 with a BOM, and every id in the node was
+grepped against all of them at once.
+
+The check is stronger than a grep of the loose tree because it cannot miss a claim that
+lives in a package the loose tree happens not to have unpacked. It is also, more
+usefully, *reproducible in the other direction*: `QCOM04DD` comes back as
+`qcscm.inf` and `QCOM0427` as `qcabd.inf`, which re-derives Steps 4.76 and 4.75 by the
+same route that decided this one. Two earlier decisions confirmed by an independent
+method is worth more than a third decision made by a familiar one.
+
+`QcPmicApps7280.inf` gives the device its name — **"Qualcomm(R) Power Management PMIC
+Apps Device"** — class `System`, `ClassGuid {4d36e97d-e325-11ce-bfc1-08002be10318}`,
+`PnPLockdown = 1`, `StartType = %SERVICE_DEMAND_START%`, and a binary
+`qcpmicapps7280.sys` of 273,016 bytes, sha256
+`96f815c71e69d3dd5e240766ceff55bcc5b151947cecf0cbf68e13f9c04fa149`. It binds
+`ACPI\QCOM0A2C` and `ACPI\VEN_QCOM&DEV_0A2C` and nothing else.
+
+### The placement, which is the one thing the corpus states positionally
+
+`PMAP` sits between `PM01` and `GIO0` in this file, and the reason is a measurement
+rather than a preference: **`PMAP` immediately follows `PM01` in all 20 corpus
+tables.** This is the first time a node's *position* has been shown to be invariant
+across the corpus. Until now every decision here has been about a node's contents; this
+one is about where it goes, and the corpus answers it without a single exception.
+
+That matters because the natural place to put `PMAP` would have been next to the nodes
+it depends on. `ABD` and `SCM0` are adjacent in this file — they were written back to
+back in 4.75 and 4.76 — and `PMAP` names both of them in its `_DEP`. The corpus puts
+the dependency in a different place from its referents, and the corpus wins, because
+the corpus is a booting Windows table and this is a transcription of one. The
+adjacency of `ABD` and `SCM0` in this file is therefore an artefact of when they were
+written and not a claim about how the family is laid out; the `SCM0` comment now says
+so explicitly, since the old wording said the opposite.
+
+### `GEPT` is three nodes' method, and only one of them is writable
+
+`PMAP` carries a `Method (GEPT, 0, NotSerialized)`. It is not PMAP's own, and the
+corpus says so plainly: there are **51 `Method (GEPT, 0, NotSerialized)` declarations**
+across the corpus, and inside a node the method is identical everywhere except for the
+constant it returns.
+
+| node | returns | declarations | identity |
+|---|---|---|---|
+| `PEP0` | `One` | 20 | all 20 identical |
+| `PMAP` | `0x02` | 20 | all 20 identical |
+| `PMGK` | `0x03` | 10 | 10 identical; Waipio's is the 11th and different |
+
+Waipio's `PMGK.GEPT` is the one variant: `Return (Buffer (0x03) { 0x03, 0x04, 0x06 })`
+where the other ten build a `BUFF` with a `CreateByteField` and a `CreateWordField` and
+return `DATA`. Same name, same return type at the AML level, different body.
+
+Both `PEP0` and `PMGK` are absent from this table — `PEP0` for the reasons Step 4.73
+recorded, `PMGK` because its id is `QCOM0A8E` and no `.inf` in the extracted 112 claims
+it — so **`PMAP`'s `GEPT` is the only one of the three this table can write today**,
+and writing it is a faithful copy and not an invention.
+
+Nothing calls `GEPT`. In all 66 tables the only occurrences of the name outside its own
+declaration are iasl's back-annotations on the `Return` lines. So the method is present
+because the corpus has it, and the honest statement of its function is that this step
+does not know it — the constant is per-node and per-family and there is nothing in the
+corpus that consumes it.
+
+### The string test that worked on `GIO0` and fails here
+
+Step 4.71 established `GIO0`'s id by reading `qcgpio.sys` and finding **`OFNI`**
+standing alone in the binary as a four-character run — a method name, in a driver, that
+corresponds to a method the corpus's `GIO0` nodes declare. The test was worth running
+again on `qcpmicapps7280.sys`, and it fails.
+
+What the binary contains:
+
+- `RSDS`, `PAGE`, `NULL`, `INIT`, `GCTL`, `DITM` — four- and five-character uppercase
+  runs that are compiler artefacts, not names. `GCTL` is the tell: it also occurs in
+  `qcgpio.sys`, which is what a shared runtime symbol looks like rather than a device
+  method.
+- `AeiBGEPT` at file offset `0x2f10`, NUL-terminated at `0x2f18` — the only place the
+  string `GEPT` occurs, and it occurs glued.
+- `AeoB` alongside it.
+
+`AeiB` and `AeoB` are not valid ACPI name segments: ACPI names are `A`–`Z`, `_` and
+digits, and `i` and `o` are lowercase. So the glued form cannot be a name the compiler
+emitted for a device method; it is the binary's own internal prefixing, and `GEPT` after
+it is a coincidence of the same four letters.
+
+The test fails for `ABD` as well, in the same direction: `qcabd.sys` carries
+`AeiBSSID` and `AeiI`, and **`SSID` names nothing in any of the 66 tables.** So the
+string test does not merely fail to confirm; it produces a candidate that the corpus
+refutes.
+
+The conclusion recorded here is that the method is written as a copy of the corpus's
+form and the string evidence is **dropped in both directions** — it is not cited for
+`GEPT` and it is not cited against it. The `GIO0` result stands on its own evidence;
+this step's is a negative result about a method of transfer, and it is written down
+because a technique that worked once and silently stops working is worse than one that
+was never tried.
+
+### `_STA`, and the three tables that write `0x0B`
+
+`_STA` returns `0x0F`. Sixteen of the 20 declarations omit the method entirely, which
+ACPI reads as the same four bits — present, enabled, shown in the UI, functioning.
+Waipio writes `0x0F` outright.
+
+The three that write `0x0B` are the interesting ones, because `0x0B` clears bit 1:
+the device is present and enabled and functioning but **not shown in the UI**, so
+Device Manager will not list it while Windows will still start it. They are **a52q,
+miatoll and surya** — families `08`, `08` and `14`. No family-`0A` table writes `0x0B`,
+so on gauguin's own family the form is either omitted or `0x0F`, and this node takes
+`0x0F` as `ABD` and `SCM0` did.
+
+### `_CRS`, and the one table that has something to say
+
+Eighteen of the 20 write the corpus's empty two-byte buffer:
+
+```
+Name (RBUF, Buffer (0x02) { 0x79, 0x00 })
+```
+
+`0x79 0x00` is the ACPI end tag and nothing else — a well-formed empty resource
+template. `PMAP` writes it because that is what the device is: the PMIC Apps block is
+reached through SPMI and the arbiter's own `_CRS` is already in `PM01`.
+
+The nineteenth is `caymanslm`, and it is a real declaration:
+
+```
+GpioInt (…, "\\_SB.PM01", 0x00, ResourceConsumer, , ) { 0x01C0 }
+```
+
+on `\_SB.PM01` — the PMIC's own GPIO controller, which gauguin also has — at pin
+`0x01C0`. That is board data: a specific pin on a specific PMIC variant wired to a
+specific interrupt. gauguin's tree declares one PMIC interrupt, the SPMI arbiter's own
+PDC line at pin 1, and it is already in `PM01`'s `_CRS`. So there is nothing here to
+cite and the empty template is the correct answer rather than a fallback.
+
+This is a different situation from `SCM0`, where the absence of a `_CRS` was
+corroborated by the board having nothing to build one from. Here the corpus has a real
+one on one board and gauguin has no counterpart, which is the ordinary case: a
+per-board resource that this board does not have.
+
+### What was verified
+
+- `iasl`: **5,545 bytes**, **247 opcodes**, **356 named objects**, 0 Errors, 24
+  Warnings, 47 Remarks, 112 Optimizations. Against 4.76's 5,411 / 243 / 345 the delta
+  is +134 bytes, +4 opcodes, +11 named objects — the node plus `_HID`, `_SUB`, `_DEP`,
+  `_STA`, `GEPT`, `BUFF`, `STAT`, `DATA`, `_CRS` and `RBUF`. The warning count is
+  unchanged and the remark count grows by 5, which is the `GEPT` body's
+  `CreateByteField`/`CreateWordField` and the unused `STAT` generating remarks rather
+  than warnings.
+- **The disassembly diff against 4.76 is exactly the node**: 37 added lines and 3
+  removed, where the 3 removed are the length header (`0x1523` → `0x15A9`) and the
+  checksum header (`0x1A` → `0x86`) — so **0 changed and 0 removed in the body**. The
+  34 additional added lines are the whole `Device (PMAP)` block.
+- The three copies — source, generated `uefi/`, installed `work/uefi/Mu-Silicium/` —
+  have the same md5 `67cc9a1a01ff4cb3cab97b68c64e1a66`.
+- The DSDT read back out of the built payload at FVMAIN offset `0x54d4c8` is 5,545
+  bytes and hashes `5c7e20e28ca9cfb766a7f05c4c76f691d5f9af70ea46363ecaefb234ce954626`,
+  the same as the compile. **Seventh step at the same offset.** The byte-identity holds
+  across three independent routes: a direct `iasl` compile of the generated ASL, the
+  installed `DSDT.aml`, and the copy extracted from the payload.
+- **`SSDT`, `APIC`, `FACP`, `FACS` and `GTDT` content-identical to 4.76's, a ninth
+  consecutive step.** `SSDT` `b388c764d05d5f96` (61), `APIC` `93bafa3b9318910e` (724),
+  `FACP` `f8fa4839f1cbac2a` (276), `FACS` `8a2f3c6d08a63700` (64), `GTDT`
+  `723f7568abd1aa7e` (156).
+- `FVMAIN.Fv` is still `0x704000` (`7,356,416`), sha256
+  `94e89dd1c9a80a05844d71163863299a7b3a459a20739095d6f84d31ad5f60a9`.
+  `FVMAIN_COMPACT` is at 1,093,352 of its `0x300000` cap, 120 bytes more than 4.76's
+  1,093,232 for 134 more bytes of AML — the same caveat 4.76 recorded applies and is
+  repeated rather than re-derived: this is the compressor responding to a changed input
+  everywhere downstream of the edit, not a measurement of the delta.
+- The three payloads are `8fb44bb0…` (silicon/gzip), `9ca7b05b…` (stock/gzip) and
+  `23ce3d5f…` (stock/none). All three match GenFv's map at **123 offsets and GUIDs,
+  zero mismatches**, all three return rc=0 from `probe-fingerprint.py --expect
+  P2FreeWhy`, and they are archived in `work/out/p2-4.77`.
+- `work/out/p2-variants` **still holds the 4.74 set** — `90b21643…`, `e693e1a0…`,
+  `26919861…`. Third step running, so the 4.74 control now survives in two places
+  across three builds, and 4.74's worry about the default output directory is answered
+  by practice rather than by intent.
+- The census: **43 `_HID`/`_CID` declarations and 29 distinct, 27 claimed**, with the
+  same two unclaimed as every step since 4.70 — `QCOM0A8B` (UFS) and `QCOM24A5`.
+  `QCOM0A2C` is bound to `PMAP`.
+- **The device metric was reconciled in this step**, because the number this session has
+  been carrying and the number the AMLs give did not look like the same thing. Counting
+  `DeviceOp` (`5B 82`) in the two AMLs gives 29 for 4.76 and 30 for 4.77, and counting
+  `ThermalZoneOp` (`5B 85`) gives 13 in both. The "devices" figures in the record —
+  39→40 for 4.74, 40→41 for 4.75, 41→42 for 4.76 — are devices plus thermal zones,
+  which is ACPI's own count of device objects and not a second convention: 28+13 = 41
+  and 29+13 = 42 for the 4.76 pair. So 4.77 is **42 devices to 43**, on the same count,
+  and the arithmetic reproduces from the AMLs rather than from the prose. The number is
+  stated here in the same form as its predecessors so the series stays readable.
+- The device is absent from this host throughout — `adb devices` and `fastboot devices`
+  both empty — so nothing here is a hardware reading. The payload in `boot` is still
+  the **4.74** set and its panel reading is **still owed** under 先读屏，再刷下一次.
+  Step 4.77 changes the payload in `work/out/p2-4.77` and not the one on the device.
