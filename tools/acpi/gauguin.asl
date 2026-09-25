@@ -1058,9 +1058,11 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
         // and UFS0 in the other 3, which puts it third, fourth or fifth in every
         // table. THIS file has no SDC1 or SDC2 node, so its slot is between SPMI
         // and PMIC, and the whole node was moved there. The run continues in the
-        // corpus's own order behind it: PMIC, then PM01 - with PML0 between them
-        // in the 11 tables that have one - then PMAP, then PRTC, and PM01 ->
-        // PMAP -> PRTC is unbroken in 20 of 20.
+        // corpus's own order behind it: PMIC, then PML0, then PM01 - PML0 sits
+        // between the two in 11 of the 21 tables that carry PMIC, and this file
+        // became one of the 11 in Step 4.79, which is why the node is here and
+        // not further down the file - then PMAP, then PRTC, and PM01 -> PMAP ->
+        // PRTC is unbroken in 20 of 20.
         //
         // AVBL is read by nothing in this table, and could not be: in the
         // corpus its readers are the cameras (CAMS, CAMF, CAMI, CAMT, CAMU),
@@ -1181,6 +1183,153 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
                     }
                 })
                 Return (CFG0) /* \_SB_.PMIC.PMCF.CFG0 */
+            }
+        }
+
+        // PML0 is the companion PMIC on I2C - the part the kernel calls
+        // qcom,pm8008 and the vendor calls the Leica PMIC - and its name, its id
+        // and its address set are read rather than chosen.
+        //
+        // The name is the driver package's. qcpmic7280.inf carries two entries
+        // and they are the two nodes this one sits between:
+        //
+        //   %PMIC.DeviceDesc%=PMIC_Inst,  ACPI\QCOM0A2B
+        //   %PML0.DeviceDesc%=PMICLC_Inst,ACPI\QCOM0AD3
+        //
+        // - and [Strings] gives PML0.DeviceDesc as "Qualcomm(R) Power Management
+        // PML0". QCOM0AD3 is the one PML0 id that any of the 112 .inf files
+        // claims; the corpus's other four - QCOM1AD3 on lemonade, venus and
+        // Lahaina, QCOM08B4 on a52q and miatoll, QCOM09D3 on renoir and Cedros,
+        // QCOM0CD3 on both Kailua tables - are claimed by nothing in this set. So
+        // the id is the claimed one and not the family's, which has been the rule
+        // since Step 4.63.
+        //
+        // What the id covers is a bitmap, and the same .inf writes it out:
+        //
+        //   HKR,PMICLC,"LeicaCfgBitMap",%REG_DWORD%,3 ;bit map of I2C Leica
+        //   PMIC configuration 0b11, both leica 1&2 (P&Q) present
+        //
+        // Leica 1 answers at 0x08 and Leica 2 is a second part on the same bus.
+        // That is the whole of the corpus's address variation: 0x08 and 0x09 in
+        // all nine tables that declare I2C addresses at all, 0x0C and 0x0D added
+        // in six of those, and 0x10 and 0x11 in lisa alone - and lisa's _CRS
+        // branches on SKUV, which is this bitmap as a namespace test. The pair
+        // 0x08/0x09 is not two devices. The kernel's mfd driver for this part
+        // claims its own address and the next one outright:
+        //
+        //   drivers/mfd/qcom-pm8008.c:204
+        //   dummy = devm_i2c_new_dummy_device(dev, client->adapter,
+        //                                     client->addr + 1);
+        //
+        // and gauguin's own board overlay names the two of them. The stock dtbo's
+        // entry 18 resolves two symbols, pm8008_8 and pm8008_9, into the sinks
+        // this tree generates as s136 and s137 - so the vendor's name for the
+        // PM8008's two register windows is its two addresses, 8 and 9.
+        //
+        // gauguin carries one part. Its tree holds exactly one pm8008, the only
+        // child of i2c@990000, and it answers at 0x08:
+        //
+        //   pmic@8 { compatible = "qcom,pm8008"; reg = <0x08>; ... }
+        //
+        // So Leica 1 is present, Leica 2 is not, and _CRS carries 0x08 and 0x09
+        // and stops. The six tables that add 0x0C/0x0D are boards with a second
+        // part and this is not one, which is the same reading as the bitmap: 0b01.
+        //
+        // The bus is IC13 and the pins are GIO0's, both from that same board
+        // reading. i2c@990000 has reg = <0x990000 0x4000>, and this table's IC13
+        // is Memory32Fixed (0x00990000, 0x00004000), _UID 0x0D, _STR
+        // "QUP_1_SE_4" - the QUP whose SE index the board's own dmas property
+        // confirms, 0x190 0 4 3 there and slot 4 here. The corpus names its bus in
+        // this same cell - lisa \_SB.I2C2, lemonade and renoir \_SB.IC14, a52q
+        // \_SB.IC10 - so the source string is the one cell of the corpus's _CRS a
+        // port must change, and the address cells do not move. The pins are the
+        // board's as well: reset-gpios is <&tlmm 0x3a 1> and interrupts-extended
+        // is <&tlmm 0x3b 1>, and pm8008-default-state names those two pins as
+        // gpio58 (reset-n) and gpio59 (int). TLMM in this table is GIO0, QCOM0A0C
+        // at 0x0F100000 + 0x300000, so both pins name \_SB.GIO0 - as they do in
+        // six of the eleven tables. The other four put them on \_SB.PM01, which is
+        // the PMIC's own GPIO block and not this board's wiring.
+        //
+        // Which pin is which is written nowhere in the corpus: the GpioIo
+        // parameters are byte-identical across all eleven tables and none of them
+        // is named. So the order here is this file's, and it is the majority's -
+        // nine of the eleven tables list two pins and seven list them ascending,
+        // while both Kailua tables list 0x00A1 before 0x002A. gauguin's two are
+        // 0x3A and 0x3B in ascending order, which is also reset before interrupt.
+        // One note against reading lisa or a52sxq as the two-pin example: there
+        // the second pin appears only in the branch that also adds Leica 2's
+        // addresses, so in those two tables it belongs to the second part.
+        // gauguin has one part with two pins, so the pin list is the board's.
+        //
+        // The GpioIo parameters do transfer and are copied exactly - Exclusive,
+        // PullNone, 0x0000, 0x00C8, IoRestrictionNone - and so is the 0x000186A0
+        // in each connection. That number is the slave's declared speed, 100 kHz,
+        // and the corpus writes it in all nine tables that carry an I2C entry.
+        // gauguin's controller runs at 0x00061A80, 400 kHz, and that is a
+        // property of i2c@990000 rather than of the part; the corpus's number is
+        // the vendor's for this part and is the slower of the two, so it is the
+        // one written.
+        //
+        // _STA is 0x0B and it is a board answer and not a family one. The corpus
+        // splits seven Zero to four 0x0B, and the split cuts through the id: lisa
+        // and a52sxq both declare QCOM0AD3 and return 0x0B and Zero respectively,
+        // so the same driver on the same part is hidden on one board and not on
+        // the other. gauguin's part is populated and is used - the tree's
+        // pm8008-thermal zone takes this node's phandle as its thermal-sensors -
+        // and 0x0B is present and enabled without the UI presence bit. Zero would
+        // tell Windows the part is not there, which on this board would leave the
+        // driver that owns it unbound.
+        //
+        // No _UID, no _STR and no _CCA: all eleven tables omit all three, and the
+        // device is a single instance. _SUB is the corpus's \_SB.PSUB in nine of
+        // the eleven - lisa and a52sxq are the two that define a method, for the
+        // SKU branching their _CRS does - so it is Alias (^PSUB, _SUB), which is
+        // this file's spelling of it from depth 1. _DEP is the bus and one entry,
+        // as in all nine I2C tables; Kailua's PML0 has no _DEP because it has no
+        // I2C entry to depend on. And the position is measured rather than
+        // stylistic: PML0 is immediately preceded by PMIC and immediately followed
+        // by PM01 in 11 of 11, so it goes between the two nodes it is written
+        // between, exactly where the ABD comment's run of the corpus's order said
+        // it would.
+        Device (PML0)
+        {
+            Method (_STA, 0, NotSerialized)  // _STA: Status
+            {
+                Return (0x0B)
+            }
+
+            Name (_HID, "QCOM0AD3")  // _HID: Hardware ID
+            Alias (^PSUB, _SUB)  // _SUB: Subsystem ID
+            Name (_DEP, Package (One)  // _DEP: Dependencies
+            {
+                \_SB.IC13
+            })
+            Method (_CRS, 0, NotSerialized)  // _CRS: Current Resource Settings
+            {
+                Name (RBUF, ResourceTemplate ()
+                {
+                    I2cSerialBusV2 (0x0008, ControllerInitiated, 0x000186A0,
+                        AddressingMode7Bit, "\\_SB.IC13",
+                        0x00, ResourceConsumer, , Exclusive,
+                        )
+                    I2cSerialBusV2 (0x0009, ControllerInitiated, 0x000186A0,
+                        AddressingMode7Bit, "\\_SB.IC13",
+                        0x00, ResourceConsumer, , Exclusive,
+                        )
+                    GpioIo (Exclusive, PullNone, 0x0000, 0x00C8, IoRestrictionNone,
+                        "\\_SB.GIO0", 0x00, ResourceConsumer, ,
+                        )
+                        {   // Pin list
+                            0x003A
+                        }
+                    GpioIo (Exclusive, PullNone, 0x0000, 0x00C8, IoRestrictionNone,
+                        "\\_SB.GIO0", 0x00, ResourceConsumer, ,
+                        )
+                        {   // Pin list
+                            0x003B
+                        }
+                })
+                Return (RBUF) /* \_SB_.PML0._CRS.RBUF */
             }
         }
 

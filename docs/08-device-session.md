@@ -14245,3 +14245,240 @@ instead of a method, and `_STA` returning `0x0F` written out rather than left ou
   both empty — so nothing here is a hardware reading. The payload in `boot` is still the
   **4.74** set and its panel reading is **still owed** under 先读屏，再刷下一次.
   Step 4.78 changes the payload in `work/out/p2-4.78` and not the one on the device.
+
+## Step 4.79 — a bitmap the vendor wrote down, and the first node an `.inf` names outright
+
+### What this step was
+
+One node: `PML0`, the companion PMIC on I2C — the part the kernel calls `qcom,pm8008`
+and the vendor calls the Leica PMIC. It is the second entry of the same driver package
+that claims `PMIC`, and it goes where the corpus puts it: immediately after `PMIC` and
+immediately before `PM01`, which is the position it holds in 11 of 11 tables that carry
+it. Everything about it came out of a file read rather than a vote, and one of those
+files — the `.inf` — turned out to explain an address pattern this port had been circling
+since Step 4.67 without being able to say what it was for.
+
+The device was absent from this host for the whole step, as it was for 4.77 and 4.78.
+`adb devices` and `fastboot devices` are both empty. Nothing here is a hardware reading,
+and the payload in `boot` is still the 4.74 set.
+
+### A name the driver package writes down
+
+Since Step 4.63 the rule has been that every node answers a shipped `.inf` that names its
+id outright. `PML0` is the first node where the `.inf` names the *node* as well as the
+id. `qcpmic7280.inf` carries two device entries and they are the two nodes this one sits
+between:
+
+```
+%PMIC.DeviceDesc%=PMIC_Inst,  ACPI\QCOM0A2B
+%PML0.DeviceDesc%=PMICLC_Inst,ACPI\QCOM0AD3
+```
+
+and `[Strings]` gives `PML0.DeviceDesc` as `Qualcomm(R) Power Management PML0`. So the
+corpus's node name, this file's node name and the vendor's device description are the
+same three characters-plus-digit string, and the instance name `PMICLC` is `PMIC` +
+`LC`, Leica.
+
+`QCOM0AD3` is the only one of the five PML0 ids in the corpus that any of the 112 `.inf`
+files claims; `QCOM1AD3` (lemonade, venus, Lahaina), `QCOM08B4` (a52q, miatoll),
+`QCOM09D3` (renoir, Cedros) and `QCOM0CD3` (both Kailua tables) are claimed by nothing in
+this set. So the id is the claimed one, not the family's — the same test Step 4.70 ran on
+the I2C engines and Step 4.72 on the SMMUs.
+
+### A bitmap that explains eleven address sets
+
+The corpus's PML0 nodes differ in exactly one resource: which I2C addresses they list.
+Nine tables have an I2C entry, and they break into three groups:
+
+| addresses | tables |
+|---|---|
+| `0x08`, `0x09` | all nine |
+| `+ 0x0C`, `0x0D` | lemonade, venus, Lahaina, a52sxq, renoir, Cedros |
+| `+ 0x10`, `0x11` | lisa |
+
+Four callers of the same driver with three different address sets is the kind of spread
+this port has had to leave undecided before. It is not undecided here, because the same
+`.inf` writes the rule out as a registry default:
+
+```
+HKR,PMICLC,"LeicaCfgBitMap",%REG_DWORD%,3 ;bit map of I2C Leica PMIC configuration
+0b11, both leica 1&2 (P&Q) present
+```
+
+Two parts, Leica 1 and Leica 2, one bit each, and Leica 1 answers at `0x08`. Read against
+that, the three groups are one story: a board with both parts lists both address pairs, a
+board with one lists one. `lisa` is the table that shows the mechanism from the inside —
+its `_CRS` is an `If (SKUV == One)` with a four-address branch and a two-address branch,
+which is this bitmap expressed as a namespace test, and its `_SUB` method returns
+`"SKU17280"` or `"IDP07280"` off the same `SKUV`. lisa's second part also answers at
+`0x10` rather than `0x0C`, which is the part's address on that board and not a different
+kind of thing.
+
+### The pair is one part, and the board overlay says so
+
+`0x08` and `0x09` are not Leica 1 and Leica 2. The kernel's mfd driver for this part
+claims its own address and the next one:
+
+```
+drivers/mfd/qcom-pm8008.c:204
+dummy = devm_i2c_new_dummy_device(dev, client->adapter, client->addr + 1);
+```
+
+and gauguin's own stock board overlay names the two of them. `build-device-tree.sh`
+generates `work/out/gauguin-dtbo-sinks.dtsi` from the stock `part-dtbo.img`, and dtbo
+entry 18 — the gauguin entry — resolves two symbols whose names are the two addresses:
+
+```
+s136 { phandle = <0x8088>; };	/* pm8008_8 (dtbo entry 18) */
+s137 { phandle = <0x8089>; };	/* pm8008_9 (dtbo entry 18) */
+```
+
+so the vendor's name for the PM8008's two register windows is `_8` and `_9`. Two
+independent accounts of the same pair, and the nine-of-nine in the corpus is a third.
+
+### What gauguin carries is the `0b01` case
+
+The board has one PM8008, at `0x08`, and it is the only child of `i2c@990000`:
+
+```
+pmic@8 { compatible = "qcom,pm8008"; reg = <0x08>; ... }
+```
+
+There is no second `compatible = "qcom,pm8008"` anywhere in the tree — the only other
+mentions are the pinctrl state, the thermal zone and those two sink symbols. So Leica 1 is
+present, Leica 2 is not, and `_CRS` carries `0x08` and `0x09` and stops. The six tables
+that add `0x0C/0x0D` are boards with a second part; this is not one, and adding the pair
+would have the driver open two addresses nothing answers.
+
+### The bus and the pins are the board's, and they are the two cells a port must change
+
+Everything else in the `_CRS` transfers from the corpus verbatim. The bus does not:
+the corpus names its own (`\_SB.I2C2` on lisa, `\_SB.IC14` on lemonade and renoir,
+`\_SB.IC10` on a52q) and gauguin's PM8008 sits on `i2c@990000`. That node's `reg` is
+`<0x990000 0x4000>`, and this table's `IC13` is `Memory32Fixed (0x00990000, 0x00004000)`
+with `_UID 0x0D` and `_STR "QUP_1_SE_4"` — the QUP whose SE index the board's own `dmas`
+property confirms independently, `0x190 0 4 3` there and slot 4 here. So the source string
+in both `I2cSerialBusV2` entries is `"\\_SB.IC13"`.
+
+The pins are the board's too. gauguin's tree gives the part
+
+```
+interrupts-extended = <0x40 0x3b 0x01>;   /* tlmm 59 */
+reset-gpios        = <0x40 0x3a 0x01>;   /* tlmm 58 */
+```
+
+and `pm8008-default-state` names those same two pins, `gpio59` under `int-pins` and
+`gpio58` under `reset-n-pins`. TLMM in this table is `GIO0` — `QCOM0A0C` at
+`0x0F100000 + 0x300000`, the same id lisa, a52sxq and venus give their `GIO0` — so both
+`GpioIo` entries name `"\\_SB.GIO0"`, as they do in six of the eleven tables. The other
+four put them on `\_SB.PM01`, which is the PMIC's own GPIO block, and a pin number in the
+`0x011x` range is what that block looks like — the two are not interchangeable and the
+board says which is which.
+
+### The order of two pins nobody labelled
+
+The pin list is the one cell of the corpus's `_CRS` with no witness at all. Nine of the
+eleven tables list two pins, and the `GpioIo` parameters beside them are byte-identical
+across all eleven — `Exclusive, PullNone, 0x0000, 0x00C8, IoRestrictionNone` — so nothing
+in the corpus says which pin is the interrupt and which the reset. Order is all there is,
+and seven of the nine list their two pins ascending while both Kailua tables list
+`0x00A1` before `0x002A`.
+
+There is a trap in reading lisa or a52sxq as the two-pin example, and it is worth stating
+because those are the two tables this port has used as its family reference throughout.
+In both, the second pin appears *only* in the branch that also adds Leica 2's addresses —
+`0x0112` with them, `0x0113` without. So in those two tables the second pin belongs to the
+second part, and neither is evidence about a single part's two pins at all. gauguin has
+one part and two pins, and its two are written from the board: `0x003A` then `0x003B`,
+ascending, which is also reset before interrupt.
+
+### `_STA`, which the id does not decide
+
+The corpus splits seven `Zero` to four `0x0B`, and the split cuts through the id rather
+than around it: lisa and a52sxq both declare `QCOM0AD3` and return `0x0B` and `Zero`
+respectively. So it is a board answer, as it was for `PMAP` in Step 4.77, and this one is
+decided by whether the part is used. gauguin's is — the tree's `pm8008-thermal` zone takes
+this node's phandle as its `thermal-sensors` — so the node returns `0x0B`: present and
+enabled, without the UI presence bit. `Zero` would tell Windows the part is not there and
+leave the driver that owns it unbound, on a board where its five LDOs are in the tree.
+
+### The number in the corpus's `_CRS`, read rather than copied
+
+`0x000186A0` is 100 kHz, and the corpus writes it in all nine tables that carry an I2C
+entry. gauguin's controller is faster — `clock-frequency = <0x61a80>` on `i2c@990000`,
+400 kHz — and that is a property of the controller node, not of this part. The resource
+field is the speed the *slave* declares, so the corpus's number ships for this exact part
+and is the slower of the two; it is the one written, and the reasoning is in the ASL
+rather than the number being silently swapped for the board's.
+
+### The write that reads back
+
+`tools/acpi/gauguin.asl` grew by 150 lines to 3,458, md5
+`263d2e0c7ec8b43c968d886a5dea2d8b` on all three copies after
+`tools/make_uefi_platform.py` and `tools/sync-uefi-platform.sh`. `iasl` compiles it with
+**0 errors**, and the node reads back out of the AML as written:
+
+```
+Device (PML0)
+    Method (_STA) { Return (0x0B) }
+    Name (_HID, "QCOM0AD3")
+    Alias (PSUB, _SUB)
+    Name (_DEP, Package (0x01) { IC13 })
+    Method (_CRS) { I2cSerialBusV2 0x0008, I2cSerialBusV2 0x0009,
+                    GpioIo \_SB.GIO0 {0x003A}, GpioIo \_SB.GIO0 {0x003B} }
+```
+
+Two details of that readback are worth recording. `Alias (PSUB, _SUB)` and `_DEP { IC13 }`
+lose their `^` and their `\_SB.` prefixes in disassembly because the disassembler prints
+the shortest form — the same shortening the shipped 4.78 table's `_DEP { \_SB.PMAP }`
+already shows as `PMAP`, so it is this compiler's behaviour and not something new. And
+`_DEP` naming a device declared later in the file compiles cleanly, which is the
+counterpart to Step 4.78's `Error 6142`: a `_DEP` entry is a NameString resolved when the
+namespace loads, while a `Field` on a later `OperationRegion` is resolved when it is
+compiled. Only the second one pins a node's position.
+
+The device order diff against 4.78 is exactly one line — `PML0` inserted between `PMIC`
+and `PM01` — and `DeviceOp` goes 31 -> 32 with `ThermalZoneOp` unchanged at 13, so the
+corpus's device count moves 44 -> **45**.
+
+### What was verified
+
+- `iasl -p /tmp/direct479 -tc` — **0 errors**, 24 warnings, 55 remarks; AML 6,048 bytes,
+  262 opcodes, **381 named objects**, checksum `0x9f`, length `0x17a0`, OEM id `QCOMM`,
+  OEM table id `SM7225`. Step 4.78's were 5,843 / 260 / 374 / `0xf2` / `0x16d3`.
+- The DSDT *inside the built volume* hashes to
+  `c663b28e0ce92643a385730898d6c4b1b58d95480709861d382888dbeee7e783`, byte-identical to
+  the direct compile — the proof the build embedded the source that was compiled.
+- `fv-inventory.py --acpi` on the payload reports six tables, the DSDT at
+  `0x0054d4c8`, **the same offset for a ninth step**, checksum valid; `FACP` and `FACS`
+  not valid, which is the expected pair before `AcpiTableDxe` runs.
+- The other five tables are unchanged an eleventh step: `SSDT` `b388c764…` (61), `APIC`
+  `93bafa3b…` (724), `FACP` `f8fa4839…` (276), `FACS` `8a2f3c6d…` (64), `GTDT`
+  `723f7568…` (156).
+- `FVMAIN.Fv` is `0x704000` (`7,356,416`), sha256
+  `00da9de1f7e1e2172a526a590c27ffb937a4c5d9a300681d98a2fb5678c50e15`, with
+  `EFI_FV_TAKEN_SIZE = 0x703eb8` — 200 bytes more than 4.78's `0x703df0` for 205 more
+  bytes of AML. The `0x148` (328) between taken and the volume's length is **not** free
+  space, and recording it as such is the mistake the space note in `docs/00-plan.md`
+  exists to prevent: it is GenFv rounding the taken size up to a 4 KiB boundary
+  (`(-taken) % 4096`, always in [0, 4095], carrying no capacity information), and the
+  same inner volume grew 172,032 bytes between two earlier builds of this very tree. What
+  bounds a new node is the outer volume, `SILICIUM_UEFI.fd` = `FVMAIN_COMPACT`, a fixed
+  3 MiB region, and that is at 1,093,568 of its `0x300000` — 56 bytes more than 4.78's
+  1,093,512, leaving **2,052,160 bytes** free. The compressor responded to a changed
+  input, the same caveat 4.76 through 4.78 recorded rather than re-derived.
+- The three payloads are `d0a845a9…` (silicon/gzip), `4b2ce72a…` (stock/gzip) and
+  `58450c3c…` (stock/none), all three the same byte lengths as 4.78's because the
+  container is a fixed-size volume, all three matching GenFv's map at **123 offsets and
+  GUIDs, zero mismatches**, all three carrying the full ten-instrument ladder and
+  returning rc=0 from `probe-fingerprint.py --expect P2FreeWhy`. They are archived in
+  `work/out/p2-4.79`.
+- `work/out/p2-variants` **still holds the 4.74 set** — `90b21643…`, `e693e1a0…`,
+  `26919861…`. Fifth step running.
+- The census: **45 `_HID`/`_CID` declarations, 31 distinct, 29 claimed** — up one in each
+  column, `QCOM0AD3` being both the new declaration and a claimed id. The same two remain
+  unclaimed as every step since 4.70: `QCOM0A8B` (`URS0`) and `QCOM24A5` (`UFS0`).
+- The device is absent from this host throughout, so nothing here is a hardware reading.
+  The payload in `boot` is still the **4.74** set and its panel reading is **still owed**
+  under 先读屏，再刷下一次. Step 4.79 changes the payload in `work/out/p2-4.79` and not
+  the one on the device.
