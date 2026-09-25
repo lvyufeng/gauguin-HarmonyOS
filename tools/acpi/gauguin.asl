@@ -1344,6 +1344,180 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
             }
         }
 
+        // The other three engines gauguin's board leaves running, and the two
+        // it leaves running that are not written. The board's own tree decides
+        // both, and it also corrects a count this table's notes carried after
+        // Step 4.68: the live engines are six, not four. Dumping them out of
+        // the running kernel's device tree and reading the status of every
+        // node at a QUP address gives, in address order:
+        //
+        //   0x880000  spi@880000          w0 SE0  slot  1  GSI 0x279  SPI
+        //   0x884000  qcom,qup_uart@884000 w0 SE1 slot  2  GSI 0x27A  4-wire UART
+        //   0x984000  i2c@984000          w1 SE1  slot 10  GSI 0x182  I2C
+        //   0x988000  i2c@988000          w1 SE2  slot 11  GSI 0x183  I2C
+        //   0x98c000  spi@98c000          w1 SE3  slot 12  GSI 0x184  SPI
+        //   0x990000  i2c@990000          w1 SE4  slot 13  GSI 0x185  I2C
+        //
+        // and everything else at a QUP address - i2c@888000, i2c@980000,
+        // spi@888000, spi@980000, the UARTs at 0x984000 and 0x98c000 - is
+        // disabled. Step 4.69 wrote the last of the six. The first two were
+        // missed because the payload's own tree disagrees with the board's
+        // about them: work/out/gauguin.dts has i2c@880000 where the board has
+        // spi@880000, and serial@98c000 with compatible "qcom,geni-debug-uart"
+        // where the board has spi@98c000 with an irled@0 on it. The board wins,
+        // and the disagreement is recorded rather than resolved.
+        //
+        // The GSIs above are no longer taken from a sibling table. They are in
+        // gauguin's tree, and the conversion is the GIC's: a device tree
+        // interrupt specifier <0 N 4> means GIC INTID N + 32, and ACPI's GSI
+        // numbering is that INTID. i2c@990000's interrupts is <0 0x165 4>, so
+        // its GSI is 0x185; i2c@988000's <0 0x163 4> gives 0x183; i2c@984000's
+        // <0 0x162 4> gives 0x182; spi@98c000's <0 0x164 4> gives 0x184; and
+        // spi@880000's <0 0x259 4> gives 0x279, which is the family's number
+        // for wrapper 0's engine 0 and the CRD's I2C1. The whole ladder is
+        // therefore measured on the board and not borrowed, and the two agree
+        // slot for slot.
+        //
+        // The protocol of each engine is in the tree too, in the TLMM pin group
+        // each node's pinctrl-0 resolves to: qupv3_se0_spi_pins,
+        // qupv3_se1_4uart_pins, qupv3_se2_i2c_pins and _spi_pins,
+        // qupv3_se6_i2c_pins and _spi_pins, qupv3_se7_i2c_pins and _2uart_pins,
+        // qupv3_se8_i2c_pins, qupv3_se9_spi_pins and _2uart_pins, and
+        // qupv3_se10_i2c_pins. Two engines have both an I2C group and an SPI
+        // group, which is what an engine is; which one is wired is the status
+        // of the node that uses it. And the se index in those names is not the
+        // per-wrapper one the _STR carries: se0 through se5 are wrapper 0 and
+        // wrapper 1 starts at se6, so wrapper 1's engine 1 - this pair's first
+        // - is se7, not se1.
+        //
+        // The two SPI engines are the two not written, and for one reason:
+        // nothing can bind them. Every .inf in the SC7280 set was read for the
+        // id, and of the four QUP ids the set carries - QCOM0A0B, QCOM0A0C,
+        // QCOM0A10, QCOM0A16 - the SPI engine's QCOM0A0E is not among them. The
+        // same search over the other four driver trees in ~/work/woa-ref finds
+        // it nowhere at all. Writing SP1 and SP12 would therefore register two
+        // unknown devices that reserve 0x880000 and 0x98c000 and their GSIs
+        // against no driver, and would describe the touch as reachable over a
+        // bus this table cannot open. They are withheld, not refused: lisa
+        // declares an SP14, so the family does write one, and if a driver for
+        // QCOM0A0E ever appears the node is four lines of the same shape.
+        //
+        // What the touch actually is decides something else, and it is worth
+        // writing down because it reads backwards at first. spi@880000's child
+        // is touch_spi@0, and it carries a compatible, a reg of 0 and a 10 MHz
+        // clock and nothing else - "xiaomi,spi-for-tp", correctly spelled, with
+        // no interrupt, no reset and no supply. The touch chip's node is on the
+        // I2C engine: focaltech@38 on i2c@988000, with focaltech,irq-gpio and
+        // focaltech,reset-gpio on TLMM pins 22 and 21, a vdd-supply, six panel
+        // phandles, its own pinctrl for the interrupt and the reset, and
+        // qcom,i2c-touch-active = "focaltech,fts_ts" naming it the active one.
+        // So the chip is at I2C address 0x38 on slot 11 and the SPI node is
+        // there to hold the engine. No driver in the set drives the chip on
+        // either bus - there is no touch .inf in it at all - which is why the
+        // child is not written and why IC11 alone does not give touch.
+        //
+        // IC10 and IC11 are the same node as IC13 with a different slot, and
+        // carry the same omission: no _DEP, because every engine in the family
+        // depends on \_SB.PEP0 and this table has none. IC10's bus is the audio
+        // amplifiers cs35l41@40 and cs35l41@41, which no driver in the set
+        // claims; IC11's is the touch and the NFC controller nq@28, and the set
+        // has no driver for either. Both nodes are written for the bus and not
+        // for the slaves, on the same reasoning that withholds the SPI engines:
+        // qci2c7280.inf binds the engine, and a child with no driver is an
+        // unknown device. The slaves are the four-line addition when one
+        // arrives.
+        Device (IC10)
+        {
+            Name (_HID, "QCOM0A10")  // _HID: Hardware ID
+            Alias (^PSUB, _SUB)
+            Name (_UID, 0x0A)  // _UID: Unique ID
+            Name (_CCA, Zero)  // _CCA: Cache Coherency Attribute
+            Name (_STR, Unicode ("QUP_1_SE_1"))  // _STR: Description String
+            Method (_CRS, 0, NotSerialized)  // _CRS: Current Resource Settings
+            {
+                Name (RBUF, ResourceTemplate ()
+                {
+                    Memory32Fixed (ReadWrite,
+                        0x00984000,         // Address Base
+                        0x00004000,         // Address Length
+                        )
+                    Interrupt (ResourceConsumer, Level, ActiveHigh, Exclusive, ,, )
+                    {
+                        0x00000182,
+                    }
+                })
+                Return (RBUF) /* \_SB_.IC10._CRS.RBUF */
+            }
+        }
+
+        Device (IC11)
+        {
+            Name (_HID, "QCOM0A10")  // _HID: Hardware ID
+            Alias (^PSUB, _SUB)
+            Name (_UID, 0x0B)  // _UID: Unique ID
+            Name (_CCA, Zero)  // _CCA: Cache Coherency Attribute
+            Name (_STR, Unicode ("QUP_1_SE_2"))  // _STR: Description String
+            Method (_CRS, 0, NotSerialized)  // _CRS: Current Resource Settings
+            {
+                Name (RBUF, ResourceTemplate ()
+                {
+                    Memory32Fixed (ReadWrite,
+                        0x00988000,         // Address Base
+                        0x00004000,         // Address Length
+                        )
+                    Interrupt (ResourceConsumer, Level, ActiveHigh, Exclusive, ,, )
+                    {
+                        0x00000183,
+                    }
+                })
+                Return (RBUF) /* \_SB_.IC11._CRS.RBUF */
+            }
+        }
+
+        // The UART is the one engine here whose family name does not encode its
+        // slot, and the corpus shows why in two tables at once. lisa names its
+        // DBG-tagged UART UARD and that UART is at _UID 6; venus names its
+        // DBG-tagged UART UARD as well and that one is at _UID 4, so the suffix
+        // is a name for the role and the _UID is still the slot - venus's is
+        // 8 * 0 + 3 + 1 for its _STR "QUP_0_SE_3,DBG". gauguin's is the slot 2
+        // engine, _STR "QUP_0_SE_1", so UARD with _UID 2. That it is the debug
+        // UART is not a guess: chosen/bootargs carries androidboot.console=
+        // ttyMSM0, and this is the only enabled UART in the tree. Its GSI comes
+        // from interrupts-extended, whose first entry <0x1 0 0x25a 4> gives
+        // 0x25A + 32 = 0x27A; the second entry is on phandle 0xc1, the PDC, and
+        // is the wake path rather than an interrupt resource to publish. lisa's
+        // UARD declares a GpioInt on \_SB.GIO0 pin 0x17 in addition to the
+        // memory and the interrupt; gauguin's tree does not carry a pin for
+        // this line, so none is written. The engine is not _STA-hidden the way
+        // lisa's UAR8 is (it returns 0x0B, present but not shown); a serial
+        // port is the one thing here Windows should be allowed to show.
+        //
+        // qcuart7280.inf claims QCOM0A16, so this node has a driver, and it is
+        // the only engine written in this step whose bus is not I2C.
+        Device (UARD)
+        {
+            Name (_HID, "QCOM0A16")  // _HID: Hardware ID
+            Alias (^PSUB, _SUB)
+            Name (_UID, 0x02)  // _UID: Unique ID
+            Name (_CCA, Zero)  // _CCA: Cache Coherency Attribute
+            Name (_STR, Unicode ("QUP_0_SE_1,DBG"))  // _STR: Description String
+            Method (_CRS, 0, NotSerialized)  // _CRS: Current Resource Settings
+            {
+                Name (RBUF, ResourceTemplate ()
+                {
+                    Memory32Fixed (ReadWrite,
+                        0x00884000,         // Address Base
+                        0x00004000,         // Address Length
+                        )
+                    Interrupt (ResourceConsumer, Level, ActiveHigh, Exclusive, ,, )
+                    {
+                        0x0000027A,
+                    }
+                })
+                Return (RBUF) /* \_SB_.UARD._CRS.RBUF */
+            }
+        }
+
         // The QUP I2C engine the Type-C path and the charger cluster both hang
         // on - the node Step 4.68 named at the root of the Type-C chain and
         // left open. It left two questions running together and only one of

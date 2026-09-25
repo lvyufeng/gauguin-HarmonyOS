@@ -12203,3 +12203,258 @@ corpus's `IC11` is a name for lisa's slot 11 and gauguin's slot 11 carries the t
 controller. What gauguin's Type-C root actually is, is `IC13`: wrapper 1, engine 4, slot
 13, on the bus the analog switch and the whole charger cluster hang from, and the node
 Step 4.68 named as the one the other three open items converge on is now in the table.
+
+---
+
+## Step 4.70 — the six engines the board leaves running, and the two of them Windows cannot bind
+
+Step 4.69 wrote one engine and said the others were a later step. This is that step, and
+the first thing it did was move the count: the board leaves **six** engines running, not
+the four this repo wrote down after Step 4.68.
+
+### The count was four, and it is six
+
+The earlier count came from reading the vendor tree's `i2c` and `spi` nodes. It missed
+the two nodes that are neither: a UART and a second SPI engine. Reading the `status` of
+every node at a QUP address in `~/backup/gauguin/dt/soc/` — the tree dumped out of the
+running kernel — settles it:
+
+| address | node | wrapper | SE | slot | GSI | protocol | what is on it |
+|---|---|---|---|---|---|---|---|
+| `0x880000` | `spi@880000` | 0 | 0 | 1 | `0x279` | SPI | `touch_spi@0` |
+| `0x884000` | `qcom,qup_uart@884000` | 0 | 1 | 2 | `0x27A` | 4-wire UART | the console |
+| `0x984000` | `i2c@984000` | 1 | 1 | 10 | `0x182` | I2C | `cs35l41@40`, `cs35l41@41` |
+| `0x988000` | `i2c@988000` | 1 | 2 | 11 | `0x183` | I2C | `focaltech@38`, `nq@28` |
+| `0x98c000` | `spi@98c000` | 1 | 3 | 12 | `0x184` | SPI | `irled@0` |
+| `0x990000` | `i2c@990000` | 1 | 4 | 13 | `0x185` | I2C | the charger cluster, `fsa4480@42` |
+
+Everything else at a QUP address — `i2c@888000`, `i2c@980000`, `spi@888000`, `spi@980000`,
+and the UARTs at `0x984000` and `0x98c000` — is `disabled`. Six live engines, then, and
+Step 4.69's was the last of them.
+
+The two that were missed were missed for a reason worth writing down: **the payload's own
+tree disagrees with the board's about them.** `work/out/gauguin.dts` has `i2c@880000`
+where the board has `spi@880000`, and `serial@98c000` with `compatible =
+"qcom,geni-debug-uart"` where the board has `spi@98c000` with an `irled@0` on it. Both of
+Step 4.69's closing bullets had flagged the first of those as unresolved; this step
+resolves it in the board's favour, because the board's tree is the one the running kernel
+was handed and the payload's is a build input that was already found two changes stale
+once. The board also has an IR blaster, which the payload's tree does not describe at all.
+
+### The GSIs are on the board now, not borrowed from a sibling
+
+Step 4.69 measured the wrapper-1 GSI ladder by matching gauguin's numbers against the
+corpus's. They are in gauguin's own tree, and the conversion is the GIC's: a device tree
+interrupt specifier `<0 N 4>` names GIC INTID `N + 32`, and ACPI's GSI numbering is that
+INTID. Read out of the tree:
+
+| node | `interrupts` | GSI | corpus |
+|---|---|---|---|
+| `spi@880000` | `<0 0x259 4>` | `0x279` | = the CRD's `I2C1` |
+| `qcom,qup_uart@884000` | `interrupts-extended`, first entry `<0x1 0 0x25a 4>` | `0x27A` | = lisa's `I2C2` |
+| `i2c@984000` | `<0 0x162 4>` | `0x182` | = lisa's `IC10` |
+| `i2c@988000` | `<0 0x163 4>` | `0x183` | = lisa's `IC11` |
+| `spi@98c000` | `<0 0x164 4>` | `0x184` | = lisa's (wrapper 1, SE 3) |
+| `i2c@990000` | `<0 0x165 4>` | `0x185` | = lisa's (wrapper 1, SE 4) |
+
+So the ladder Step 4.69 described as "the family's number for the slot rather than a
+derivation" is now measured twice over and the two agree slot for slot. The UART's second
+`interrupts-extended` entry is on phandle `0xc1`, the PDC, and is the wake path rather
+than an interrupt resource to publish.
+
+### The protocol is in the pin groups, and their index is not the `_STR` index
+
+Which protocol an engine is running is decided by the TLMM group each node's `pinctrl-0`
+resolves to. The complete list of QUP groups in gauguin's tree:
+
+```
+qupv3_se0_spi   qupv3_se1_4uart  qupv3_se2_i2c   qupv3_se2_spi
+qupv3_se6_i2c   qupv3_se6_spi    qupv3_se7_2uart qupv3_se7_i2c
+qupv3_se8_i2c   qupv3_se9_2uart  qupv3_se9_spi   qupv3_se10_i2c
+```
+
+Two engines have both an I2C group and an SPI group — `se2` and `se6` — which is what an
+engine is: one piece of hardware muxed to one of several protocols, and which one is
+wired is the `status` of the node that uses it, not a property of the engine.
+
+The `se` index in those names is **not** the per-wrapper index the `_STR` carries. `se0`
+through `se5` are wrapper 0 and wrapper 1 starts at `se6`: `se6` is `0x980000`, `se7` is
+`0x984000`, `se8` is `0x988000`, `se9` is `0x98c000`, `se10` is `0x990000`. All five of
+the wrapper-1 engines in the table above land exactly where the addresses put them, and
+wrapper 0's six groups cover `0x880000` through `0x894000`. This is a fourth index
+convention in the same tree — after the address stride, the TLMM *function* names
+(`qup00`, `qup14`), and the `qcom,wrapper-core` phandles — and it is the only one of the
+four that would have misled a careless reader, because `se7` sounds like engine 7 and is
+engine 1 of wrapper 1.
+
+### Two engines are withheld, and the reason is one search
+
+No driver in the set can bind them. Read over all 112 `.inf` files:
+
+| id | block | claimed by |
+|---|---|---|
+| `QCOM0A0B` | SPMI | `qcspmi7280.inf` |
+| `QCOM0A0C` | TLMM | `qcgpio7280.inf` |
+| `QCOM0A10` | I2C engine | `qci2c7280.inf` |
+| `QCOM0A16` | UART engine | `qcuart7280.inf` |
+| `QCOM0A0E` | SPI engine | **nothing** |
+
+and the same search over the other four driver trees under `~/work/woa-ref` finds
+`QCOM0A0E` nowhere at all. Writing `SP1` and `SP12` would therefore register two unknown
+devices that reserve `0x880000` and `0x98c000` and two GSIs against no driver, in a table
+whose whole census was just made readable. They are **withheld, not refused**: lisa
+declares an `SP14`, so the family does write one, and the node is four lines of the same
+shape the day a driver appears.
+
+### The touch is on the I2C bus, which is the opposite of what the two node names say
+
+This reads backwards and is worth the space. `spi@880000`'s child is called `touch_spi@0`
+and it carries a `compatible`, a `reg` of 0 and a 10 MHz clock — and nothing else. No
+interrupt, no reset, no supply. The chip's own node is on the I2C engine:
+
+```
+i2c@988000/focaltech@38   reg 0x38, focaltech,irq-gpio  (TLMM pin 22)
+                          focaltech,reset-gpio (TLMM pin 21), vdd-supply,
+                          six panel phandles, its own pinctrl for the
+                          interrupt and the reset
+i2c@988000            qcom,i2c-touch-active = "focaltech,fts_ts"
+```
+
+So the touch controller is at I2C address `0x38` on slot 11, the property that names the
+active touch path names the I2C one, and `xiaomi,spi-for-tp` — which is spelled correctly
+in the tree and is what the SPI node's child is — is a holder. Which of the two the
+shipped firmware used was one of Step 4.69's open bullets and is now answered; what
+remains open is a Windows driver, and there is none: **no `.inf` in the set drives a touch
+controller on either bus.** `IC11` is the bus, not the touch.
+
+### The UART's name does not encode its slot, and venus settles it
+
+The corpus names engine nodes after their slots and truncates to keep within ACPI's four
+characters: `I2C2` through `I2C9`, then `IC10`; `UAR8`, then `UR19` and `UR21` for
+two-digit slots. The exception is the debug UART, and it is an exception the corpus proves
+twice:
+
+- lisa's `UARD` has `_UID 6` and `_STR "QUP_0_SE_5,DBG"` — a debug-tagged UART at slot 6,
+  named `UARD` and not `UAR6`.
+- venus's `UARD` has `_UID 4` and `_STR "QUP_0_SE_3,DBG"` — a debug-tagged UART at slot 4,
+  named `UARD` and not `UAR4`, and its `_UID` is `8 * 0 + 3 + 1 = 4`, so the arithmetic
+  holds for the DBG case exactly as for the others.
+
+gauguin's UART is the slot 2 engine and it is the console: `chosen/bootargs` carries
+`androidboot.console=ttyMSM0`, and this is the only enabled UART in the tree. So the node
+is `UARD` with `_UID 2` and `_STR "QUP_0_SE_1,DBG"` — the family's name for the role, and
+the slot in the number. lisa's `UARD` adds a `GpioInt` on `\_SB.GIO0` pin `0x17` to its
+memory and interrupt; gauguin's tree carries no pin for this line, so none was written.
+lisa's `UAR8` is hidden from the UI (`_STA` returns `0x0B`, present but not shown);
+gauguin's is not, because a serial port is the one thing here Windows should be allowed
+to show, and it is the only engine in this step whose bus is not I2C.
+
+### What was written
+
+Three nodes, added between the closes of `GIO0` and the `IC13` comment block, each the
+same shape as `IC13`:
+
+```asl
+Device (IC10)   QCOM0A10  _UID 0x0A  _STR "QUP_1_SE_1"   0x984000 + 0x4000  INTID 0x182
+Device (IC11)   QCOM0A10  _UID 0x0B  _STR "QUP_1_SE_2"   0x988000 + 0x4000  INTID 0x183
+Device (UARD)   QCOM0A16  _UID 0x02  _STR "QUP_0_SE_1,DBG" 0x884000 + 0x4000  INTID 0x27A
+```
+
+`_DEP` is omitted on all three for the third time, on the same reason: every engine in the
+family depends on `\_SB.PEP0` and this table has none, so the reference would not resolve.
+No child devices were written, for the same reason the SPI engines were withheld — the
+slaves on `IC10` (`cs35l41`), on `IC11` (`focaltech`, `nq`) and on `IC13` (the charger
+cluster) have no driver in the set either, and a child with no driver is an unknown
+device. The bus is what Windows needs to enumerate anything; the slaves are four lines
+each the day a driver exists.
+
+### Read back from the artifact
+
+`tools/make_uefi_platform.py` and `tools/sync-uefi-platform.sh` were run and all three
+copies of the ASL are at md5 `f01d50afd392c40ae2d8e4a47feaab6c` (from `8a50a8f3…`). The
+source compiles with **0 errors, 24 warnings, 32 remarks**.
+
+| | Step 4.69 | Step 4.70 |
+|---|---|---|
+| `DSDT.aml` | 2,465 bytes, `b9e70ee6…65a3df6` | **2,833 bytes**, `a98c1a98095f77e2a1dde01cefe99b9a91ae6af1926f7fed5053353581f5af5b` |
+| DSDT checksum | valid | valid (`0x3C`) |
+| devices in the table | 19 | 22 (`IC10`, `IC11`, `UARD` added, none removed) |
+| `SSDT` `APIC` `FACP` `FACS` `GTDT` | — | byte-identical, sha256 for sha256 |
+| `FVMAIN` free | 3,904 | 3,536 (used 7,352,880 of 7,356,416) |
+| `FVMAIN_COMPACT` | 1,092,752 used, 2,052,976 free | 1,092,864 used, **2,052,864 free** |
+| inner `FVMAIN` | 7,356,416 bytes | 7,356,416 bytes, `6e820374…ecae78` |
+
+The delta is exactly the three nodes and nothing else: disassembling both tables and
+diffing them gives 72 added lines, **0 changed and 0 removed**, and 72 is 3 × 24, the size
+of one of these nodes. The build tree's `DSDT.aml` and the table read back out of the
+payload hash identically, `a98c1a98…f5af5b`, so the `.aml` that `iasl` produced is the
+`.aml` in the image.
+
+Payloads in `work/out/p2-4.70/`, all three matching GenFv's map on 123 offsets and GUIDs
+with zero mismatches:
+
+| variant | bytes | sha256 |
+|---|---|---|
+| `Mu-gauguin-silicon-gzip.img` | 1,142,784 | `d495a4aafc7f24a232400688191cbfb0746031c3c1839f6c61fbe69aec4c8f2e` |
+| `Mu-gauguin-stock-gzip.img` | 1,150,976 | `484804c98ad0f78e9586bc69b5f3b2a7d0fa7da05a46ba67c8ea2b76f6190d74` |
+| `Mu-gauguin-stock-none.img` | 3,248,128 | `9c6ee1f978e2028c64519ccc174c8f9a9880f888bbf06a54e4aaee3470fba61e` |
+
+`tools/probe-fingerprint.py --expect P2FreeWhy` returns rc=0 with all ten instruments
+present, as it did for 4.69.
+
+### The driver set, read as a checklist
+
+The coverage check is `tools/acpi-hid-census.py --asl tools/acpi/gauguin.asl --drivers
+~/work/woa-ref/inf-7280 --bind`, and it now reports the table's own ids against the set:
+
+| | 4.69 | 4.70 |
+|---|---|---|
+| `_HID`/`_CID` declarations in the ASL | 19 | **22** |
+| distinct ids among them | 12 | **13** |
+| devices whose id a driver in the set claims | 6 | **9** |
+| not claimed | 2 — `QCOM0A8B` (`URS0`), `QCOM24A5` (`UFS0`) | the same 2 |
+
+`QCOM0A10` is now carried by three devices and `QCOM0A16` by one. The tool's own
+explanatory sentence named "UFS and the UART" as the unclaimed pair — written when both
+were unclaimed — and this step corrected it to stop repeating an example that had gone
+stale the moment the thing it named was fixed.
+
+### Honest limitations
+
+- **Nothing was fixed on the device.** Six engines were measured, three nodes were
+  written, and no hardware works that did not work before. `p2-variants` is still the
+  payload in `boot`, its panel reading is still owed, and the rule is unchanged:
+  **先读屏，再刷下一次**.
+- **Two live engines are described but not declared.** The SPI engine at slot 1 and the
+  one at slot 12 have no driver in any of the five driver trees on this host. If the
+  touch or the IR blaster is ever to work, the missing piece is a driver and not a node.
+- **The touch is on the I2C bus and still needs a driver.** No `.inf` in the set drives a
+  touch controller at all, so `IC11` is the prerequisite and not the feature. The same is
+  true of the NFC controller, the audio amplifiers and the whole charger cluster.
+- **The charger slave is still unidentified.** Unchanged from Step 4.69 and not touched
+  here: the CRD's `IC11` `Scope` addresses I2C `0x76` and nothing on gauguin's
+  `i2c@990000` is at `0x76`.
+- **The UART's pin is not known, so its `_CRS` has one resource fewer than lisa's.** lisa's
+  `UARD` declares a `GpioInt` on `GIO0` pin `0x17`; gauguin's tree carries no pin for the
+  line, and the pin was not invented.
+- **The `,DBG` suffix is measured and the `,Shared` question is not.** The UART is the
+  console, so `,DBG` is read off `chosen/bootargs`. Whether `i2c@990000`'s `qcom,shared`
+  should have put `,Shared` on `IC13`'s `_STR` is exactly as open as it was in Step 4.69,
+  and this step did not move it.
+- **`_UID` is still a derivation.** Unchanged from Step 4.69: the rule fits every node in
+  the corpus but is not stated anywhere, and what is measured on gauguin is the engine
+  index, four ways. A wrong slot number that is still unique changes only the device
+  instance name, because the INF binds `ACPI\QCOM0A10` and not an instance path.
+- **Wrapper 0's engine 0 is `spi@880000`, and the payload's tree still says otherwise.**
+  The board wins here, and the disagreement is recorded rather than repaired: nothing in
+  this repo owns `work/out/gauguin.dts`, which is regenerated from the kernel build.
+
+### What this step was
+
+The engines the board leaves running are six and the ids Windows can bind are two of the
+four QUP blocks. Three nodes follow from those two facts, and the two engines left out
+follow from the same search that produced them. The part worth carrying forward is not the
+nodes: it is that the board's own tree answers the questions this repo had been answering
+from the corpus — the GSI ladder, the engine index, the protocol of each engine, and which
+of two trees to believe — and that the only question left on this path, the charger
+slave's identity, is one the board's tree is not going to answer either.
