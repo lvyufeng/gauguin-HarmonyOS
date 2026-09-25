@@ -252,7 +252,15 @@ def load_driver_set(directory):
 # one this file happens to use. `_CID` is read too: a node is bound by either.
 ASL_HID = re.compile(r'Name \(_([HC]ID), (?:"(?:EisaId \(")?|EisaId \(")'
                      r'([^"]+)"')
-ASL_DEVICE = re.compile(r"^\s*Device \(([A-Z0-9_]{4})\)")
+ASL_DEVICE = re.compile(r"^\s*(?:Device|ThermalZone) \(([A-Z0-9_]{1,4})\)")
+# `ThermalZone` is in that alternation and not left out, because it is a
+# different AML opcode rather than a synonym for `Device` (Step 4.73). Left
+# out, every zone's `_HID` was attributed to the last `Device` textually above
+# it, which until Step 4.74 was harmless-looking and after it was `IPCC` - a
+# label naming a node the id does not belong to. The length is 1-4 and not
+# exactly 4 for the same reason: `TZ0`-`TZ9` are three characters, so a
+# four-character name would have fixed the ten zones above nine and left the
+# first ten still labelled `IPCC`.
 
 
 def strip_asl_comments(lines):

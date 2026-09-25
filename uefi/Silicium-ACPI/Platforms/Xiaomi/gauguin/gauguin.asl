@@ -2301,6 +2301,89 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
             }
         }
 
+        // IPCC - the inter-processor communication controller, which is the one
+        // device PEP0's own _DEP names and therefore the first link of the chain
+        // every remaining _DEP in the family begins with. Unlike the last four
+        // steps this node is not short of a source; it has two, and they
+        // disagree, and the disagreement is decidable.
+        //
+        // The board: mailbox@408000, compatible "qcom,sm6350-ipcc" then
+        // "qcom,ipcc", reg = <0x00 0x408000 0x00 0x1000>, and
+        // interrupts = <0x00 0xe4 0x04> - one line, whose INTID is 0xE4 + 32 =
+        // 0x104, with the type cell 4 that this file converts to Level,
+        // ActiveHigh on every other node.
+        //
+        // The corpus: 12 of the 66 tables declare an IPCC, under three ids -
+        // QCOM06C2 in seven (lisa, a52sxq, Cedros, Kailua twice, Waipio,
+        // renoir), QCOM1AC2 in four (lemonade, Lahaina, venus, vili) and
+        // QCOM25C2 once (alioth) - and all three carry Name (_UID, Zero) and
+        // Alias (\_SB.PSUB, _SUB). Only one of the three ids is reachable here:
+        // qcipcc7280.inf claims ACPI\QCOM06C2 outright, and claims no other
+        // IPCC id, so the id is the driver's as usual and the family that
+        // shares it is gauguin's own pair.
+        //
+        // What the two disagree about is the _CRS, and the corpus disagrees
+        // with itself there as well. All 12 write the triple 0x105, 0x106,
+        // 0x107; seven add 0x2EA; and the trigger is Edge in the QCOM06C2
+        // variant and Level in the QCOM1AC2 one. Three of those four facts
+        // resolve against copying:
+        //
+        //   * the numbers cannot be gauguin's, and this is provable rather
+        //     than merely doubtful. Step 4.72 measured this board's GPU SMMU at
+        //     0x105, 0x107 and 0x18C-0x193 from the board's own interrupt
+        //     cells - MMU1's first global line and one of its context banks sit
+        //     on two of the three numbers the corpus would give the IPCC. One
+        //     GIC line has one owner, so the triple is not this board's, and
+        //     the board's own single 0x104 is what the node takes.
+        //   * 0x2EA is in one variant and not the other, so it is a leaf line
+        //     and not part of the block.
+        //   * the trigger: the corpus's two variants disagree with each other,
+        //     which leaves the board's cell as the only third opinion, and it
+        //     says Level, which sides with QCOM1AC2. This is the second time in
+        //     this file that a trigger has been decided against a corpus
+        //     majority - 4.72 recorded the SMMU pair's Edge against this
+        //     board's Level for the same kind of reason - and the two cases are
+        //     worth keeping apart: there the corpus was unanimous and the board
+        //     was the lone dissent, here the corpus splits and the board breaks
+        //     the tie.
+        //
+        // One line where the corpus has three or four is the honest form of
+        // this node and not a truncation: the board's node carries exactly one
+        // interrupt, and this file has written what the board carries since
+        // Step 4.70 - the two SPI engines were withheld for the opposite
+        // reason, a driver and not a resource, and are still withheld.
+        //
+        // There is no _DEP. No IPCC in the corpus carries one, and the
+        // dependency runs the other way: PEP0's _DEP is Package (One) {
+        // \_SB.IPCC }, so this node is what that reference resolves to on the
+        // day PEP0 is written. It is also the reason PEP0 has stayed out of
+        // this table - its _DEP was a one-entry package naming a device the
+        // table did not have, and it now has one fewer such reference.
+        //
+        // Not written, and noted for PEP0's own step rather than here: PEP0's
+        // _SUB compares \_SB.PSUB against "IDP07280" and "CRD07280" and returns
+        // whichever matched, falling off the end otherwise. This board's PSUB
+        // is "MTP07225" - it is the MTP of SM7225 - so on this table that
+        // method has no branch to take, which is a defect in the method and not
+        // in the value.
+        Device (IPCC)
+        {
+            Name (_HID, "QCOM06C2")  // _HID: Hardware ID
+            Alias (^PSUB, _SUB)  // _SUB: Subsystem ID
+            Name (_UID, Zero)  // _UID: Unique ID
+            Method (_CRS, 0, NotSerialized)  // _CRS: Current Resource Settings
+            {
+                Name (RBUF, ResourceTemplate ()
+                {
+                    Interrupt (ResourceConsumer, Level, ActiveHigh, Exclusive, ,, )
+                    {
+                        0x00000104,
+                    }
+                })
+                Return (RBUF) /* \_SB_.IPCC._CRS.RBUF */
+            }
+        }
+
         // The first thirteen thermal zones, and the family this table's zone
         // ids belong to - which the driver set decides rather than the SoC.
         //

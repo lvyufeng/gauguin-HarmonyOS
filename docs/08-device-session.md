@@ -13260,3 +13260,185 @@ and a device carrying thermal methods is invisible in the size, the opcode count
 the compiler's report, and visible only when the artifact is disassembled. The
 thirteen nodes are the family's thirteen cheap zones; the four groups left are the
 ones that need devices this table has not got, and one of them is the modem.
+
+## Step 4.74
+
+Step 4.73's list of withheld nodes ran through the thermal zones and ended where
+every other list in this file has ended for four steps: `PEP0`. The thermal zones
+`_DEP` on it, the engines `_DEP` on it, the SMMUs `_DEP` on it, and it is the one
+device that all of them are waiting for and none of them can be written without.
+This step does not write `PEP0` either. It writes the node `PEP0`'s own `_DEP`
+names - `IPCC` - which is the first link of that chain and, unlike most of what has
+been written recently, is not short of a source.
+
+### IPCC has two sources and they disagree, decidable
+
+The board's node is small and complete: `mailbox@408000`, `compatible` =
+`"qcom,sm6350-ipcc"` then `"qcom,ipcc"`, `reg = <0x00 0x408000 0x00 0x1000>`, and
+
+```
+interrupts = <0x00 0xe4 0x04>
+```
+
+one line, whose INTID is `0xE4 + 32` = **`0x104`**, with the type cell 4 this file
+converts to `Level, ActiveHigh` on every other node it has written.
+
+The corpus has 12 IPCCs across the 66 tables, under three ids:
+
+| id | tables | who |
+|---|---|---|
+| `QCOM06C2` | 7 | lisa, a52sxq, Cedros, Kailua ×2, Waipio, renoir |
+| `QCOM1AC2` | 4 | lemonade, Lahaina, venus, vili |
+| `QCOM25C2` | 1 | alioth |
+
+and all 12 carry `Name (_UID, Zero)` and `Alias (\_SB.PSUB, _SUB)`. Only one of the
+three ids is reachable: **`qcipcc7280.inf` claims `ACPI\QCOM06C2` outright** and
+claims no other IPCC id, so the id is the driver's as usual - and the family that
+shares it is gauguin's own pair, lisa and a52sxq, which is the third step running in
+which that pair has been decisive.
+
+Where they disagree is the `_CRS`, and the corpus also disagrees with itself there.
+All 12 write the triple `0x105`, `0x106`, `0x107`; seven add `0x2EA`; and the
+trigger is `Edge` in the `QCOM06C2` variant and `Level` in the `QCOM1AC2` one.
+Three of those four facts resolve against copying, and one of them resolves
+*provably*:
+
+- **The numbers cannot be this board's.** Step 4.72 measured gauguin's GPU SMMU at
+  `0x105`, `0x107` and `0x18C`-`0x193` from the board's own interrupt cells -
+  MMU1's first global line and one of its context-bank lines sit on two of the
+  three numbers the corpus would give the IPCC. One GIC line has one owner, so
+  copying the triple would have produced a table in which two devices claim the
+  same two interrupts. The board's own single `0x104` is what the node takes.
+- **`0x2EA` is in one variant and not the other**, so it is a leaf line rather than
+  part of the block, and this board has no such line anywhere.
+- **The trigger**: the corpus's two variants disagree with each other, which leaves
+  the board's cell as the only third opinion, and it says `Level`, siding with
+  `QCOM1AC2`. This is the second trigger decided against the corpus in this file
+  and the two cases are worth keeping apart: in 4.72 the corpus was *unanimous*
+  (`Edge` on all 1,400 SMMU descriptors) and the board was the lone dissent; here
+  the corpus splits and the board breaks the tie. A unanimous corpus is evidence
+  about the family; a split corpus is evidence about nothing.
+
+One line where the corpus has three or four is the honest form of this node rather
+than a truncation: the board's node carries exactly one interrupt, and since Step
+4.70 this file writes what the board carries. The two SPI engines are withheld for
+the opposite reason - a missing driver rather than a missing resource - and are
+still withheld.
+
+### What the node unblocks, and what it deliberately does not have
+
+There is no `_DEP` on `IPCC`, and that is not this step's rule about one-entry
+dependencies being a shape no table has. **No IPCC in the corpus carries a `_DEP`,
+and the dependency runs the other way**: `PEP0`'s is `Name (_DEP, Package (One)) {
+\_SB.IPCC }`, so this node is what that reference resolves to. It also removes one
+of the reasons `PEP0` has stayed out of this table - its `_DEP` named a device the
+table did not have, and it now has one fewer such reference. What `PEP0` still
+needs is `ABD`'s `ROP1` region, `AGR0`, the four `?PRF` methods' `DPP0`/`DPP1`/
+`MPP0`/`MPP1`, the six subsystem `_STA` tests inside its `_DSM`, and - the part
+this step measured and left standing - its `_SUB`.
+
+That `_SUB` is a defect and it is recorded here rather than in `PEP0`'s own step
+because it is a fact about this board. In all 12 tables it is:
+
+```
+Method (_SUB, 0, NotSerialized)
+{
+    If ((\_SB.PSUB == "IDP07280")) { Return ("IDP07280") }
+    ElseIf ((\_SB.PSUB == "CRD07280")) { Return ("CRD07280") }
+}
+```
+
+Two branches, no `Else`, no trailing `Return`. gauguin's `PSUB` is `"MTP07225"` -
+it is the MTP of SM7225 - so on this table the method has no branch to take and
+falls off the end returning nothing. That is a defect in the method and not in the
+value: the corpus's PSUB is per-board (`lisa` = `"IDP07280"`, `a52sxq` = one of the
+other two), and a method that enumerates two of the family's board names has
+already decided it knows every board. When `PEP0` is written, its `_SUB` either
+takes its third branch or drops the method.
+
+### What was verified
+
+- `iasl`: **AML 5,280 bytes**, 238 opcodes, 332 named objects, **0 Errors**, 24
+  Warnings, 42 Remarks, 106 Optimizations - the two extra remarks over 4.73 are the
+  `Alias` and the `_CRS`'s local `RBUF`, both of which every corpus IPCC produces.
+- The delta against 4.73 is exactly the one node: 5,210 → 5,280 bytes, 237 → 238
+  opcodes, 326 → 332 named objects, 39 devices → 40.
+- `SSDT`, `APIC`, `FACP`, `FACS` and `GTDT` are **byte-identical sha256 for
+  sha256** with 4.73's - a sixth consecutive step, and this time checked against
+  the same table rather than assumed: the first pass reported all four as changed
+  and the diff was in the comparison, not in the tables, because the scanner was
+  comparing the offsets the size change had shifted. Comparing content alone, all
+  four are identical.
+- The DSDT read back out of the payload at FVMAIN offset **`0x54d4c8`** - the same
+  offset again - hashes `41ed014369c3d79eef4b267646e26f1e8986ef2d5d1ec126359332b26f93f52e`,
+  which is the `iasl` output to the byte, and the table sums to zero mod 256.
+- All three payloads match GenFv's map at 123 offsets and GUIDs, zero mismatches;
+  `probe-fingerprint.py --expect P2FreeWhy` returns 0 with all ten instruments.
+- The census reads 40 `_HID`/`_CID` declarations, **26 distinct, 24 claimed**, and
+  the two unclaimed are the same two: `QCOM0A8B` (UFS) and `QCOM24A5`.
+- `FVMAIN` is still `0x704000` with 1,096 bytes of block slack, and
+  `FVMAIN_COMPACT` took this step's 70 bytes of new AML without moving off
+  1,089,206 - which is the block-rounding correction of 4.73a holding up rather
+  than being asserted again.
+
+### The payload set, and where the control went
+
+The three images were built from this step's volume and are:
+
+| image | bytes | sha256 |
+|---|---|---|
+| `Mu-gauguin-silicon-gzip.img` | 1,142,784 | `90b21643e3450c326fb3d24baf64d58d4692a5d155c36b76d2e020ff04a96b59` |
+| `Mu-gauguin-stock-gzip.img` | 1,150,976 | `e693e1a0bd7f3c5f302175e16f9eda596036a89c0b8437d035d621d1ece0de08` |
+| `Mu-gauguin-stock-none.img` | 3,248,128 | `26919861097d0f8662c94264844c73d8cf4abc8a2b497ddc32c7decaa821eaad` |
+
+They are in `work/out/p2-4.74`, **and they are also what is in `work/out/p2-variants`** -
+both directories were written from the same `SILICIUM_UEFI.fd` and the two are
+byte-identical in all three files. That is worth stating because it was read the
+other way round first: `p2-variants` is the directory `build-p2-payloads.sh` writes
+by default, so it was taken to be the older build still sitting there, and the plan
+was to overwrite it. It is not older. The DSDT dumped out of
+`p2-variants/Mu-gauguin-stock-none.img` is at FVMAIN `0x54d4c8`, is 5,280 bytes and
+hashes `41ed0143…` - this step's table, not 4.73's. Rebuilding the set into
+`/tmp/p2-verify` produced **three byte-identical images**, which is what makes the
+provenance a measurement rather than a reading of timestamps.
+
+The 4.73 set is not lost: it is in `work/out/p2-4.73`, and its DSDT is
+`ff492bef347825a846b03469a15fce2679ecdfe85003e1bf35f2845e79c1d639` at the same
+`0x54d4c8`. So the rule this repo keeps relearning - *the payload on the phone is
+the control, and a build that overwrites it destroys the comparison it exists for* -
+was not broken here, because the set `p2-variants` was overwritten with is archived
+under `p2-4.73`. What is genuinely still owed is the readback: the device has been
+absent from this host for the whole of this step, so what is in the phone's `boot`
+partition has not been read, and **先读屏，再刷下一次** is still the gate before any
+of these three goes near it.
+
+### A tool defect this step exposed, in the tool that counts the claims
+
+After the node was written the census printed the thirteen zones as
+`IPCC (line 2454)`, `IPCC (line 2463)` and so on. The count was right and the
+labels were wrong: `bind_asl` tracks the innermost `Device (` above each `_HID`
+with a regex that matched `Device` only, so a `ThermalZone` was not a scope to it
+and every zone inherited whatever `Device` was textually last. Before this step
+that was `CPU0` or a QUP engine - already wrong, and wrong in a way that looked
+like a plausible answer. This step put `Device (IPCC)` immediately above the zones,
+so the same defect started naming a node that had just been written, for ids that
+have nothing to do with it.
+
+The fix is one alternation and one quantifier: `(?:Device|ThermalZone)`, and a name
+of `{1,4}` characters rather than `{4}`, because `TZ0`-`TZ9` are three characters
+and the first attempt at the fix relabelled the four-character `TZ10`-`TZ13` while
+leaving `TZ0`-`TZ9` still reading `IPCC`. Nothing about the counts moved - 40
+declarations, 26 distinct, 24 claimed, the same two unclaimed - because the defect
+was in the label and not in the tally. It is recorded because the whole of Step 4.73
+turned on the fact that `ThermalZone` is not a `Device`, and a tool in this repo was
+still treating it as one.
+
+### What this step was
+
+A small node with a clean decision in it. The interesting part is not `IPCC`: it is
+that the corpus's own two variants disagree about the trigger and the corpus's
+numbers collide with a resource this table measured four steps ago, so the node
+could be written from the board with the corpus used only for the id and the shape.
+That is the same split 4.71 and 4.73 arrived at from opposite directions, and it is
+the first time a *provable* collision - not a preference, not a board-wins rule -
+settled which of two sources to take.
