@@ -13620,3 +13620,178 @@ which is unreachable by design and the other two of which are not in this table.
   describe this source, and rebuilding them would produce different bytes for the
   usual reason (`__DATE__`/`__TIME__` in `Sec.efi`) without describing different
   firmware.
+
+---
+
+## Step 4.76 — six ids for one device, and the one a driver takes
+
+### What this step was
+
+`SCM0` is named by `PMAP`'s `_DEP` alongside `PMIC` and `ABD`, and `PMAP` is what
+`PRTC` is waiting on. So this is the last of a chain of three referents: `PMIC` is
+Step 4.63's, `ABD` is 4.75's, and with `SCM0` written a `PMAP` `_DEP` has all three of
+its entries present in this table. That is the reason to write it now and it is not
+the only reason — `\_SB.SCM0` is a dependency of `PMAP` in 20 corpus tables, `MON0` in
+19, `ARPC` in 19, `NSPM` twice and `VFE0` twice, so it is a hub and not a leaf, and
+what it unblocks is more than the one node that led here.
+
+The node itself is four names. What is not small is the id, and this is the step where
+the way this file decides an id had to change shape.
+
+### Six ids for one device, and the first time the spread is the argument
+
+Every step since 4.63 has decided an id the same way: the corpus offers a set, a
+shipped `.inf` claims one of them, take the claimed one. Usually the claimed one is
+also the majority, and the agreement is worth noting and nothing more.
+
+The corpus gives `SCM0` **six** ids across its 21 declarations:
+
+| id | tables |
+|---|---|
+| `QCOM04DD` | 9 — lemonade, a52sxq, lisa, renoir, Cedros, Kailua ×2, Lahaina, Waipio |
+| `QCOM050B` | 5 — mh2, cepheus, nabu, pipa, vayu |
+| `QCOM05DD` | 3 — alioth, venus, vili |
+| `QCOM080B` | 2 — a52q, miatoll |
+| `QCOM0214` | 1 — caymanslm |
+| `QCOM140B` | 1 — surya |
+
+and **exactly one of the six is claimed by any `.inf` in the five driver trees on this
+host** — `QCOM04DD`, by `qcscm.inf`. The majority is 9 of 21. So the usual reading
+inverts: this is not the driver set agreeing with a majority, it is five ids with no
+driver at all, and the driver's answer is the only answer that has a driver behind it.
+The corpus's spread stops being a vote to be counted and becomes the reason the
+question has only one answer.
+
+The same-SoC table is the sharpest part, and it is a repeat. **a52q is SM7225 and
+writes `QCOM080B`, and `QCOM080B` is one of the five nothing claims.** That is Step
+4.73's family-`08` finding — the same table, the same conclusion — arriving from a
+different device and therefore independently. Two devices on one table both writing an
+id no driver binds is not a coincidence in the corpus; it is what that table is.
+
+`QCOM04DD` is also exclusive to this device: nine occurrences in the corpus and every
+one of them is `SCM0`, so there is no second node anywhere sharing the id.
+
+`qcscm.inf` names the device for itself — **"Qualcomm(R) System Manager SCM
+Device"** — and the rest of the file is consistent with a device that is not on any
+bus: class SYSTEM, service type 1 (`SERVICE_KERNEL_DRIVER`) at `SERVICE_SYSTEM_START`,
+`LoadOrderGroup "Extended Base"`, shipping `qcscm.sys` and `SCMF.bin`, KMDF 1.33,
+`PnpLockDown = 1`. Its registry section asks ACPI for nothing — the `WfdBuffer*` and
+`UsrShmMem*` parameters are the driver's own — so there is nothing on the ACPI side
+this node owes the driver beyond the id.
+
+### The shape, and the exception that agrees with `ABD`'s
+
+Eight of the nine `QCOM04DD` tables are byte-identical:
+
+```
+Device (SCM0) { Name (_HID, "QCOM04DD") Name (_DEP, Package (0x01) { \_SB.PEP0 })
+                Alias (\_SB.PSUB, _SUB) Name (_UID, Zero) }
+```
+
+and Waipio is the ninth, differing in the same two ways it differs on `ABD`: no `_DEP`
+at all, and `_SUB` written as a method returning `\_SB.PSUB` instead of an `Alias`.
+Waipio is still the only table in the corpus with no `PEP0` anywhere. So the two nodes
+this port has written back to back agree about their odd table, which is worth more
+than either agreement on its own — a single exception could be that table's habit; two
+exceptions with the same cause in the same table is that table telling the truth about
+what it does not have.
+
+`_STA` is written, for `ABD`'s reason and on the same evidence: two of the 21 carry
+one, Waipio's and vili's, and both return `0x0F`, while the nineteen that omit it are
+present by ACPI default. `_UID` is `Zero` in all 21, so there is one instance.
+
+The corpus writes `Alias (\_SB.PSUB, _SUB)` and this node writes the relative `^PSUB`
+the other fifteen nodes here use. The two are the same reference from depth 1 —
+`SCM0` is `\_SB.SCM0` in all 21 declarations, and `PSUB` is `\_SB.PSUB` — and the
+check that they are is the disassembler, which renders all sixteen in this table as
+`Alias (PSUB, _SUB)` with no distinction.
+
+### The `_DEP` that the corpus leaves open
+
+`ABD`'s `_DEP` was near-universal: 19 of 21 tables wrote it, and the two that did not
+were Waipio and one other. `SCM0`'s is not like that, and this is the first node here
+where the corpus does not settle the question by itself:
+
+| | `_DEP` present | `_DEP` absent |
+|---|---|---|
+| `PEP0` present | 11 | 9 |
+| `PEP0` absent | 0 | 1 |
+
+The implication is exact in all 21 — every table that names `\_SB.PEP0` has a `PEP0`,
+and the one table without a `PEP0` is the one table without a `_DEP`. But 11 of the 20
+tables that *do* have a `PEP0` still omit the entry: a bare majority of 11 against 9,
+on a device that would work either way.
+
+For this table the answer is unchanged, because gauguin has no `PEP0` and the entry
+would name a device this table has not got. What changes is the recording. On `ABD`
+the `_DEP` was withheld and the corpus agreed; here it is withheld and the corpus does
+not decide, so the reason has to be stated as the thing it actually is — the referent
+is missing — rather than as "the family omits it". Those are different claims with the
+same conclusion, and the second one would be wrong.
+
+### Why there is no `_CRS`, and why that is a fact about the device
+
+None of the 21 declarations has a `_CRS`, and gauguin's own device tree agrees by
+carrying nothing one could be built from:
+
+```
+scm {
+    compatible = "qcom,scm-sm6350", "qcom,scm";
+    #reset-cells = <1>;
+};
+```
+
+No `reg` and no `interrupts`. This is not a gap in the tree: the SCM is a
+secure-monitor call interface, and there is no MMIO block and no interrupt line to
+describe. The carve-out from the usual rule — that a missing resource is a missing
+measurement — is that here the absence is corroborated from the board's side rather
+than only from the corpus's, which is the standard every node in this table is held
+to.
+
+The node is also worth one note about where it lives: it is in the **SoC dtsi**
+(`sm6350.dtsi`), not in the board file, so it is a property of every SM6350/SM7225
+board and gauguin inherits it unchanged. The board file has nothing to add to it,
+which is the same reason there is nothing for a `_CRS` to describe.
+
+### What was verified
+
+- `iasl`: **5,411 bytes**, **243 opcodes**, **345 named objects**, 0 Errors, 24
+  Warnings, 42 Remarks, 108 Optimizations. Against 4.75's 5,364 / 242 / 340 the delta
+  is +47 bytes, +1 opcode, +5 named objects, and the named objects are the five
+  expected: the node itself plus `_HID`, `_SUB`, `_UID` and `_STA`.
+- **The disassembly diff is a clean statement of the delta**: eleven added lines
+  inside `Device (SCM0)`, plus the two header lines that always change (length and
+  checksum), **0 changed and 0 removed**. Nothing else in the table moved by a byte,
+  which is the check that the node was added rather than the table re-derived.
+- The three copies — source, generated `uefi/`, installed `work/uefi/Mu-Silicium/` —
+  have the same md5 `868b127e5888ac3eca8e815be20f818d`.
+- The DSDT read back out of the built FD at FVMAIN offset `0x54d4c8` is 5,411 bytes
+  and hashes `7ec0c8c1…2c4713`, the same as the compile. Sixth step at the same
+  offset.
+- **`SSDT`, `APIC`, `FACP`, `FACS` and `GTDT` content-identical to 4.75's, an eighth
+  consecutive step.** `APIC` `93bafa3b9318910e`, `GTDT` `723f7568abd1aa7e`, `SSDT`
+  `b388c764d05d5f96`, `FACP` `f8fa4839f1cbac2a`, `FACS` `8a2f3c6d08a63700`.
+- `FVMAIN.Fv` is still `0x704000` (`7,356,416`), sha
+  `38ccda3e95cca3f7e333f9832f7103dd221598db6b8528808ef112b82c1fd20a`.
+  `FVMAIN_COMPACT` is at 1,093,232 of its `0x300000` cap, which is 4,026 bytes more
+  than 4.75's 1,089,206 for 47 more bytes of AML — that is the compressor responding
+  to a changed input everywhere downstream of the edit, not a measurement of the
+  delta, and it is recorded as such so the number is not read as one later.
+- The three payloads are `dcf4b1d5…` (silicon/gzip), `3152a8ec…` (stock/gzip) and
+  `681a7d9c…` (stock/none). All three match GenFv's map at **123 offsets and GUIDs,
+  zero mismatches**, all three return rc=0 from `probe-fingerprint.py --expect
+  P2FreeWhy`, and `fv-inventory.py --acpi` on one of them reports six tables with the
+  DSDT at `0x0054d4c8`, 5,411 bytes, checksum valid. They are archived in
+  `work/out/p2-4.76`.
+- `work/out/p2-variants` **still holds the 4.74 set** — `90b21643…`, `e693e1a0…`,
+  `26919861…` — because `P2DIR` was set to a scratch directory. That matters more than
+  it sounds: 4.74's own recording ended by observing that `p2-variants` is the default
+  output directory and is therefore the thing a later build overwrites, and this is
+  the first build since then, so it is the first test of whether that was fixed by
+  habit or by attention. The 4.74 control now survives in two places.
+- The census: **`QCOM04DD` claimed by `inf-7280/qcscm.inf`, bound to `SCM0`** (line
+  2538), 42 `_HID`/`_CID` declarations and 28 distinct, **26 claimed**, with the same
+  two unclaimed as in every step since 4.70 — `QCOM0A8B` (UFS) and `QCOM24A5`.
+- The device is absent from this host throughout — `adb devices` and `fastboot devices`
+  both empty — so nothing here is a hardware reading. The payload in `boot` is still
+  the **4.74** set and its panel reading is **still owed** under 先读屏，再刷下一次.

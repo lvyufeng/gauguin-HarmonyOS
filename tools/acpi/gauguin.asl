@@ -2445,7 +2445,107 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
             }
         }
 
-        // IPCC - the inter-processor communication controller, which is the one
+        // SCM0 - the Secure Channel Manager, the firmware-call interface that
+        // sits on no bus and has no window, and the node PMAP's _DEP names
+        // beside PMIC and ABD. It is written here rather than with PMAP because
+        // it is the third of PMAP's three dependencies and the last one this
+        // table was missing: PMIC is Step 4.63's, ABD is the node above, and
+        // until this one lands a _DEP for PMAP has an entry it cannot write.
+        // It is also wider than PMAP: across the corpus \_SB.SCM0 is named by
+        // PMAP in 20 tables, MON0 in 19 and ARPC in 19, plus NSPM twice and
+        // VFE0 twice, so this is a hub and not a leaf, and the reason to write
+        // it is the number of things that will later name it.
+        //
+        // The driver: qcscm.inf, "Qualcomm(R) System Manager SCM Device", class
+        // SYSTEM, a kernel-mode service at SERVICE_SYSTEM_START (service type
+        // 1, LoadOrderGroup "Extended Base"), shipping qcscm.sys and SCMF.bin,
+        // KMDF 1.33, PnpLockDown = 1. It binds ACPI\QCOM04DD and claims no
+        // other ACPI id, and its registry section asks ACPI for nothing - the
+        // WfdBuffer* and UsrShmMem* parameters are its own.
+        //
+        // The id is the interesting part, and it is the strongest form of the
+        // rule this file has been running on since Step 4.63. The corpus gives
+        // this one device SIX ids across 21 declarations:
+        //
+        //   QCOM04DD  9 tables (lemonade, a52sxq, lisa, renoir, Cedros, Kailua
+        //             twice, Lahaina, Waipio)
+        //   QCOM050B  5 (mh2, cepheus, nabu, pipa, vayu)
+        //   QCOM05DD  3 (alioth, venus, vili - the third of which also carries
+        //             the _STA that makes it a second shape below)
+        //   QCOM080B  2 (a52q, miatoll)
+        //   QCOM0214  1 (caymanslm)
+        //   QCOM140B  1 (surya)
+        //
+        // and exactly one of the six is claimed by any .inf in the five driver
+        // trees on this host - QCOM04DD, by the file above. So this is not a
+        // case of the driver set agreeing with a majority: five of six ids have
+        // no driver at all, and the majority is only 9 of 21. The previous
+        // steps could still be read as the corpus and the driver set agreeing
+        // most of the time; here the corpus's own spread is the argument for
+        // taking the driver's answer, and only that. Note which id the same-SoC
+        // table writes - a52q, SM7225, writes QCOM080B, and QCOM080B is one of
+        // the five nothing claims. That is Step 4.73's finding a second time,
+        // and on the same table.
+        //
+        // QCOM04DD is also exclusive to this device: nine occurrences in the
+        // corpus and every one of them is SCM0, so there is no question of two
+        // nodes sharing the id.
+        //
+        // The shape is ABD's shape, and this step is the second place the pair
+        // of exceptions shows up in the same order. Eight of the nine QCOM04DD
+        // tables are byte-identical: _HID, _DEP = Package (One) { \_SB.PEP0 },
+        // Alias (\_SB.PSUB, _SUB), Name (_UID, Zero), and nothing else. Waipio
+        // is the ninth and differs the same two ways it differs on ABD - no
+        // _DEP at all, and _SUB written as a method returning \_SB.PSUB - and
+        // it is also the only table in the corpus with no PEP0. So the two
+        // nodes agree about their odd table, which is worth more than either
+        // agreement alone.
+        //
+        // The _DEP is not written, and here the corpus leaves it more open than
+        // it did for ABD. Across the 21 declarations the dependency is present
+        // in 11 and absent in 10, and split by its referent the implication is
+        // exact in all 21: every table that names \_SB.PEP0 has a PEP0, and the
+        // one table that has no PEP0 is also the one with no _DEP. But 11 of
+        // the 20 tables that DO have a PEP0 still omit the entry - it is a bare
+        // majority, 11 against 9, and SCM0 is the first node here where the
+        // corpus would leave the choice genuinely open on a board that had a
+        // PEP0. That does not change this table's answer, because gauguin has
+        // no PEP0 and the entry would name a device this table has not got; it
+        // changes how the answer is recorded, which is as a fact about the
+        // referent and not as a fact about what the family does.
+        //
+        // _STA is written for ABD's reason: two of the 21 carry one and both
+        // return 0x0F - Waipio and vili - and the nineteen that omit it are
+        // present by ACPI default, so the method costs one line and removes the
+        // ambiguity about whether the omission was a decision.
+        //
+        // No _CRS, and here that is a fact about the device rather than about
+        // the corpus: none of the 21 declarations has one, and gauguin's own
+        // device tree agrees by carrying nothing to build one from - scm {
+        // compatible = "qcom,scm-sm6350", "qcom,scm"; #reset-cells = <1>; } -
+        // with no reg and no interrupts, because the SCM is a secure-monitor
+        // call interface and not an MMIO block. The node is in the SoC dtsi
+        // rather than in the board file, so it is a property of every
+        // SM6350/SM7225 board and gauguin inherits it unchanged; the board file
+        // has nothing to add to it, which is the same reason there is nothing
+        // for a _CRS to describe.
+        //
+        // The corpus writes Alias (\_SB.PSUB, _SUB); this node writes the
+        // relative ^PSUB the other nodes here use. The two are the same
+        // reference from depth 1 - SCM0 is \_SB.SCM0 in all 21, and PSUB is
+        // \_SB.PSUB - and the relative spelling is this file's.
+        Device (SCM0)
+        {
+            Name (_HID, "QCOM04DD")  // _HID: Hardware ID
+            Alias (^PSUB, _SUB)  // _SUB: Subsystem ID
+            Name (_UID, Zero)  // _UID: Unique ID
+            Method (_STA, 0, NotSerialized)  // _STA: Status
+            {
+                Return (0x0F)
+            }
+        }
+
+
         // device PEP0's own _DEP names and therefore the first link of the chain
         // every remaining _DEP in the family begins with. Unlike the last four
         // steps this node is not short of a source; it has two, and they
