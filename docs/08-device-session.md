@@ -13206,21 +13206,48 @@ is not evidence that the ACPI object is the object the spec names.
 - The census reads 39 `_HID`/`_CID` declarations, 25 distinct, **23 claimed, 2
   unclaimed** - and the two are unchanged.
 
-### The space, which is now the binding constraint
+### The space, and a correction
 
 `FVMAIN` was at 2,376 bytes free as of 4.72. This step added 1,216 bytes of file
 area and it is now **1,160 bytes free of 7,356,416 (`0x704000`)** - the DSDT is the
 last section of its `AcpiTables` file and the file grew in place, shifting the five
-FFS files behind it. `FVMAIN_COMPACT` is at 1,089,206 used and **2,056,522 free** of
-its `0x300000` cap, so the compressed side is not the problem; the uncompressed
-inner volume is, and it has room for roughly one more node of this size.
+FFS files behind it.
 
-That is worth stating as a fact about the next step rather than a worry about this
-one: the PMIC group alone is three nodes with a `_DSM` apiece and a `_CRS`, and it
-does not fit. Whatever comes next in this phase either stays under about a thousand
-bytes of AML, or the file area is re-cut - which means changing the `FDF`'s
-`FVMAIN` size and the `0x704000` cap with it, and that is its own step with its own
-measurement, not a side effect of writing zones.
+This step's first draft read that number as a cap and drew a conclusion from it -
+that the next zone group would not fit, and that the file area would have to be
+re-cut. **That was wrong, and the correction matters more than the number did.**
+`[FV.FvMain]` in `gauguin.fdf` declares `NumBlocks = 0` and `BlockSize = 0x1000`,
+which means GenFv sizes the volume to its contents and rounds the total up to the
+next 4 KB block; `0x704000` is that rounding for the content this step produced, and
+the "free space" is the slack to the next block boundary, not headroom in a fixed
+region. It regenerates every time the content crosses a boundary.
+
+The experiment that settles it took one build: a throwaway `Device` carrying 150
+64-byte named buffers - about 4 KB of extra AML, and **1,216 bytes of it lands in
+the same `AcpiTables` file, so the same `+1,216` growth as this step's real change** -
+was compiled in and the volume came out at **7,360,512 (`0x705000`)**, one block
+bigger, the same slack in front of it. The probe was then removed and the volume
+returned to 7,356,416 with `FVMAIN.Fv` sha256 `e202996eab15b3fe215d7b04ee1691da17e057f2c0dc828075ab6ea8c7f8d33a`,
+which is the hash this step's payloads were built from, so the tree is back to the
+committed state and the measurement costs nothing.
+
+The real cap is one level out: `FVMAIN_COMPACT` is a fixed `0x300000` region
+(`[uefi_fd] size = 0x300000` in `Resources/Configs/gauguin.toml`), it holds the
+compressed `FVMAIN` inside a `GUIDED` section, and it is at 1,089,206 used and
+**2,056,522 free**. This step is one measurement of how fast that moves: 1,216 bytes
+of new `FVMAIN` compressed to 271 bytes of new `FVMAIN_COMPACT` (1,088,935 → 1,089,206),
+a ratio of 0.22. Taken at face value - one step's ratio, not a law - the free
+`FVMAIN_COMPACT` bytes correspond to something on the order of **9 MB** of further
+`FVMAIN` content. Nothing in this phase is close to that, and the honest statement
+of the constraint is therefore: the volume is nowhere near full, the number that
+looked like a cap was block rounding, and the thing to watch is `FVMAIN_COMPACT`'s
+2,056,522 free bytes against a shrink ratio near 0.22.
+
+The lesson is the same shape as the `ThermalZone` one above it and worth keeping for
+the same reason: `fv-inventory.py` reports bytes to the end of the last FFS file, and
+the very next thing done with that number was to treat the distance to the volume's
+*reported* size as a budget. A derived quantity was read as a declared one. The
+instrument was right and the inference was wrong.
 
 ### What this step was
 
