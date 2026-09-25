@@ -1901,7 +1901,7 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
         // the board state identically. Its id is the platform-prefix form every
         // node in this file already carries: QCOM0A0B at SPMI, QCOM0A0C at GIO0,
         // QCOM0A0D at IPC0, QCOM0A09 at both MMUs, QCOM0A10 at the three QUP
-        // wrappers, QCOM0A16 at UARD, QCOM0A2B/2C/2D at PMIC, PMAP and PM01.
+        // wrappers, QCOM0A16 at UAR2, QCOM0A2B/2C/2D at PMIC, PMAP and PM01.
         // The prefix 0A is this platform's and the suffix is the device. Not
         // every id in a table carries it - the subsystem services (QCOM06E0 at
         // PILC, 06E1 at RPEN, 06DC at TFTP, 06C2 at IPCC), the storage
@@ -2322,28 +2322,129 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
         // DBG-tagged UART UARD and that UART is at _UID 6; venus names its
         // DBG-tagged UART UARD as well and that one is at _UID 4, so the suffix
         // is a name for the role and the _UID is still the slot - venus's is
-        // 8 * 0 + 3 + 1 for its _STR "QUP_0_SE_3,DBG". gauguin's is the slot 2
-        // engine, _STR "QUP_0_SE_1", so UARD with _UID 2. That it is the debug
-        // UART is not a guess: chosen/bootargs carries androidboot.console=
-        // ttyMSM0, and this is the only enabled UART in the tree. Its GSI comes
-        // from interrupts-extended, whose first entry <0x1 0 0x25a 4> gives
-        // 0x25A + 32 = 0x27A; the second entry is on phandle 0xc1, the PDC, and
-        // is the wake path rather than an interrupt resource to publish. lisa's
-        // UARD declares a GpioInt on \_SB.GIO0 pin 0x17 in addition to the
-        // memory and the interrupt; gauguin's tree does not carry a pin for
-        // this line, so none is written. The engine is not _STA-hidden the way
-        // lisa's UAR8 is (it returns 0x0B, present but not shown); a serial
-        // port is the one thing here Windows should be allowed to show.
+        // 8 * 0 + 3 + 1 for its _STR "QUP_0_SE_3,DBG".
+        //
+        // The role is not this engine's. Of the 48 QUP engine nodes the corpus
+        // carries, four are tagged ",DBG" - lisa's and venus's UARDs above,
+        // a52sxq's and alioth's - and ten are tagged ",4W,BT": lisa's and
+        // a52sxq's UAR8, alioth's UAR7, renoir's and Cedros's UAR8, Kailua's
+        // UR15 in both its tables, venus's UR21, and lemonade's and Lahaina
+        // MTP's UR19. lisa carries one of each and they are two engines, UARD
+        // at QUP_0_SE_5 and UAR8 at QUP_0_SE_7, so the family writes the debug
+        // port and the four-wire port as two nodes. This board has one of the
+        // two, and the readings below name which.
+        //
+        // The board's own fields say four-wire. gauguin's only enabled GENI
+        // UART is qcom,qup_uart@884000, and it carries compatible
+        // "qcom,msm-geni-serial-hs", the high-speed serial, which is the
+        // compatible the family's Bluetooth-over-UART shape uses; a
+        // pinctrl-names of "default", "active" and "sleep", three states where
+        // both console nodes this board declares have two; and a pin group,
+        // qupv3_se1_4uart_pins, of five sub-groups - default_ctsrtsrx,
+        // default_tx, ctsrx, rts and tx - where those two consoles' groups hold
+        // active and sleep and nothing else. It also carries qcom,wakeup-byte =
+        // <0xfd>. Its interrupts-extended first entry <0x1 0 0x25a 4> gives the
+        // GSI 0x25A + 32 = 0x27A; the second is on phandle 0xc1, the PDC, the
+        // wake path rather than a resource to publish.
+        //
+        // The corpus says the same from the other side. Every four-wire UART it
+        // carries is the dependency of a Bluetooth node: lisa's UAR8, a52sxq's
+        // UAR8, alioth's UAR7 and venus's UR21 are each named in their table's
+        // BTH0 _DEP, which reads {PEP0, PMIC, UAR8} in lisa's shape, in all ten
+        // of them - and the shape is not the tag's, since nine further tables
+        // write the same three entries around a port with no ,4W suffix, so all
+        // nineteen BTH0s in the corpus name their own table's UART that way.
+        // This table has no BTH0 - the board's Bluetooth is a SLIMbus
+        // device, wcn3990 under slim@3ac0000 with compatible
+        // "qcom,btfmslim_slave" and status "ok", powered by the bt_wcn3990 node
+        // with its four rails - so the port here has no dependent to name, and
+        // the payload's tree is not disagreeing about the module when it hangs
+        // a bluetooth child on serial@884000 (compatible "qcom,wcn3988-bt",
+        // max-speed = <0x30d400>): it is the same module over the other of its
+        // two host interfaces. A step that writes Bluetooth starts from one of
+        // those two.
+        //
+        // The console is somewhere else, and four readings agree on where. Both
+        // trees' aliases name serial0 at the 98c000 node; the payload's tree
+        // gives serial@98c000 compatible "qcom,geni-debug-uart", status "okay"
+        // and chosen/stdout-path "serial0:115200n8"; the board's own tree gives
+        // that address compatible "qcom,msm-geni-console" and names it serial0
+        // in its aliases too; and the firmware names one UART path in its
+        // strings, /soc/qcom,qup_uart@98c000 beside /soc/spi@98c000, in both
+        // its PE and its volume image. The board disables that node all the
+        // same, because the SE under it is the IR blaster's SPI - the
+        // disagreement the engine list above already records for spi@98c000,
+        // recorded again here and not repaired. So the console this table could
+        // name sits on the SPI engine's SE, and androidboot.console=ttyMSM0,
+        // which the boot image's cmdline carries, names a kernel console device
+        // and not an engine: it decides nothing here.
+        //
+        // So the node is written as what the board enables and not as what the
+        // family calls the role. The name is the slot, and the slot is the
+        // engine's SE number plus one: the CRD's I2C1 is its wrapper 0 SE 0 and
+        // takes _UID One, and the eight-per-wrapper form the I2C engine below
+        // derives, _UID = 8 * wrapper + SE index + 1, is that same rule on an
+        // SoC whose wrappers carry eight SEs. This engine's SE number is 1 - the
+        // board's own alias block writes qupv3_se1_4uart for 0x884000 - so
+        // 1 + 1 = 2, and UAR2 is that number in the family's own UART form, which
+        // is the prefix and the _UID in all ten of the four-wire tables. The
+        // lowest UAR number the corpus carries is 4, so this exact name is
+        // derived and not witnessed; the form is witnessed ten times, and the
+        // _STR carries no tag, the way 32 of those 48 corpus nodes do.
+        //
+        // The eight-per-wrapper form is not this board's, and the three
+        // wrapper-1 nodes below are the ones it gets wrong. Measured over the
+        // corpus it fits all nineteen of the tagged engine nodes in wrapper 0 and
+        // seventeen of the twenty-seven at wrappers 1 and 2, and the ten that do
+        // not fit sit in six tables whose tags contradict the addresses of the
+        // same table's other nodes - alioth's "QUP_2_SE_1" sits at 0x884000,
+        // below its own "QUP_0_SE_1" at 0x984000. gauguin's wrappers count six:
+        // the board numbers 0x980000 through 0x990000 qupv3_se6 through
+        // qupv3_se10, the SoC's own tree agrees (i2c6, i2c7, i2c8, uart9, i2c10),
+        // and wrapper 1's GPI DMA masks six channels (0x3f). So 0x984000 is SE 7
+        // and not the ten the ladder gives it, 0x988000 is SE 8 and not 11, and
+        // 0x990000 is SE 10 and not 13: those three _UIDs, and the IC10, IC11
+        // and IC13 names that follow them, are each two too high. The correction
+        // is measured here and not applied - it renames three devices and is a
+        // step of its own, named for the next one.
+        //
+        // _STA is left out on purpose, and the family's practice is split by
+        // role rather than uniform. All thirteen UARDs are visible - twelve
+        // write no _STA and surya's writes 0x0F - while the four-wire ports are
+        // mostly hidden: sixteen of the twenty-one UAR and UR nodes return
+        // 0x0B, present but not shown, including both of this generation's
+        // QCOM0A16, lisa's UAR8 and a52sxq's, and the three that write no _STA
+        // at all are alioth's UAR7 and pipa's UR14 and UR20, while the two that
+        // return 0x0F are cepheus's UR18 and surya's UAR4. The hiding tracks the
+        // claimant, and the claimant is measurable: nineteen tables in the
+        // corpus carry a BTH0 and in all nineteen its _DEP is
+        // {PEP0, PMIC, <that table's own UART>} - the ten ,4W,BT ports and nine
+        // untagged ones - and sixteen of those nineteen hide the port while
+        // three, alioth's and the two QCOM1418 tables', show it. This board's
+        // Bluetooth is on SLIMbus and not on this engine, so there is nothing
+        // here for Windows to collide with and no role the hiding would serve.
+        //
+        // The relation sets the comments below cite were measured again over the
+        // four-wire ports, since that is the role this node now claims, and they
+        // hold: the UART precedes PILC, RPEN, GLNK, TFTP and IPC0 in 10 of 10,
+        // is followed by QGP0 in 8 of 8 and QGP1, MMU0, MMU1 and SCM0 in 10 of
+        // 10 each, and precedes IC10 and IC11 in 2 of 2 each - the last the one
+        // relation this file breaks, already charged to IC10 below. The three
+        // sites that cited the UART read "UARD (13 of 13)" and "UARD (13)"
+        // before - the debug name's own node count - and read "the four-wire
+        // ports (10 of 10)" and "(10)" now; the counts standing beside them are
+        // relations about other nodes and did not change. The role change moves
+        // no slot, and the corrected counts are written there.
         //
         // qcuart7280.inf claims QCOM0A16, so this node has a driver, and it is
         // the only engine written in this step whose bus is not I2C.
-        Device (UARD)
+        Device (UAR2)
         {
             Name (_HID, "QCOM0A16")  // _HID: Hardware ID
             Alias (^PSUB, _SUB)
             Name (_UID, 0x02)  // _UID: Unique ID
             Name (_CCA, Zero)  // _CCA: Cache Coherency Attribute
-            Name (_STR, Unicode ("QUP_0_SE_1,DBG"))  // _STR: Description String
+            Name (_STR, Unicode ("QUP_0_SE_1"))  // _STR: Description String
             Method (_CRS, 0, NotSerialized)  // _CRS: Current Resource Settings
             {
                 Name (RBUF, ResourceTemplate ()
@@ -2357,7 +2458,7 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
                         0x0000027A,
                     }
                 })
-                Return (RBUF) /* \_SB_.UARD._CRS.RBUF */
+                Return (RBUF) /* \_SB_.UAR2._CRS.RBUF */
             }
         }
 
@@ -2532,11 +2633,11 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
         // and CDI immediately after in 19 of 19, so this node is the second member
         // of a run - RPEN, PILC, CDI, SCSS, ADSP, SLM1, ADCM, AUDD - that no table
         // ever splits. Neither neighbour is here, so the slot comes from the
-        // relations this file can check: UARD (13 of 13), IC10 (9 of 9) and IC11
-        // (3 of 3) precede it, and MMU0, MMU1 and SCM0 (19 of 19 each), IPCC
-        // (10 of 10), QGP0 (17) and QGP1 (19) follow it. Every one of those nine
-        // is satisfied by the slot below, and no later slot is: between QGP1 and
-        // MMU0 the two QGP relations break instead. Six further relations are
+        // relations this file can check: the four-wire ports (10 of 10), IC10
+        // (9 of 9) and IC11 (3 of 3) precede it, and MMU0, MMU1 and SCM0 (19 of
+        // 19 each), IPCC (10 of 10), QGP0 (17) and QGP1 (19) follow it. Every
+        // one of those nine is satisfied by the slot below, and no later slot
+        // is: between QGP1 and MMU0 the two QGP relations break instead. Six further relations are
         // unsatisfiable in any slot, because this file placed UCS0, URS0, USB0,
         // UFN0, SPMI and GIO0 earlier than the corpus's order has them while the
         // corpus puts all six after PILC - SPMI, URS0, USB0, UFN0 and GIO0 in 19
@@ -2626,7 +2727,8 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
         //
         // So the slot is fixed by the node after it, which is already here.
         // Fifteen relations agree with it. Before: UFS0, DEV0, ABD, PMIC and PM01
-        // (21 of 21 each), PMAP and PRTC (20), UARD (13), PML0 (11) and IC10 (9).
+        // (21 of 21 each), PMAP and PRTC (20), the four-wire ports (10), PML0
+        // (11) and IC10 (9).
         // After: PILC (19 of 19), QGP1 and SCM0 (21), QGP0 (19) and IPCC (12).
         // Six relations no slot can satisfy, and they are the same six PILC's
         // comment now records: UCS0 (10 of 10), URS0, USB0, UFN0 and GIO0 (20
@@ -2749,7 +2851,9 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
         //   UFN0       19    at position 6; likewise
         //   SPMI       12    at position 7; corpus puts it after SCM0
         //   GIO0        7    at position 13; corpus puts it after SPMI
-        //   IC10        1    before UARD; corpus puts UARD first, 9 of 9
+        //   IC10        1    before UAR2; corpus puts the UART first, 9 of 9
+        //                    by the debug name and 2 of 2 for the four-wire
+        //                    ports, and this node is the four-wire one
         //   QGP0       10    at position 22; corpus puts it after CPU7
         //   QGP1       10    at position 23; likewise
         //   MMU0 MMU1   4    at positions 24 and 25; corpus puts the pair
@@ -3038,7 +3142,8 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
         //
         // Position, and it is forced by two relations rather than fixed by many.
         // Before: UFS0, DEV0, ABD, PMIC and PM01 (21 of 21 each), PMAP and PRTC
-        // (20), UARD (13), PML0 (11), IC10 (9) and IC11 (3), and then the two
+        // (20), the four-wire ports (10), PML0 (11), IC10 (9) and IC11 (3), and
+        // then the two
         // nodes above - RPEN (21 of 21) and PILC (19 of 19). After: QGP0 (19 of
         // 19) and QGP1 (21 of 21), then CPU0 to CPU3 (21 each) and CPU4 to CPU7
         // (19 each). All twenty-three of those unanimous relations are satisfied
@@ -3102,8 +3207,10 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
         // protocol - 1 on the two SPI engines and 3 on the three I2C engines -
         // which is one more statement of which protocol sits at each slot, and
         // it is read here and not decoded. The fourth and fifth are 0x40 and 0
-        // in all ten specifiers. The UART has no dmas property at all; it is
-        // the console and runs in FIFO mode.
+        // in all ten specifiers. The UART has no dmas property at all - it is
+        // the wrapper-0 four-wire port and runs in FIFO mode - and it was
+        // called the console here until Step 4.86 read the two console nodes
+        // the board declares and found this one is not either of them.
         //
         // Those two _DEPs are also the corpus's cleanest statement of the rule
         // this table has been built on, and it is worth the four lines. lisa's
@@ -3173,19 +3280,36 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
         // third in both tables, so the family's _DEP is not a uniform statement
         // about this hardware and is not a complete one either: gauguin's dmas
         // put all five live engines on a controller where the family records
-        // three. The family attaches a third kind of entry to the UART - both
-        // tables' UARD carries {PEP0, GIO0}, the GPIO controller the console's
-        // two pins live on - so an engine's _DEP in this family can name three
-        // different things for three different reasons. This table therefore
-        // writes no engine _DEP at all, for the same reason the IC nodes above
-        // do not: every family shape here needs PEP0, which is absent, and
-        // GIO0, the one reference this table could resolve, is not written
-        // alone because the resulting entry would be the only one there and
-        // the family's every engine _DEP has two or three. (Not for the size:
-        // Step 4.75 measured one-entry _DEPs in the corpus - ABD's in 19 of 21
-        // tables. An entry is un-writable when its referent is missing, and
-        // GIO0's is not, so this one is a preference about ordering and is
-        // recorded as one.)
+        // three.
+        //
+        // The UARTs take the same kind of entry and a shorter one. Across the 34
+        // UART nodes the corpus carries, 31 write _DEP {PEP0} alone - lisa's
+        // UARD and UAR8, a52sxq's, alioth's, and the rest of the family - three
+        // write {PEP0, MMU0}, the UAR4 of a52q, miatoll and surya and the only
+        // UART _DEP in the corpus with two entries, and none writes none at all.
+        // Six of the 31 write the package width as One rather than 0x01 -
+        // caymanslm's two and pipa's four - which is how a first pass here,
+        // reading only 0xNN widths, came to count six nodes as having no _DEP
+        // before Step 4.86 re-read them. GIO0 never appears in one. This file
+        // said it did - "both tables' UARD carries {PEP0, GIO0}" stood here until
+        // Step 4.86 counted the 34 - and what named GIO0 was the GpioInt in the
+        // UART's _CRS, which 30 of the 34 carry, lisa's UAR8 on pin 0x1F and
+        // lisa's UARD on 0x17, the four that do not being pipa's UARD, UR14,
+        // UR18 and UR20. A _CRS resource is not a dependency, and the
+        // correction is recorded rather than quietly made. GIO0 does carry _DEP
+        // entries elsewhere in the family - {PEP0, GIO0, SPI1} in three tables,
+        // {GIO0, I2C4} in three, {AFT1, GIO0, IC10} in one - so the reference
+        // would be writable here, this table having declared GIO0 as its twelfth
+        // device. It is not written because every UART shape the family writes
+        // begins with PEP0, which is absent.
+        //
+        // This table therefore writes no engine _DEP at all, for the same reason
+        // the IC nodes above do not: every family shape here needs PEP0, which
+        // is absent, and the entries the family writes beside it - GIO0's today,
+        // MMU0's since Step 4.72 - are the family's second and third entries
+        // rather than entries of their own. One alone would be a shape no engine
+        // in the corpus writes. That is a preference about the shape and is
+        // recorded as one, not a claim that the entry is un-writable.
         // The consequence is worth stating rather than hiding - qci2c7280.inf
         // and qcgpi7280.inf are both in the Windows driver set, so once those
         // two bind, nothing in this table orders the GPI DMA ahead of the

@@ -11974,6 +11974,19 @@ family calls a device `"I2C" + _UID` up to 9 and `"IC" + _UID` from 10. That is 
 `I2C2`, `I2C4`, `I2C5`, `I2C9`, `IC10`, `IC11`, `IC14` — every engine name in the corpus
 and nothing else, no exceptions.
 
+*(Step 4.86 measured this again over the corpus as it stands — 46 tagged engine nodes,
+of which the ladder fits all nineteen in wrapper 0 and seventeen of the twenty-seven at
+wrappers 1 and 2 — and re-read it as **the `_UID` is the engine's SE number plus one**,
+the eight-per-wrapper form being that rule on an SoC whose wrappers carry eight SEs.
+gauguin's carry six: the board numbers `0x980000` through `0x990000` `qupv3_se6` through
+`qupv3_se10`. So gauguin's wrapper-1 engines are SE 7, 8 and 10 where this ladder writes
+10, 11 and 13, the three wrapper-1 nodes the file writes are each two too high, and the
+correction is that step's successor. lisa's and a52sxq's numbers above are unaffected —
+their wrappers are eight wide — but the sentence "slot 11 is whatever the board wired to
+wrapper 1's engine 2" is a lisa-shaped reading of gauguin: on gauguin that engine, still
+`i2c@988000` and still the one at GSI `0x183`, is slot 9. See that step's "The name: the
+slot and not the role".)*
+
 So `IC11` is not a name for a bus that carries a known set of chips. It is the family's
 name for *slot 11*, and slot 11 is whatever the board wired to wrapper 1's engine 2.
 
@@ -15813,6 +15826,13 @@ a SLIMbus node at all. Writing `BAM5` would reserve `0x32000` of address space a
 GSI `0xC4` on the strength of another die's layout — the same ground on which `SP1`
 and `SP12` were withheld. So `BAM5` waits on the ADSP, which is also owed.
 
+*(Two of those grounds are corrected in Step 4.86: the board tree this step read
+was not the board's own base device tree, which was extracted into
+`/tmp/basedtb/` a little over an hour after this step was committed, and that tree
+carries both addresses and the SLIMbus. The rest of the paragraph — the ADSP
+address, the two kernel `.dtsi` files, the withheld decision — stands. See that
+step's “A second correction this step carries”.)*
+
 `BAME` and `BAMF`, the other two the `QCOM0A0A` tables carry, are in the same
 position and for the same reason: `0x06064000`/`0x15000`/GSI `0xC7` and
 `0x0A704000`/`0x17000`/GSI `0xA4`, neither address present anywhere on this host.
@@ -15944,3 +15964,335 @@ dependency was.
   reading. The payload in `boot` is still the **4.74** set and its panel reading is
   **still owed** under 先读屏，再刷下一次. Step 4.85 changes the payload in
   `work/out/p2-4.85` and not the one on the device.
+
+## Step 4.86 — the engine the board enables and not the role the family names, and the family's practice read a second time
+
+### What this step was
+
+Wrote no node and added no id. Corrected **device 15**, the UART at `0x884000`
+that Step 4.70 wrote: the node is `UAR2` and not `UARD`, its `_STR` is
+`"QUP_0_SE_1"` and not `"QUP_0_SE_1,DBG"`, and both of the paragraphs that argued
+it was the debug console were wrong — one about the board it was read from, one
+about the family whose practice it cited.
+
+So this is a correction and not a placement, and the file's order does not move:
+the node keeps `_UID 0x02`, the same `_CRS` and its slot between `IC11` and
+`IC10`. What moves is what the file claims about it. Three of the four results
+below were not available when 4.70 wrote it, and the fourth — the family's `_STA`
+practice — stood in the file backwards.
+
+### Four readings put the console at `98c000`, and the one 4.70 used decides nothing
+
+4.70 called `884000` the console on one reading: `androidboot.console=ttyMSM0`,
+which `part-boot.img`'s cmdline carries. That names a kernel console device and
+not a GENI engine, so it decides nothing about which node the firmware's console
+is. Four readings that do decide agree on `98c000`:
+
+- Both trees' `aliases` name `serial0` at that node — the board's tree as
+  `/soc/qcom,qup_uart@98c000`, the payload's as
+  `/soc@0/geniqup@9c0000/serial@98c000`.
+- The payload's tree gives `serial@98c000` `compatible =
+  "qcom,geni-debug-uart"`, `status = "okay"`, and `chosen/stdout-path =
+  "serial0:115200n8"`.
+- The board's own tree gives that address `compatible = "qcom,msm-geni-console"`.
+- The firmware names exactly one UART path in its strings —
+  `/soc/qcom,qup_uart@98c000` beside `/soc/spi@98c000` — in both `abl_pe.bin` and
+  `abl_volume.bin`, and mentions neither `884000` nor `984000` anywhere.
+
+The board disables that node all the same, because the SE under it is the IR
+blaster's SPI. That is the board-versus-payload disagreement this file already
+records for `spi@98c000`; it is recorded here again and not repaired.
+
+### The board's fields say four-wire, and they say it in five ways
+
+The board's tree declares three `qcom,qup_uart` nodes, and every field separates
+them the same way:
+
+| | `884000` | `984000` | `98c000` |
+|---|---|---|---|
+| `compatible` | `qcom,msm-geni-serial-hs` | `qcom,msm-geni-console` | `qcom,msm-geni-console` |
+| `reg` length | `0x4000` | `0x4000` | `0x4000` |
+| `pinctrl-names` | `"default", "active", "sleep"` | `"default", "sleep"` | `"default", "sleep"` |
+| `pinctrl-0`/`-1`/`-2` | 2 + 3 + 3 phandles | 1 + 1 | 1 + 1 |
+| interrupt | `interrupts-extended = <0x1 0 0x25a 4 0xc1 0x40 4>` | `interrupts = <0 0x162 4>` | `interrupts = <0 0x164 4>` |
+| `qcom,wrapper-core` | `0x185` | `0x193` | `0x193` |
+| `qcom,wakeup-byte` | `0xfd` | — | — |
+| `status` | `"ok"` | `"disabled"` | `"disabled"` |
+
+and the pin groups separate them the same way. `qupv3_se1_4uart_pins` holds five
+sub-groups — `default_ctsrtsrx` on gpio 61, 62 and 64, `default_tx` on gpio 63,
+then `ctsrx` on 61 and 64, `rts` on 62 and `tx` on 63, the last three muxed to
+`qup01` — which is the whole four-wire set of cts, rts, rx and tx on four pins;
+`qupv3_se7_2uart_pins` and `qupv3_se9_2uart_pins` hold an `active` and a `sleep`
+and nothing else.
+
+Three of those are claims about the role. `qcom,msm-geni-serial-hs` is the
+high-speed serial compatible, not the console's. A third `pinctrl-names` state is
+what a port with flow control needs, where a console has two. And
+`qcom,wakeup-byte` is a byte the port can be woken by, which a console does not
+need. The interrupt converts to the node's GSI, `0x25A + 32 = 0x27A`, and its
+second entry is on phandle `0xc1`, the PDC — the wake path rather than a resource
+to publish. So the engine this board leaves enabled is the four-wire port, and it
+sits on wrapper `0x185` where both consoles sit on wrapper `0x193`.
+
+### The corpus says the same from the other side, and the claimant is measurable
+
+Every `,4W,BT`-tagged UART in the corpus is the dependency of a Bluetooth node,
+in all ten of them. Nineteen tables carry a `BTH0`, and in all nineteen its `_DEP`
+is `{PEP0, PMIC, <that table's own UART>}` — lisa's reads `{PEP0, PMIC, UAR8}` —
+so the shape belongs to the role and not to the tag: the other nine of the
+nineteen name a port that carries no `,4W` suffix. This table has no `BTH0` at all.
+
+The board's Bluetooth is a SLIMbus device and not a serial one: `slim@3ac0000`,
+`compatible "qcom,slim-ngd"`, `status = "ok"`, with the child `wcn3990`
+(`compatible "qcom,btfmslim_slave"`, `elemental-addr = [00 01 20 02 17 02]`) and
+the rail node `bt_wcn3990` (`compatible "qca,wcn3990"`, four `qca,bt-vdd-*`
+rails). The payload's tree is not disagreeing about the module when it hangs a
+`bluetooth` child on `serial@884000` — `compatible "qcom,wcn3988-bt"`,
+`max-speed = <0x30d400>`: that is the same module over the other of its two host
+interfaces. A step that writes Bluetooth starts from one of those two, and
+neither is this node.
+
+### The family's `_STA` practice is the inverse of what the file said
+
+The file said the debug port is the one Windows should be allowed to show and the
+four-wire port the one to leave hidden, and cited lisa's `UAR8` returning `0x0B`
+as the example of the hiding it was declining — a four-wire port, since lisa
+carries one `UARD` and one `UAR8` and they are two engines. Measured over all 34
+UART nodes the corpus carries, the practice is split by role and runs the other
+way:
+
+| role | nodes | `_STA` |
+|---|---|---|
+| `UARD` | 13 | twelve write none — the ACPI default, present and shown — and surya's writes `0x0F` |
+| `,4W,BT` | 10 | nine write `0x0B`, present but not shown; alioth's `UAR7` writes none |
+| untagged `UAR`/`UR` | 11 | seven write `0x0B`; two write `0x0F`, cepheus's `UR18` and surya's `UAR4`; two write none, pipa's `UR14` and `UR20` |
+
+So sixteen of the twenty-one non-`UARD` nodes return `0x0B`, and the file's
+"seventeen of the twenty-two" was wrong in both numbers — the corpus carries 21
+non-`UARD` UART nodes and not 22, and 16 of them hide rather than 17.
+
+And the hiding tracks the claimant: of the nineteen tables with a `BTH0`,
+sixteen hide the port their own Bluetooth node depends on, and the three that
+show it are alioth's (which writes no `_STA`) and the two `QCOM1418` tables'.
+So the family's rule reads as "hide the port a Bluetooth claimant sits on", and
+this board's claimant is not there — it is on SLIMbus. That is why `_STA` is left
+out here: not because the port is a console, which it is not, but because the
+reason the family hides it does not exist on this board.
+
+### The `_DEP` census, and a first pass that invented six nodes with none
+
+The second falsehood was in the same region. The file claimed that both tables'
+`UARD` carries `_DEP {PEP0, GIO0}` — the GPIO controller the console's two pins
+live on. Counted across all 34 UART nodes:
+
+- **31 write `_DEP {PEP0}` alone**, and six of those write the package width as
+  `One` rather than `0x01` — caymanslm's two and pipa's four.
+- **3 write `{PEP0, MMU0}`** — the `UAR4` of a52q, miatoll and surya, the only
+  two-entry UART `_DEP` in the corpus.
+- **None writes none.** Every UART node in the corpus has a `_DEP`.
+- **`GIO0` appears in no UART `_DEP` anywhere.**
+
+What named `GIO0` was the `GpioInt` in the UART's `_CRS`, which 30 of the 34
+nodes carry — lisa's `UAR8` on pin `0x1F`, lisa's `UARD` on `0x17` — and a `_CRS`
+resource is not a dependency.
+
+The intermediate reading this step first took, "25 write `{PEP0}` and six write
+none", was itself an artifact: it matched only `Package (0xNN)` widths, and so
+read the six `Package (One)` nodes as having no `_DEP` at all. Both counts were
+measured again before the build and the second is the one written into the file.
+
+The correction is recorded rather than quietly made, and `GIO0` would still be
+writable if it were wanted: this table declares `GIO0` as its twelfth device, and
+the family does carry `GIO0` in `_DEP`s elsewhere — `{PEP0, GIO0, SPI1}` in three
+tables, `{GIO0, I2C4}` in three, `{AFT1, GIO0, IC10}` in one. It is not written
+because every UART shape the family writes begins with `PEP0`, which is absent.
+
+### A second correction this step carries, about 4.85's ground and not its conclusion
+
+4.85 withheld `BAM5` and recorded why: its number is fully determined, but its
+only corroboration was another die — `sc7280`'s `slimbam@3a84000` — because "none
+of `0x03A84000`, `0x03AC0000` or a SLIMbus" was in any tree it could read, and
+the two trees it named by hand, `sm6350.dtsi` and `sm7225.dtsi`, declare neither
+(checked again here: zero matches for `slim`, `3ac0000` or `3a84000` in either).
+
+The board's own base device tree was not among the trees it could read. That set
+was split out of the stock `part-boot.img`'s dtb region at **13:40** on
+2026-09-25 into `/tmp/basedtb/00.dtb`–`11.dtb`, and 4.85 was committed at
+**12:28** — the extraction is later than the step that says the board does not
+have these things. `08.dts`, the board's tree, carries:
+
+```
+slim@3ac0000 {
+    compatible = "qcom,slim-ngd";
+    reg = <0x3ac0000 0x2c000 0x3a84000 0x2a000>;
+    reg-names = "slimbus_physical", "slimbus_bam_physical";
+    interrupts = <0x00 0xa3 0x04 0x00 0xa4 0x04>;
+    interrupt-names = "slimbus_irq", "slimbus_bam_irq";
+    status = "ok";
+    wcn3990 { compatible = "qcom,btfmslim_slave"; ... };
+};
+```
+
+So both addresses 4.85 said were absent are on the board — `0x03AC0000` as the
+SLIMbus engine and `0x03A84000` as its BAM — and the BAM's interrupt is
+`0xa4 + 32 = 0xC4`, which is the GSI 4.85 took from the corpus and could
+corroborate only on `sc7280`. Its consumer is the same module this step's UART
+reading found: the `wcn3990` child, whose Bluetooth is the reason 4.85 went
+looking for the SLIMbus in the first place.
+
+One field still disagrees: the board writes the BAM's length as `0x2a000` where
+the ten corpus tables sharing that prefix write `0x32000`. Nothing is written for
+`BAM5` here and the decision remains a later step's; what this corrects is the
+*ground* of 4.85's record, which was the trees that existed at 12:28 and not the
+board's. This is the same tree this step's four-wire evidence comes from.
+
+### The name: the slot and not the role
+
+`_UID` stays `0x02`, and the ladder that gives it is the one the file already
+derives one engine below: `_UID = 8 * wrapper + SE index + 1`, so
+`8 * 0 + 1 + 1`. The name is that number in the family's UART form — the prefix
+plus the decimal `_UID` — and the four-wire role does not change the form: the ten
+`,4W,BT` ports are `UAR7`, `UAR8`, `UR15`, `UR19` and `UR21`, each the number in
+its own `_UID`. The lowest `UAR` number the corpus carries is 4, so `UAR2` itself
+is derived and not witnessed; the form is witnessed ten times, and the `_STR`
+carries no tag, as 32 of the 48 corpus nodes with a `QUP_` `_STR` do.
+
+Measured again this step, that ladder is the family's arithmetic for a particular
+shape of SoC and not a law, and the shape is not gauguin's. Over the corpus's 46
+tagged engine nodes it fits all nineteen in wrapper 0 and seventeen of the
+twenty-seven at wrappers 1 and 2; the ten that do not fit sit in six tables whose
+tags contradict the addresses of the same table's other nodes — alioth's
+`QUP_2_SE_1` at `0x884000` sits below its own `QUP_0_SE_1` at `0x984000`.
+gauguin's wrappers carry six SEs: the board's alias block numbers `0x980000`
+through `0x990000` `qupv3_se6` through `qupv3_se10`, the SoC's own tree agrees
+(`i2c6`, `i2c7`, `i2c8`, `uart9`, `i2c10`), and wrapper 1's GPI DMA masks six
+channels (`0x3f`).
+
+So the name is the slot by a rule that needs no wrapper width — **the `_UID` is
+the engine's SE number plus one**, the CRD's `I2C1` being its wrapper 0 SE 0 and
+taking `_UID` `One` — and `8 * wrapper + SE index + 1` is that rule on an SoC
+whose wrappers carry eight SEs. This engine's SE number is 1, the number the
+board's own alias `qupv3_se1_4uart` gives it, so `1 + 1 = 2`: `UAR2` and
+`_UID 0x02` now stand on the board's numbering rather than on the arithmetic, and
+both routes agree.
+
+The three wrapper-1 nodes this file wrote do not. `0x984000` is SE 7 and not the
+10 the ladder gives it, `0x988000` is SE 8 and not 11, `0x990000` is SE 10 and not
+13 — each two too high, and a name follows its number, so the file's `IC10`,
+`IC11` and `IC13` are names for slots 8, 9 and 11. The correction is measured here
+and not applied: it rewrites three device names, it reaches the AML and every
+payload built from it, and it reopens 4.68's "slot 11" reading — the engine at GSI
+`0x183` is still `i2c@988000`, but on gauguin that engine's number is 9 where
+lisa's is 11, because lisa's wrapper 1 starts at 8 and gauguin's at 6. It is the
+next step's, and this step's node is unaffected by it.
+
+The role change moves no slot, and the order relations were measured again by role
+rather than assumed. The UART precedes `PILC`, `RPEN`, `GLNK`, `TFTP` and `IPC0`
+in 10 of 10 four-wire tables, is followed by `QGP0` in 8 of 8 and by `QGP1`,
+`MMU0`, `MMU1` and `SCM0` in 10 of 10 each, precedes `IC10` and `IC11` in 2 of 2
+each, and is preceded by `ABD`, `PRTC` and `BAM1` in 10 of 10 each. Those are the
+counts the file recorded for the debug name, unchanged for the four-wire one, so
+the comment sites that cite them were re-read and only the ones that name the role
+were re-worded.
+
+### The body
+
+```asl
+Device (UAR2)
+{
+    Name (_HID, "QCOM0A16")  // _HID: Hardware ID
+    Alias (^PSUB, _SUB)
+    Name (_UID, 0x02)  // _UID: Unique ID
+    Name (_CCA, Zero)  // _CCA: Cache Coherency Attribute
+    Name (_STR, Unicode ("QUP_0_SE_1"))  // _STR: Description String
+    Method (_CRS, 0, NotSerialized)  // _CRS: Current Resource Settings
+    {
+        Name (RBUF, ResourceTemplate ()
+        {
+            Memory32Fixed (ReadWrite,
+                0x00884000,         // Address Base
+                0x00004000,         // Address Length
+                )
+            Interrupt (ResourceConsumer, Level, ActiveHigh, Exclusive, ,, )
+            {
+                0x0000027A,
+            }
+        })
+        Return (RBUF) /* \_SB_.UAR2._CRS.RBUF */
+    }
+}
+```
+
+`_HID`, `_UID`, `_CCA` and the resource template are unchanged from 4.70 — this
+is the same engine with the same interrupt, renamed. What changed in the AML is
+four characters of one string.
+
+### The ladder
+
+- `tools/acpi/gauguin.asl` is **4,395 lines**, 243,295 bytes,
+  md5 `a9369d51e220a0905f26dac0294b3db8`, matching
+  `uefi/Silicium-ACPI/Platforms/Xiaomi/gauguin/gauguin.asl` and
+  `work/uefi/Mu-Silicium/…/gauguin.asl` — the full three-stage chain run, all
+  three copies the same.
+- `iasl -p /tmp/direct486 -tc gauguin.asl`: source 243,295 bytes; AML **6,350
+  bytes, 266 opcodes, 409 named objects**, checksum `0xd0`, length `0x18ce`, byte
+  sum `0x00`,
+  sha256 `ee1a778e376f2cdf71eb0987ce46a75cd1cd2052d8226a92cdc85d913b72008b`;
+  0 errors, **24 warnings, 57 remarks**, 126 optimizations — 6,358 bytes at 4.85
+  less the 8 bytes the `_STR` lost.
+- `QCOM0A16` sits at offset **3099** — unmoved from 4.85, because the string that
+  shortened comes after it — and every id that follows it moved by exactly `0x08`:
+  the third `QCOM0A10` 3227 → 3219, `QCOM06DC` 3419 → 3411, `QCOM0A0D` 3472 →
+  3464, `QCOM0A84` 3515 → 3507.
+- The remark count settles a discrepancy the docs were carrying. 4.79 measured 55
+  and every step from 4.80 to 4.84 said "unchanged at 55", which is what those
+  sources compile to — but **4.85 measured 57**, the two remarks (2120 and 2173) a
+  `_CRS` method that creates its `RBUF` inside itself draws, and `docs/07` recorded
+  55 for it. The 4.85 commit body had 57 and was right; the surface above it was
+  stale. This step re-compiled every step's source from the git history rather than
+  trusting the chain of "unchanged", which is how the 55→57 step was found.
+- Build: `PROGRESS - Success` followed by the known benign
+  `ValueError: DTB image must not be empty.` from Mu-Silicium's own `.img`.
+- `--dump-fvmain`: 7,356,416 bytes (`0x704000`),
+  sha256 `5df87d216b6068ebc0193ec062f8fd16690fdbe81db75273899fd45fc7783204`,
+  byte-identical to `Build/…/FV/FVMAIN.Fv`; `EFI_FV_TAKEN_SIZE = 0x703fe8`, down
+  `0x08`; `FVMAIN_COMPACT` `EFI_FV_TAKEN_SIZE = 0x10aff0`.
+- The comment-only check, run because four of this step's edits are corrections
+  inside comments — three numeric and one the paragraph that derives the slot.
+  The step's source is 4,271 lines and 234,541 bytes at 4.85 against 4,395 lines
+  and 243,295 bytes here — and the **only** thing in that growth that reached the
+  AML is the 8 bytes the `_STR` lost: recompiled after each round of comment
+  corrections the output is the same 6,350 bytes at the same sha256 as before
+  them, and `FVMAIN.Fv` compares `cmp`-clean against the image built before them.
+  That is the check Step 4.67 ran, and it is why the payloads below were not
+  rebuilt: their `DSDT` is this source's output byte for byte, which was read back
+  out of `FVMAIN.Fv` at `0x0054d4c8` again to confirm it.
+- The ACPI readback: 6 tables, `DSDT` at `0x0054d4c8` — **the same offset for a
+  sixteenth step** — 6,350 bytes with a valid checksum and byte-identical to the
+  direct compile. `SSDT`/`APIC`/`GTDT` valid; only `FACP` and `FACS` do not, as
+  expected before `AcpiTableDxe` runs. The `AcpiTables` FFS file went 7,718 → 7,710.
+- The payload's own DSDT, extracted at `0x54d4c8`, carries `UAR2` once and `UARD`
+  nowhere, and its `_STR` reads `QUP_0_SE_1` with the `,DBG` suffix absent — checked
+  as UTF-16, which is how the string is stored.
+- The three payloads are `9a4a2b7e…` (silicon/gzip), `186b2023…` (stock/gzip) and
+  `e35d5b5c…` (stock/none), all three matching GenFv's map at **123 offsets and
+  GUIDs, zero mismatches**, and all three passing the checks ABL makes before it
+  hands control over. They are archived in `work/out/p2-4.86`.
+- `work/out/p2-variants` **still holds the 4.74 set** — `90b21643…`, `e693e1a0…`,
+  `26919861…`. **Tenth** step running.
+- Device count **38** `Device (` declarations, unchanged — a rename and not an
+  addition. The census: **51 `_HID`/`_CID` declarations, 37 distinct**, with
+  `QCOM0A16` claimed by `qcuart7280.inf` and shown by the census against the node's
+  new name. The same two remain unclaimed as every step since 4.70: `QCOM0A8B`
+  (`URS0`) and `QCOM24A5` (`UFS0`).
+- One correction was made to this step's own first draft. The census first written
+  into the comments said "25 write `{PEP0}` alone … and six write none at all", and
+  the `_STA` paragraph said "seventeen of the twenty-two". Both were re-read against
+  the 34 nodes before the build and both were wrong — the six were the
+  `Package (One)` nodes, and the twenty-two were twenty-one. What stands in the file
+  is the corrected pair.
+- The device is absent from this host throughout, so nothing here is a hardware
+  reading. The payload in `boot` is still the **4.74** set and its panel reading is
+  **still owed** under 先读屏，再刷下一次. Step 4.86 changes the payload in
+  `work/out/p2-4.86` and not the one on the device.
