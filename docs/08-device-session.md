@@ -11933,3 +11933,273 @@ and separates what is attested from what has to be read off gauguin's own device
 
 What it was not is progress on the device. `p2-variants` is still the payload in `boot`,
 its panel reading is still owed, and the rule is unchanged: **先读屏，再刷下一次**.
+
+## Step 4.69 — the slot the SoC owns and the wiring the board owns
+
+Step 4.68 closed by naming the one thing it had left open: which of gauguin's engines the
+Type-C chain's root sits on, and it recorded the CRD's `_UID 0x0B` against a `_STR` of
+`QUP_1_SE_2` as something that "does not follow in any way this step worked out". Both
+halves of that sentence were answerable and this step answered them, and the answer
+changed the question: the `_UID` does follow, from a rule, and the rule says `IC11` was
+never gauguin's node to find.
+
+### The `_UID` is a slot, and the slot is arithmetic
+
+`_UID 0x0B` for `QUP_1_SE_2` follows from this:
+
+```
+_UID = 8 * wrapper + SE index + 1
+```
+
+It fits every engine node in every table that carries one — **23 nodes across three
+tables**, lisa, a52sxq and the SC7280 CRD — with no exception, including the one
+prediction that could have falsified it, the CRD's `I2C1`:
+
+| `_STR` | wrapper | SE | `_UID` | `8w + SE + 1` |
+|---|---|---|---|---|
+| `QUP_0_SE_0` | 0 | 0 | `One` (CRD `I2C1`) | 1 |
+| `QUP_0_SE_1` | 0 | 1 | `0x02` | 2 |
+| `QUP_0_SE_3` | 0 | 3 | `0x04` | 4 |
+| `QUP_0_SE_4` | 0 | 4 | `0x05` | 5 |
+| `QUP_0_SE_5` | 0 | 5 | `0x06` | 6 |
+| `QUP_0_SE_7` | 0 | 7 | `0x08` | 8 |
+| `QUP_1_SE_0` | 1 | 0 | `0x09` | 9 |
+| `QUP_1_SE_1` | 1 | 1 | `0x0A` | 10 |
+| `QUP_1_SE_2` | 1 | 2 | `0x0B` | 11 |
+| `QUP_1_SE_5` | 1 | 5 | `0x0E` | 14 |
+
+Eight slots per wrapper, so wrapper 0 owns 1–8 and wrapper 1 owns 9–16. The other half of
+the same convention is the device *name*, and it is the same ladder read in decimal: the
+family calls a device `"I2C" + _UID` up to 9 and `"IC" + _UID` from 10. That is `I2C1`,
+`I2C2`, `I2C4`, `I2C5`, `I2C9`, `IC10`, `IC11`, `IC14` — every engine name in the corpus
+and nothing else, no exceptions.
+
+So `IC11` is not a name for a bus that carries a known set of chips. It is the family's
+name for *slot 11*, and slot 11 is whatever the board wired to wrapper 1's engine 2.
+
+### gauguin's slot 11 is real, and it is not the charger bus
+
+gauguin has a slot 11 and the corpus's `_UID 0x0B` belongs to it: `i2c@988000`, wrapper 1
+engine 2, `reg 0x988000 + 0x4000`, reached by **GSI `0x183`** — the same interrupt lisa's
+`IC11` carries. The device tree names its children: `focaltech@38` and `nq@28`, with
+`qcom,i2c-touch-active = "focaltech,fts_ts"`. It is the touch and NFC bus.
+
+The charger cluster is on a different engine, and gauguin's own tree says which:
+
+```
+i2c@990000   reg 0x990000 + 0x4000, interrupts SPI 0x165, status ok
+             fsa4480@42, qcom,pm8008@8, qcom,pm8008@9, qcom,smb1396@34,
+             bq25970-standalone@66, aw8624_haptic@5A
+             qcom,shared, qcom,clk-freq-out
+```
+
+`fsa4480@42` is the Type-C analog switch, the part the corpus describes under the id
+`FSA04480`; `qcom,smb1396` and `bq25970` are the charge pump and the parallel charger. No
+other bus in the tree carries any of them, and this is the only I2C bus in gauguin's tree
+marked `qcom,shared` with an explicit output rate — the device-tree side of the `_STR
+",Shared"` marker and the explicit `I2cSerialBusV2` rate the corpus's shared engines carry.
+
+### The engine index is measured three ways
+
+The slot is `8 * 1 + 4 + 1 = 13`, and the "4" is the only part that needed establishing:
+
+| node | stride from the wrapper | TLMM function | `qcom,wrapper-core` |
+|---|---|---|---|
+| `i2c@880000` | 0 | `qup00` | 0x185 `qupv3_0_geni_se@8c0000` |
+| `serial@884000` | 1 | `qup01` | — |
+| `i2c@888000` | 2 | `qup02` | 0x185 |
+| `i2c@980000` | 0 | `qup10` | 0x193 `qupv3_1_geni_se@9c0000` |
+| `i2c@984000` | 1 | `qup11` | 0x193 |
+| `i2c@988000` | 2 | `qup12` | 0x193 |
+| `serial@98c000` | 3 | `qup13` | — |
+| `i2c@990000` | 4 | **`qup14`** | **0x193** |
+
+Three independent readings, all agreeing, on all eight engines. The stride is
+`(addr − wrapper_base) / 0x4000` against the two `geniqup` nodes at `0x8c0000` and
+`0x9c0000`. The TLMM function name is `qup<wrapper><engine>` — the payload's `pinctrl-0`
+for `i2c@990000` resolves to `qup-i2c10-default-state`, whose `function` is `qup14`. And
+`qcom,wrapper-core` names the wrapper outright rather than by arithmetic: this bus's
+phandle `0x193` is `qcom,qupv3_1_geni_se@9c0000`'s own.
+
+The interrupt is the fourth reading, and it is the family's number rather than a
+derivation:
+
+| slot | gauguin INTID | corpus INTID | corpus node |
+|---|---|---|---|
+| w1 SE 0 | `0x181` | `0x181` | a52sxq `I2C9` |
+| w1 SE 1 | `0x182` | `0x182` | `IC10` |
+| w1 SE 2 | `0x183` | `0x183` | `IC11` |
+| w1 SE 3 | `0x184` | — | — |
+| w1 SE 4 | `0x185` | — | — |
+| w1 SE 5 | — | `0x186` | `SP14` |
+
+and wrapper 0 matches too: gauguin's SE 0 is `0x279`, which is the CRD's `I2C1`, and its
+SE 2 is `0x27B`, one below the corpus's SE 3 at `0x27C`. **One GSI per slot, the same GSI
+in every table**, even though the two SoCs put wrapper 1 at different addresses — gauguin
+`0x980000`, the CRD and a52sxq `0xA80000`, and wrapper 0 at `0x880000` against the CRD's
+`0x980000`. That is the ids' own lesson arriving a second time from the ACPI side: **the
+slot travels between SoCs and the address does not.**
+
+### What was written
+
+`IC13`, in `tools/acpi/gauguin.asl`, before the CPUs:
+
+```asl
+Device (IC13)
+{
+    Name (_HID, "QCOM0A10")
+    Alias (^PSUB, _SUB)
+    Name (_UID, 0x0D)
+    Name (_CCA, Zero)
+    Name (_STR, Unicode ("QUP_1_SE_4"))
+    Method (_CRS, 0, NotSerialized)
+    {
+        Name (RBUF, ResourceTemplate ()
+        {
+            Memory32Fixed (ReadWrite, 0x00990000, 0x00004000)
+            Interrupt (ResourceConsumer, Level, ActiveHigh, Exclusive, ,, ) { 0x00000185 }
+        })
+        Return (RBUF)
+    }
+}
+```
+
+`QCOM0A10` is `qci2c7280/qci2c7280.inf`'s, and the INF claims it as `ACPI\QCOM0A10` with no
+instance-specific entry, so the `_UID` is a uniqueness requirement rather than a binding
+one — which is why the slot arithmetic is safe to use even though it is inferred: it is
+injective, and eight disjoint slots cannot collide.
+
+Two members were deliberately left off, both on evidence rather than on convenience.
+**`_DEP`**, as on `UCS0`, because every I2C node in the family depends on `\_SB.PEP0` and
+this table has no `PEP0`; a `_DEP` naming a device that is not there is a reference that
+does not resolve. **The `,Shared` suffix**, because lisa's only `",Shared"` is on `I2C2`
+and lisa's own charger engine `IC11` has none — so gauguin's `qcom,shared` does not map
+onto that marker and the marker is not written until something shows it does.
+
+### Read back from the artifact
+
+| | Step 4.68 | Step 4.69 |
+|---|---|---|
+| `tools/acpi/gauguin.asl` md5 | `058938aa10a827ea2db81d7646a52478` | `8a50a8f36358a6eac11f3470a9c68891` |
+| `DSDT.aml` | 2,345 bytes, `692f728c…d456d387` | **2,465 bytes**, `b9e70ee618c93f162a638296ccd7ff1e9828c7e9547480d56580adb9a65a3df6` |
+| `DSDT.aml`, read out of the payload | 2,345, checksum valid | **2,465, checksum valid, same sha256 as the build tree** |
+| `FVMAIN.Fv` | `4b0f786c…83cbb5ea` | `f67a6077f08ce81d0da63eb96ef0e64d8129387715b1dea20b35ef9517e2f499` |
+| `FVMAIN` used / free | not logged | 7,352,512 (0x7030c0) / 3,904 — total `0x704000`, unchanged |
+| `FVMAIN_COMPACT` used / free | 1,092,736 / 2,052,992 | 1,092,752 / 2,052,976 |
+| `Mu-gauguin-stock-none.img` sha256 | `f8e58ef3…f127867b` | `6cd19d42f7c42fd97597e423e0cf5a819f393d6a54a425805b7ca604ee834a00` |
+
+The delta is exactly the node, and this step has both directions of the check on record
+rather than one. The DSDT grew by 120 bytes; disassembling the old and the new tables and
+diffing them gives **the `IC13` device and nothing else** — 24 added lines, no line
+changed, no line removed. And a byte-level diff of the two ACPI regions shows every other
+table untouched: `SSDT`, `APIC`, `FACP`, `FACS` and `GTDT` are byte-identical between the
+two payloads, sha256 for sha256. Only the DSDT moved.
+
+The `FVMAIN.Fv` row is the same-day case Step 4.68 scoped: both builds ran on
+`09/25/2026`, so the `SmBiosTableDxe` date field is the same in both and the volume hash
+difference is the AML, not a date. The 16 bytes of growth in `FVMAIN_COMPACT` are the
+120 bytes of DSDT through LZMA.
+
+`probe-fingerprint.py --expect P2FreeWhy` returns rc=0 with all ten instruments in the
+image, `fv-inventory.py --acpi` reports six tables with only the expected FACP/FACS
+checksum gaps, and all three payload variants match GenFv's map on 123 offsets and GUIDs
+with zero mismatches.
+
+### Two ids measured and not yet written, and one reduction
+
+**`QCOM0A88` — the GPI DMA.** Claimed by `qcgpi7280/qcgpi7280.inf` as the bare
+`ACPI\QCOM0A88`, and carried by lisa as `QGP0` (`_UID Zero`, `0x904000 + 0x50000`, GSIs
+`0x114`/`0x115`) and `QGP1` (`_UID One`, `0xA04000 + 0x50000`, `0x137`/`0x138`). The
+`_UID` is the wrapper, the same way the engines' is. gauguin has the pair —
+`dma-controller@800000` and `dma-controller@900000`, `0x60000` long, ten GSIs each,
+`dma-channels = 10`, `dma-channel-mask` `0x1f` and `0x3f`, and the live wrapper-1 engines
+name the second one in their `dmas` (`phandle 0x4b`). **The resources are gauguin's and
+not lisa's** — a 0x50000 window with two interrupts does not describe a 0x60000 window
+with ten. Nothing in the family's I2C nodes depends on it; lisa's `SP14` does, in a
+`_DEP` of `PEP0`, `QGP1` and `MMU0`, so it is the SPI and touch path's prerequisite and
+not this one's, and it waits for that node.
+
+**`FSA04480` — the Type-C analog switch.** Exactly three of 66 tables carry it, as
+`Device (CFSA)`: alioth, venus and pipa. Its `_CRS` is an `I2cSerialBusV2` at `0x0042`,
+100 kHz, on `\_SB.IC16`, plus two `GpioIo` on `\_SB.GIO0` pins `0x41` and `0x64` — and
+**no `.inf` in the 7280 set claims it**, so it is a node whose id is attested and whose
+driver is not in the set. gauguin has the part in its own tree, `fsa4480@42` at exactly
+that I2C address with `compatible = "qcom,fsa4480-i2c"`, and it is **`disabled`** — which
+is a fact about the board file and not about the hardware, and is why the ACPI node is
+not written on the strength of the device tree alone.
+
+**`AGR0` is `ACPI000C`.** alioth's `AGR0` declares `_HID "ACPI000C"` — the standard
+Processor Aggregator Device — with `_PUR Package (0x02) { One, Zero }` and an `_OST`
+writing `\_SB.PEP0.ROST`. That is the node PEP0's `NPUR` reaches:
+
+```asl
+\_SB.AGR0._PUR [One] = Arg0
+Notify (\_SB.AGR0, 0x80)
+```
+
+Step 4.67 recorded `AGR0` as one of three dependencies PEP0 cannot be ported without.
+It is cheaper than that: it is a standard ACPI device with no vendor id, no `_CRS` and no
+driver, so it costs a five-line node rather than a census. The other two — `IPCC` and
+`ABD` — are unchanged.
+
+### The UCSI path is two paths
+
+Step 4.68 read `IC11`'s handler as one notification chain. It is two, and they end on
+different devices:
+
+| path | entry | namespace effect | ends at |
+|---|---|---|---|
+| HPD | PMIC register → `Q21` / `Q22` | writes `MUXC`, `CCST`, `HPDS`, `HIRQ`, `DPPN = 0x0A` | `Notify (\_SB.UCS0, 0xA0)` |
+| firmware event | `INTR` → `EAPQ`, `DATA 0x01` | `\_SB.UBTC.QUCM ()` | `Notify (\_SB.UBTC, 0x80)` |
+
+`UCS0` is ours and is in the table; `UBTC` is the in-box `USBC000` device we do not have.
+The first path is the one the five accessors on `UCS0` serve and the one this step's node
+feeds; the second is a separate UCSI mailbox the corpus declares as an `External` in all
+three of this generation's tables.
+
+### Honest limitations
+
+- **Nothing was fixed on the device.** This step writes one node whose id is attested and
+  whose necessity is argued; it makes no hardware work that did not work before.
+  `p2-variants` is still the payload in `boot`, its panel reading is still owed, and the
+  rule is unchanged: **先读屏，再刷下一次**.
+- **The slot arithmetic is a fit, not a specification.** `_UID = 8w + SE + 1` is inferred
+  from 23 nodes in three tables and it is the only rule that fits all of them, but it is
+  not read out of a document and no table states it. What is *measured* on gauguin is the
+  engine index, three ways. What is *derived* is the number written into `_UID`. The
+  consequence of the derivation being wrong is bounded: the INF binds `ACPI\QCOM0A10`,
+  not an instance path, so a wrong slot number that is still unique changes nothing but
+  the device instance name.
+- **The charger cluster is not the CRD's charger.** `IC11`'s `Scope` in the CRD talks to
+  a slave at I2C `0x76` over a `GenericSerialBus` opregion. Nothing on gauguin's
+  `i2c@990000` is at `0x76` — its children are at `0x08`, `0x09`, `0x34`, `0x42`, `0x5A`
+  and `0x66`. So the *engine* is measured and the *slave* is not the same part, and the
+  `Scope` with the HPD register handlers cannot be ported onto `IC13` until gauguin's own
+  PD/charger chip is identified. That is the next node on this path, not this one.
+- **`i2c@984000` disagrees between the two trees.** The device's own tree has it `ok`
+  with `cs35l41@40` and `cs35l41@41` on it; the payload's tree has it `disabled` and
+  childless. Both agree it is wrapper 1 engine 1 — the disagreement is about the audio
+  amplifiers and not about the slot. It does not affect this step, and it is recorded
+  because a later node on that bus would need the vendor tree's board data and not the
+  payload's.
+- **Wrapper 0's engine 0 is two different devices in the two trees.** The vendor tree has
+  `spi@880000` `ok` with a `touch_spi@0` on it and no `i2c@880000` at all; the payload's
+  tree has `i2c@880000` `ok` and no SPI. So gauguin carries a touch controller over SPI
+  and a second one over I2C, and which of the two the shipped firmware uses was not
+  resolved here. It is the same slot either way, and it is not this step's slot.
+- **`ABD` is still read and not understood.** Unchanged from Step 4.68: `QCOM0427`,
+  `qcabd.inf`, 11 tables, a `GenericSerialBus` region and no `_CRS`.
+- **`qcom,wrapper-core` was read only from the vendor tree.** The payload's tree does not
+  carry the property, so for the payload's eight engines the wrapper came from the node's
+  parent (`geniqup@8c0000` / `geniqup@9c0000`) rather than from the phandle. The two
+  agree on every engine that is in both trees.
+
+### What this step was
+
+One question answered in two halves and one node written. The half that was arithmetic —
+the `_UID` — had a rule behind it and the rule fits 23 nodes with no exception. The half
+that was wiring turned out not to be a question the corpus could answer, because the
+corpus's `IC11` is a name for lisa's slot 11 and gauguin's slot 11 carries the touch
+controller. What gauguin's Type-C root actually is, is `IC13`: wrapper 1, engine 4, slot
+13, on the bus the analog switch and the whole charger cluster hang from, and the node
+Step 4.68 named as the one the other three open items converge on is now in the table.

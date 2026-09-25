@@ -416,12 +416,15 @@ def main():
     ap.add_argument("--usb", action="store_true", help="only USB-related files")
     ap.add_argument("--dump-fvmain", metavar="PATH",
                     help="write the decompressed inner FVMAIN to PATH and print its "
-                         "sha256. This is the one artifact of a build that is "
-                         "bit-identical across rebuilds: `Sec.efi` carries "
-                         "`__TIME__`/`__DATE__` and lives in the *outer* "
-                         "`FVMAIN_COMPACT`, not here, so the FD and every payload "
-                         "built from it differ from build to build while this does "
-                         "not")
+                         "sha256. `Sec.efi` carries `__TIME__`/`__DATE__` and lives in "
+                         "the *outer* `FVMAIN_COMPACT`, not here, so the FD and every "
+                         "payload built from it differ from build to build. This "
+                         "volume is not build-stable either, though it is closer: "
+                         "`SmBiosTableDxe` is in here and carries a `__DATE__`-shaped "
+                         "field, so the hash is stable only within a day - Step 4.68 "
+                         "measured the nine bytes that move at midnight. The "
+                         "fingerprint that crosses days is the DSDT's size and sha256, "
+                         "read back with `--acpi`")
     ap.add_argument("--against", metavar="FVMAIN.Fv.txt",
                     help="compare this image's FVMAIN against GenFv's own map "
                          "of the volume it built")

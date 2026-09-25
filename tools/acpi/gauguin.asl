@@ -1344,6 +1344,86 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
             }
         }
 
+        // The QUP I2C engine the Type-C path and the charger cluster both hang
+        // on - the node Step 4.68 named at the root of the Type-C chain and
+        // left open. It left two questions running together and only one of
+        // them was open.
+        //
+        // The first is the slot, and it closes. Section 4.68 could not make the
+        // CRD's _UID 0x0B follow from its _STR "QUP_1_SE_2"; it follows, and by
+        // an arithmetic the whole family obeys:
+        //
+        //   _UID = 8 * wrapper + SE index + 1
+        //
+        // which fits all 23 engine nodes in the three tables that carry any -
+        // lisa, a52sxq and the SC7280 CRD - with no exception, and predicts
+        // the CRD's I2C1 = One for SE 0, I2C2 = 2, I2C4 = 4, I2C5 = 5,
+        // UARD = 6, UAR8 = 8, I2C9 = 9, IC10 = 0x0A, IC11 = 0x0B, IC14 = 0x0E.
+        // The other half of the convention is the name, and it is the same
+        // ladder: the device is called "I2C" plus the decimal _UID up to 9 and
+        // "IC" plus it from 10, which is exactly I2C2, I2C9, IC10, IC11, IC14
+        // and nothing else. A slot number is a property of the SoC, though, and
+        // what is wired to it is a property of the board - so the second
+        // question is not answerable from the slot and is not the same question.
+        //
+        // That second question is which of gauguin's engines this is, and the
+        // device tree answers it. gauguin's slot 11 is real and it is not this
+        // bus: i2c@988000 sits at wrapper 1, engine 2, carries the corpus's own
+        // _UID 0x0B, is reached by the same GSI 0x183 lisa's IC11 is reached by,
+        // and is the touch and NFC bus (focaltech@38, nq@28). The charger
+        // cluster is on the engine gauguin's tree names:
+        //
+        //   i2c@990000   reg 0x990000 + 0x4000, interrupts SPI 0x165, ok
+        //                fsa4480@42, qcom,pm8008@8, qcom,pm8008@9,
+        //                qcom,smb1396@34, bq25970-standalone@66,
+        //                aw8624_haptic@5A, qcom,shared, qcom,clk-freq-out
+        //
+        // which is engine 4 by the stride, (0x990000 - 0x980000) / 0x4000. The
+        // index is measured three ways and all three agree. The stride, against
+        // the two geniqup nodes at 0x8c0000 and 0x9c0000. The TLMM function the
+        // payload's pinctrl-0 names for each bus - qup00, qup01, qup02 and
+        // qup10, qup11, qup12, qup13, qup14 - which is qup<wrapper><engine>
+        // over all eight of them. And qcom,wrapper-core, which names the
+        // wrapper outright rather than by arithmetic: this bus's phandle 0x193
+        // is qcom,qupv3_1_geni_se@9c0000's.
+        //
+        // So the slot is 8 * 1 + 4 + 1 = 13 and the name is IC13. The
+        // interrupt is the family's number for the slot rather than a
+        // derivation: gauguin's whole wrapper-1 ladder, 0x181 through 0x185, is
+        // the corpus's 0x181 through 0x186 one GSI per engine, even though the
+        // two put wrapper 1 at different addresses - gauguin 0x980000, the CRD
+        // and a52sxq 0xA80000. That is the ids' own lesson again: the slot
+        // travels between SoCs and the address does not.
+        //
+        // _DEP is left off, as on UCS0, because every I2C node in the family
+        // depends on \_SB.PEP0 and this table has no PEP0. _STR carries no
+        // suffix: lisa's only ",Shared" is on I2C2 and its own charger bus
+        // IC11 has none, so gauguin's qcom,shared does not map onto the suffix
+        // and the suffix is not written until something shows that it does.
+        Device (IC13)
+        {
+            Name (_HID, "QCOM0A10")  // _HID: Hardware ID
+            Alias (^PSUB, _SUB)
+            Name (_UID, 0x0D)  // _UID: Unique ID
+            Name (_CCA, Zero)  // _CCA: Cache Coherency Attribute
+            Name (_STR, Unicode ("QUP_1_SE_4"))  // _STR: Description String
+            Method (_CRS, 0, NotSerialized)  // _CRS: Current Resource Settings
+            {
+                Name (RBUF, ResourceTemplate ()
+                {
+                    Memory32Fixed (ReadWrite,
+                        0x00990000,         // Address Base
+                        0x00004000,         // Address Length
+                        )
+                    Interrupt (ResourceConsumer, Level, ActiveHigh, Exclusive, ,, )
+                    {
+                        0x00000185,
+                    }
+                })
+                Return (RBUF) /* \_SB_.IC13._CRS.RBUF */
+            }
+        }
+
         Device (CPU0)
         {
             Name (_HID, "ACPI0007")
