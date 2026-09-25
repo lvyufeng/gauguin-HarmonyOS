@@ -3941,45 +3941,6 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
             {
                 Name (_ADR, Zero)  // _ADR: Address
                 Name (_S0W, 0x03)  // _S0W: S0 Device Wake State
-                Name (_PLD, Package (0x01)  // _PLD: Physical Location of Device
-                {
-                    ToPLD (
-                        PLD_Revision           = 0x2,
-                        PLD_IgnoreColor        = 0x1,
-                        PLD_Red                = 0x0,
-                        PLD_Green              = 0x0,
-                        PLD_Blue               = 0x0,
-                        PLD_Width              = 0x0,
-                        PLD_Height             = 0x0,
-                        PLD_UserVisible        = 0x1,
-                        PLD_Dock               = 0x0,
-                        PLD_Lid                = 0x0,
-                        PLD_Panel              = "BACK",
-                        PLD_VerticalPosition   = "CENTER",
-                        PLD_HorizontalPosition = "LEFT",
-                        PLD_Shape              = "VERTICALRECTANGLE",
-                        PLD_GroupOrientation   = 0x0,
-                        PLD_GroupToken         = 0x0,
-                        PLD_GroupPosition      = 0x0,
-                        PLD_Bay                = 0x0,
-                        PLD_Ejectable          = 0x0,
-                        PLD_EjectRequired      = 0x0,
-                        PLD_CabinetNumber      = 0x0,
-                        PLD_CardCageNumber     = 0x0,
-                        PLD_Reference          = 0x0,
-                        PLD_Rotation           = 0x0,
-                        PLD_Order              = 0x0,
-                        PLD_VerticalOffset     = 0xFFFF,
-                        PLD_HorizontalOffset   = 0xFFFF)
-
-                })
-                Name (_UPC, Package (0x04)  // _UPC: USB Port Capabilities
-                {
-                    One,
-                    0x09,
-                    Zero,
-                    Zero
-                })
                 Name (_CRS, ResourceTemplate ()  // _CRS: Current Resource Settings
                 {
                     Interrupt (ResourceConsumer, Level, ActiveHigh, Shared, ,, )
@@ -4010,6 +3971,117 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
                         0x0000020E,
                     }
                 })
+
+                /*
+                 * The hub and its one port, which is where the port's `_UPC`
+                 * and `_PLD` belong. `_UPC` is defined for the `_ADR` child of a
+                 * USB host controller whose address is the port number, and that
+                 * child is `PRT1`; on `USB0` itself it was answering a question
+                 * nothing asks, and the controller had no port device for
+                 * Windows to attach a port to. The move is not a rewrite: the
+                 * blob below is byte-identical to the one that stood on `USB0`
+                 * and on `UFN0` until Step 4.90, and all that step did was take
+                 * it off the two controllers.
+                 *
+                 * Nothing here needs an id, so nothing here needs the driver set
+                 * checked - the same position `BTNS` is in, for the opposite
+                 * reason: there the operating system supplies the driver, here
+                 * the address is the identity. Both members are `_ADR`-addressed
+                 * children of a device this file already writes.
+                 *
+                 * The shape is 20 of the 66 tables, and unanimous among them:
+                 * every one of the 20 carries an `RHUB` under `URS0`'s `USB0`
+                 * and a second under `URS0`'s `UFN0`, each with exactly one
+                 * `PRT1`. 43 tables declare neither device. The one table with a
+                 * hub and no port is caymanslm, which also carries the corpus's
+                 * only `RHUB` that is not a bare `_ADR` - its body holds a `_DSM`
+                 * and three temporaries - and the two Kailua tables name a
+                 * `PRT1` only as an `External`, under a `UBF0` whose table the
+                 * corpus does not hold.
+                 *
+                 * The bodies are measured rather than assumed. `RHUB`'s own body
+                 * is one member, `Name (_ADR, Zero)`, in 59 of its 60
+                 * occurrences, and `PRT1`'s is three - `_ADR One`, `_UPC`, `_PLD`
+                 * - in 58 of 59. The 59th `PRT1` is a52sxq's redriver: a
+                 * top-level `Device (PRT1)` carrying `_HID "QCOM1121"`, sharing
+                 * the name and nothing else. `_UPC` is `Package (0x04) { One,
+                 * 0x09, Zero, Zero }` in all 40 instances under `URS0`; the six
+                 * that read 0x06 are all in `USB1`/`UFN1` subtrees, and this
+                 * table has no `URS1` at all.
+                 *
+                 * `_PLD` is one blob everywhere and the field that moves is
+                 * `PLD_GroupPosition`: 0x0 on 38 of the 40 `URS0` instances - the
+                 * other two, pipa's, state no GroupPosition at all, which is the
+                 * same zero - against 0x1 on the fourteen of `URS1` and 0x3 on
+                 * vayu's two. 0x0 is this subtree's, and it is what this node
+                 * states.
+                 *
+                 * Where it sits is measured with a disagreement in it. Under
+                 * `USB0` the node is the fourth member, after `_ADR`, `_S0W` and
+                 * `_CRS`, in 18 of the 20; under `UFN0` it is the third, between
+                 * `_S0W` and `_CRS`, in 17 of the 19 that have one. b4q and
+                 * ingres put it last in both devices, after `PHYC`, and vili puts
+                 * it after `_CRS` in `UFN0`; the majority order is followed in
+                 * each device, and the asymmetry between the two is the
+                 * corpus's rather than a slip.
+                 *
+                 * bitra is why this needs an argument. It has no `RHUB` and no
+                 * `PRT1` - zero occurrences of either name - and carries `_UPC`
+                 * and `_PLD` on `USB0` itself, which is the shape these two
+                 * blocks came into this table in. The choice made here is the
+                 * one Step 4.65 already made for `URS0._HID`: follow the
+                 * generator group, family 0A, and not the SoC family, 04. Both
+                 * of family 0A's tables, lisa's and a52sxq's, carry the pair,
+                 * and neither of them carries it anywhere but in `PRT1`.
+                 */
+                Device (RHUB)
+                {
+                    Name (_ADR, Zero)  // _ADR: Address
+                    Device (PRT1)
+                    {
+                        Name (_ADR, One)  // _ADR: Address
+                        Name (_UPC, Package (0x04)  // _UPC: USB Port Capabilities
+                        {
+                            One,
+                            0x09,
+                            Zero,
+                            Zero
+                        })
+                        Name (_PLD, Package (0x01)  // _PLD: Physical Location of Device
+                        {
+                            ToPLD (
+                                PLD_Revision           = 0x2,
+                                PLD_IgnoreColor        = 0x1,
+                                PLD_Red                = 0x0,
+                                PLD_Green              = 0x0,
+                                PLD_Blue               = 0x0,
+                                PLD_Width              = 0x0,
+                                PLD_Height             = 0x0,
+                                PLD_UserVisible        = 0x1,
+                                PLD_Dock               = 0x0,
+                                PLD_Lid                = 0x0,
+                                PLD_Panel              = "BACK",
+                                PLD_VerticalPosition   = "CENTER",
+                                PLD_HorizontalPosition = "LEFT",
+                                PLD_Shape              = "VERTICALRECTANGLE",
+                                PLD_GroupOrientation   = 0x0,
+                                PLD_GroupToken         = 0x0,
+                                PLD_GroupPosition      = 0x0,
+                                PLD_Bay                = 0x0,
+                                PLD_Ejectable          = 0x0,
+                                PLD_EjectRequired      = 0x0,
+                                PLD_CabinetNumber      = 0x0,
+                                PLD_CardCageNumber     = 0x0,
+                                PLD_Reference          = 0x0,
+                                PLD_Rotation           = 0x0,
+                                PLD_Order              = 0x0,
+                                PLD_VerticalOffset     = 0xFFFF,
+                                PLD_HorizontalOffset   = 0xFFFF)
+
+                        })
+                    }
+                }
+
                 Method (_STA, 0, NotSerialized)  // _STA: Status
                 {
                     Return (0x0F)
@@ -4153,45 +4225,61 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
             {
                 Name (_ADR, One)  // _ADR: Address
                 Name (_S0W, 0x03)  // _S0W: S0 Device Wake State
-                Name (_PLD, Package (0x01)  // _PLD: Physical Location of Device
-                {
-                    ToPLD (
-                        PLD_Revision           = 0x2,
-                        PLD_IgnoreColor        = 0x1,
-                        PLD_Red                = 0x0,
-                        PLD_Green              = 0x0,
-                        PLD_Blue               = 0x0,
-                        PLD_Width              = 0x0,
-                        PLD_Height             = 0x0,
-                        PLD_UserVisible        = 0x1,
-                        PLD_Dock               = 0x0,
-                        PLD_Lid                = 0x0,
-                        PLD_Panel              = "BACK",
-                        PLD_VerticalPosition   = "CENTER",
-                        PLD_HorizontalPosition = "LEFT",
-                        PLD_Shape              = "VERTICALRECTANGLE",
-                        PLD_GroupOrientation   = 0x0,
-                        PLD_GroupToken         = 0x0,
-                        PLD_GroupPosition      = 0x0,
-                        PLD_Bay                = 0x0,
-                        PLD_Ejectable          = 0x0,
-                        PLD_EjectRequired      = 0x0,
-                        PLD_CabinetNumber      = 0x0,
-                        PLD_CardCageNumber     = 0x0,
-                        PLD_Reference          = 0x0,
-                        PLD_Rotation           = 0x0,
-                        PLD_Order              = 0x0,
-                        PLD_VerticalOffset     = 0xFFFF,
-                        PLD_HorizontalOffset   = 0xFFFF)
 
-                })
-                Name (_UPC, Package (0x04)  // _UPC: USB Port Capabilities
+                // The same hub and port as `USB0`'s, on the second of `URS0`'s
+                // two children and identical to it: `_ADR Zero` on the hub, and
+                // `_ADR One`, the same `_UPC` and the same `_PLD` on the port.
+                // See USB0's comment for the census. Its place is the corpus's
+                // third member, between `_S0W` and `_CRS`, which is where it
+                // stands - the one asymmetry with `USB0`, whose hub is fourth.
+                Device (RHUB)
                 {
-                    One,
-                    0x09,
-                    Zero,
-                    Zero
-                })
+                    Name (_ADR, Zero)  // _ADR: Address
+                    Device (PRT1)
+                    {
+                        Name (_ADR, One)  // _ADR: Address
+                        Name (_UPC, Package (0x04)  // _UPC: USB Port Capabilities
+                        {
+                            One,
+                            0x09,
+                            Zero,
+                            Zero
+                        })
+                        Name (_PLD, Package (0x01)  // _PLD: Physical Location of Device
+                        {
+                            ToPLD (
+                                PLD_Revision           = 0x2,
+                                PLD_IgnoreColor        = 0x1,
+                                PLD_Red                = 0x0,
+                                PLD_Green              = 0x0,
+                                PLD_Blue               = 0x0,
+                                PLD_Width              = 0x0,
+                                PLD_Height             = 0x0,
+                                PLD_UserVisible        = 0x1,
+                                PLD_Dock               = 0x0,
+                                PLD_Lid                = 0x0,
+                                PLD_Panel              = "BACK",
+                                PLD_VerticalPosition   = "CENTER",
+                                PLD_HorizontalPosition = "LEFT",
+                                PLD_Shape              = "VERTICALRECTANGLE",
+                                PLD_GroupOrientation   = 0x0,
+                                PLD_GroupToken         = 0x0,
+                                PLD_GroupPosition      = 0x0,
+                                PLD_Bay                = 0x0,
+                                PLD_Ejectable          = 0x0,
+                                PLD_EjectRequired      = 0x0,
+                                PLD_CabinetNumber      = 0x0,
+                                PLD_CardCageNumber     = 0x0,
+                                PLD_Reference          = 0x0,
+                                PLD_Rotation           = 0x0,
+                                PLD_Order              = 0x0,
+                                PLD_VerticalOffset     = 0xFFFF,
+                                PLD_HorizontalOffset   = 0xFFFF)
+
+                        })
+                    }
+                }
+
                 Name (_CRS, ResourceTemplate ()  // _CRS: Current Resource Settings
                 {
                     Interrupt (ResourceConsumer, Level, ActiveHigh, Shared, ,, )

@@ -17207,3 +17207,212 @@ to the reading measured above.
   Windows runs on the phone. The payload in `boot` is still the **4.74** set and
   its panel reading is **still owed** under 先读屏，再刷下一次. Step 4.89 archives
   its payloads in `work/out/p2-4.89` and does not touch the one on the device.
+
+## Step 4.90 — the port the hub owns and not the controller, and a pair the corpus moves together
+
+### What this step was
+
+Took the port's capability pair off the two USB controllers and put it where the
+corpus puts it: under each of `URS0`'s two children, `USB0` and `UFN0`, a
+`Device (RHUB)` carrying `Name (_ADR, Zero)` and, inside it, a `Device (PRT1)`
+carrying `_ADR One`, `_UPC` and `_PLD`. Four devices added, nothing invented —
+the two blobs are the ones that were already standing on `USB0` and on `UFN0`,
+moved and not rewritten. That is measured and not asserted: over the whole file
+there are two `_PLD` packages and two `_UPC` packages before the edit and the
+same two and two after it, byte-identical as a multiset, with only the path they
+hang from changed.
+
+The move is not cosmetic, and what makes it not cosmetic is what `_UPC` is
+defined for: it belongs to the `_ADR` child of a USB host controller whose
+address is the port number. On `USB0` itself it was answering a question nothing
+asks, and the controller had no port device for Windows to attach a port to —
+the description of the port was on the thing that owns the port. Step 4.65
+already wrote `URS0`'s `_HID`; this step writes the two children underneath it.
+
+### Why this one needs no driver-set confirmation
+
+Every node in this file has been checked against the installed driver set — 112
+`.inf` files from `~/work/woa-ref/inf-7280` — because a QCOM id nothing claims is
+a node that exists in the table and not in Device Manager. `RHUB` and `PRT1`
+join `BTNS` in not needing that check, and for the opposite reason: neither
+carries a `_HID` or a `_CID` at all. They are `_ADR`-addressed children of a
+device this file already writes, so the address is the identity and there is no
+id for a set to claim or fail to claim. The census tool has nothing to check
+here, and the census totals below are consequently unchanged — which is the
+point of the step rather than an omission from it.
+
+### The pair, and the three ways the corpus varies it
+
+Of the 66 tables, **20 carry both `RHUB` and `PRT1`**, and among those 20 the
+pair is unanimous: every one of them carries a hub under `URS0`'s `USB0` **and a
+second under `URS0`'s `UFN0`**, each with exactly one port. That is 40 hubs and
+40 ports and it is why the count is stated as 20 of 20 rather than 40 of 40 —
+the two move together, and a table that has one of these devices in one place
+and not the other does not exist in the corpus. **43 tables declare neither.**
+The three that break the pattern are single tables and not a group: caymanslm
+has a hub and no port, which is also the corpus's only `RHUB` whose body is not
+bare — it holds a `_DSM` and three temporaries — and the two Kailua tables name
+a `PRT1` only as an `External`, under a `UBF0` whose table the corpus does not
+hold. 20 + 43 + 3 is 66.
+
+The bodies are measured the same way. `RHUB`'s own members are one `Name` in 59
+of its 60 occurrences — `Name (_ADR, Zero)` and nothing else — and `PRT1`'s are
+three, `_ADR One`, `_UPC` and `_PLD`, in 58 of its 59. The 59th `PRT1` is
+a52sxq's redriver: a top-level `Device (PRT1)` carrying `_HID "QCOM1121"`, which
+shares the name and nothing else. Counting members rather than grepping names is
+what separates those two, and it is the reason the 59 is recorded rather than
+rounded to "all of them".
+
+`_UPC` is `Package (0x04) { One, 0x09, Zero, Zero }` in **all 40** instances
+under `URS0`. The six instances in the corpus that read `0x06` are all inside
+`USB1`/`UFN1` subtrees, and this board has no `URS1` at all, so the value is not
+in doubt here — but it is worth recording that the value is per-`URS`, because a
+table that had both would need two different numbers in the same member.
+
+`_PLD` is one blob everywhere, and the field that moves is `PLD_GroupPosition`:
+`0x0` on 38 of the 40 `URS0` instances, against `0x1` on all fourteen of the
+`URS1` ones and `0x3` on vayu's two. The two that are not `0x0` among the
+`URS0` instances are pipa's, and they state no `GroupPosition` at all — a
+different spelling of the same zero, and the reading that makes 38 and 40 the
+same number rather than a discrepancy. `0x0` is this subtree's.
+
+### Where it sits, and a disagreement the corpus has with itself
+
+Placement is measured with the disagreement left in it rather than smoothed
+over. Under `USB0` the node is the **fourth** member, after `_ADR`, `_S0W` and
+`_CRS`, in 18 of the 20. Under `UFN0` it is the **third**, between `_S0W` and
+`_CRS`, in 17 of the 19 that have one. The minority is b4q and ingres, which put
+it last in both devices, after `PHYC`, and vili, which puts it after `_CRS` in
+`UFN0`. The majority order is followed in each device separately, and the
+asymmetry between the two — fourth in one, third in the other — is the corpus's
+and not a slip in this file.
+
+### bitra is why this needed an argument
+
+The pair did not come out of a table on this SoC. **bitra — the SM7225 table
+this file's form is taken from — has zero occurrences of either name**, and
+carries `_UPC` and `_PLD` on `USB0` itself, which is precisely the shape these
+two members were in here until this step. So the edit is not a correction
+against bitra; it is a disagreement with it, and the disagreement had to be
+settled before it could be made.
+
+It is settled the way Step 4.65 settled `URS0._HID`, and by the same rule: the
+generator group decides, not the SoC family. That step took `QCOM0497` (bitra's,
+family 04) off `URS0` and wrote `QCOM0A8B` (family 0A, lisa's and a52sxq's),
+because the family byte is what decides which driver set binds. Family 0A's two
+tables both carry the hub-and-port pair, and neither of them carries the pair
+anywhere except inside `PRT1`. bitra is family 04 and has the blob on the
+controller. Following the generator group gives one answer and following the SoC
+gives the other, and this file has already chosen which of the two it follows.
+
+### The body
+
+Per controller, with `USB0`'s comment on `USB0`'s copy and a five-line comment
+pointing at it on `UFN0`'s:
+
+```asl
+Device (RHUB)
+{
+    Name (_ADR, Zero)
+    Device (PRT1)
+    {
+        Name (_ADR, One)
+        Name (_UPC, Package (0x04) { One, 0x09, Zero, Zero })
+        Name (_PLD, Package (0x01) { ToPLD (… PLD_GroupPosition = 0x0 …) })
+    }
+}
+```
+
+and on the controllers, one deletion each: the 27-field `_PLD` and the four-field
+`_UPC` are gone from `USB0` and from `UFN0`, where they had stood since the
+controllers were first written. Nothing else about the two controllers changed —
+their `_ADR`, `_S0W`, `_CRS`, `_STA` and the `PHYC` child are untouched, and
+`RHUB` is placed inside them at the offset the corpus's majority gives.
+
+### The ladder
+
+- `tools/acpi/gauguin.asl` is **4,718 lines**, 263,616 bytes,
+  md5 `5ef3599ec84aa033aa208a177f74a158` (from 4,630 lines and 257,772 bytes at
+  `63f034f177d915d0fcfa163ed5742340` — +88 lines, +5,844 bytes), and all three
+  copies are the same file: `tools/acpi/`, `uefi/Silicium-ACPI/Platforms/Xiaomi/
+  gauguin/` and `work/uefi/Mu-Silicium/Silicium-ACPI/Platforms/Xiaomi/gauguin/`
+  — the full three-stage chain run.
+- `iasl -p /tmp/chk490 -tc gauguin.asl`: AML **6,641 bytes**, checksum `0x4f`,
+  length `0x19f1`, byte sum `0x00`, sha256
+  `f260db3ade7b2c7dc2c272fe03645508574cb65f3e34009e81ae59cbd28f5560`. `iasl`
+  reports **0 errors, 24 warnings, 59 remarks and 129 optimizations** — the same
+  four counts as 4.89, the warnings being the invariant they have been since
+  4.82 and the remarks and optimizations unchanged because no new `_CRS` or
+  `_DSD` method was written, only members moved.
+- Named objects, by the count used here — `Name`, `Device`, `Method`, `Alias`,
+  `Scope`, `ThermalZone`, `PowerResource`, `Field`, `IndexField`,
+  `OperationRegion`, `Mutex`, `External` and the `Create*Field` operators, read
+  off both the source and the disassembly, which agree: **423**, up eight from
+  415 — `Device` 39 → **43** and `Name` 225 → **229**, with `Method` 101,
+  `Alias` 25, `ThermalZone` 13, one each of `Scope`, `Field` and
+  `OperationRegion` and nine `Create*Field` unchanged. Four new devices and four
+  new members is the +8; the two `_UPC` and two `_PLD` packages did not
+  multiply, they moved, which is why the `Name` count rises by four and the blob
+  count by nothing. 4.89's entry records 416 for the same file where this count
+  measures 415 — one object on the earlier count's side of the line — and the
+  delta, which is what this ladder compares, is +8 on either recipe.
+- The **+54 bytes** are four device headers and their package lengths. Measured:
+  the first byte of the AML that differs from 4.89's after the header is at
+  offset **37**, where the `_SB_` scope's package length goes `0x1996` → `0x19cc`
+  (`10 86 99 01` → `10 8c 9c 01`, a difference of exactly `0x36`). Every id
+  before and inside `URS0` is unmoved — `QCOM24A5` 93, `QCOM0427` 336,
+  `QCOM0A2D` 785, `QCOM0A0C` 3236, `QCOM0A8B` 5389 — and every id after it
+  shifts forward by 54: `QCOM0AA4` 6221 → 6275, `ACPI0011` 6362 → 6416. `RHUB`
+  sits at 5546 and `PRT1` at 5559, inside `URS0`'s `USB0`.
+- The order vote does not move, and that is a property of where the edit went
+  rather than of the edit: **57 tables, 592 pairs, 10,428 votes, 532 relations,
+  0 broken, score 10,356 of a ceiling of 10,356**, with `--fixed-point` freeing
+  the same four nodes 4.88 and 4.89 left free — `I2C8` at 8, `I2C9` at 9, `UAR2`
+  at 10, `IC11` at 11. The four new devices are members *inside* two units the
+  table already had, so the 36 units the vote orders and their order are
+  untouched, and the vote cannot see the change. An in-device edit that moved
+  the score would be the surprise.
+- Build: `PROGRESS - Success` followed by the known benign
+  `ValueError: DTB image must not be empty.` from Mu-Silicium's own `.img`,
+  unchanged from 4.88 and 4.89 and for the same reason (its config is v2, which
+  cannot express a DTB region).
+- The volume: `FVMAIN` is **`0x705000` total and `0x704110` taken**, up `0x38`
+  from 4.89's `0x7040d8` — and, unlike 4.89, the **total did not change**, so
+  this step's payloads keep 4.89's sizes. The 54 bytes of DSDT and the alignment
+  they round up to fit inside the `0xef0` bytes 4.89's volume left free.
+  `FVMAIN_COMPACT`'s taken size is `0x10b0e8`, up `0x48` from `0x10b0a0` — the
+  compressed size of a table 54 bytes larger. `FVMAIN` holds **123 FFS files**
+  and `0x703f13` bytes of file headers and data, from `0x703edb`.
+- `--dump-fvmain` is byte-identical to `Build/…/FV/FVMAIN.Fv`, sha256
+  `abd1a826a500a8fd9e90a0670f7a4742f073b9bb673415374be9346bd7138764`, and the
+  payload's inner volume — the LZMA section of `FVMAIN_COMPACT` decompressed —
+  is that same `0x705000` bytes byte for byte, behind GenFv's 8-byte
+  `04 00 00 19 04 50 70 17` prologue.
+- The ACPI readback: 6 tables, `DSDT` at `0x0054d4c8` — **the same offset for a
+  twentieth step** — 6,641 bytes with a valid checksum and byte-identical to the
+  direct compile (`f260db3a…`); `SSDT` (61 bytes), `APIC` (724) and `GTDT` (156)
+  valid; `FACP` (276) and `FACS` (64) do not checksum, as expected before
+  `AcpiTableDxe` runs and only those two.
+- The three payloads are `45c978f3…09b22c8` (silicon/gzip, 1,144,832 bytes),
+  `e1b23ab0…33a0b442` (stock/gzip, 1,150,976 bytes) and `0be06803…cb30d610`
+  (stock/none, 3,248,128 bytes) — **all three the same size as 4.89's to the
+  byte**, all three matching GenFv's map at **123 offsets and GUIDs, zero
+  mismatches**, and all three passing `check-payload.py` and
+  `abl-boot-check.py`. The silicon image's kernel blob grew `0x116010` →
+  `0x116060`, 80 bytes for a table 54 bytes larger, and stayed inside the same
+  557 pages. They are archived in `work/out/p2-4.90`.
+- `work/out/p2-variants` **still holds the 4.74 set** — `90b21643…`,
+  `e693e1a0…`, `26919861…`. **Fourteenth** step running.
+- Device count: 36 top-level `Device (` declarations and **43** in total — up
+  four, which is `RHUB` and `PRT1` under `USB0` and the same pair under `UFN0`,
+  alongside `DEV0` inside `UFS0` and the two controllers and their new children
+  inside `URS0`. The census is **52 `_HID`/`_CID` declarations, 38 distinct**,
+  *unchanged* from 4.89 — the new nodes declare no id, which is the whole reason
+  they were admissible. `ACPI0011` has moved to line 4645. The same two remain
+  unclaimed as every step since 4.70: `QCOM0A8B` (`URS0`) and `QCOM24A5`
+  (`UFS0`).
+- The device is absent from this host throughout, so nothing here is a hardware
+  reading, and `RHUB` and `PRT1` are nodes nothing can be tried against until
+  Windows runs on the phone. The payload in `boot` is still the **4.74** set and
+  its panel reading is **still owed** under 先读屏，再刷下一次. Step 4.90 archives
+  its payloads in `work/out/p2-4.90` and does not touch the one on the device.
