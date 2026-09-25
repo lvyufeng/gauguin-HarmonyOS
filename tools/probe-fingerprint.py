@@ -16,34 +16,76 @@ present decides what the panel *can* print. That is the question this tool
 answers, and it answers it the same way for a payload and for a readback of
 `boot`, because both are Android boot images with the same payload shape.
 
-The three images are a ladder, and the ladder is the point:
+The third line of that table is itself an instance of the rule, and the tidy-up
+step 4.98 owed: `work/out/p2-variants/Mu-gauguin-silicon-gzip.img` no longer hashes
+`7c8fdb5a...`. It is the 4.74 set now, **`90b21643...`**, still 1,142,784 bytes, same
+name. The table is kept as measured on that date rather than refreshed, because the
+point it makes is about the date it was measured on; what a reader wants is the
+command, not a number that ages.
 
-    P2 FREE (digest)   P2 SEQ   P2 WHY   P2 ERR   P2 APRI   P2 BIN   P2 RETRY   P2 KEY   P2 TICK   P2 FW
-    -----------------  ------   ------   ------   -------   ------   --------   ------   -------   -----
-    boot-now-0923        yes      yes      no       no        no       no         no       no       no
-    p2-4.20              yes      yes     yes      yes       yes      yes        yes       no       no
-    p2-variants          yes      yes     yes      yes       yes      yes        yes      yes       no
+The three images are a ladder, and the ladder is the point. It has fourteen rungs
+since step 4.98 added four; the values below are what `probe-fingerprint.py IMG`
+prints now, not a column someone typed:
 
-**`P2 WHY` and `P2 ERR` are why this ladder has nine rungs and not six, and they are
-the two rows that decide whether a reading is even possible.** `boot-now-0923`
-prints a `P2 SEQ` line and *nothing else in that block*: no `WHY` beside it and no
-`ERR` below it, because `P2WhyLetter`/`P2MarkSeq` and the grouped `P2 ERR %r x%d`
-were added together, after that payload was built. `P2 SEQ` has been read off this
-panel three times and `P2 WHY` has been read zero times, which is exactly what a
-ladder whose oldest rung prints SEQ alone predicts. What that costs is the whole
-reading: `SEQ` is a string of `s` and `L`, and `L` means only *the load failed* - it
-names no status. `WHY` is the same positions with the status class in each one, and
-`P2 ERR` is those statuses again **grouped and counted**, which makes one short line
-- `P2 ERR Out of Resources x27`, or three lines if the causes differ - the complete
-answer to "did the batch fail for one reason or twenty-seven". So:
+    boot-now-0923   FREE SEQ DIAG STATS WALK NOLOAD                        6/14
+    p2-4.20         the same six, plus APRI WHY ERR BIN RETRY             11/14
+    p2-variants     all fourteen                                         14/14
+    p2-4.94         all fourteen                                         14/14
+    p2-freewhy      all fourteen, P2 FWHY in the older spelling          14/14
 
-    **A panel showing `P2 SEQ` with no `P2 ERR` anywhere on it is running
-    `boot-now-0923`, and no amount of reading that screen can produce the status.**
-    `--expect P2ErrRow` is the gate that makes the next flash worth making.
+    rung      row it is                    boot-now-0923
+    --------  ---------------------------  -------------
+    P2Digest  P2 FREE largest=             present
+    P2Seq     P2 SEQ [%a]                  present
+    P2Why     P2 WHY [%a]                  ABSENT
+    P2ErrRow  P2 ERR %r x%d                ABSENT
+    P2Apri    P2 APRI bytes=               ABSENT
+    P2Diag    P2 DIAG %c %g %r             present
+    P2Stats   P2 STATS discovered=         present
+    P2Walk    P2 WALK t=                   present
+    P2NoLoad  P2 NOLOAD                    present
+    P2Bins    P2 BIN init=                 ABSENT
+    P2Retry   P2 RETRY                     ABSENT
+    P2Key     KEY                          ABSENT
+    P2Tick    K %d %c%c                    ABSENT
+    P2FreeWhy P2 FWTY / P2 FWHY            ABSENT
 
-**`P2 FW` is the tenth rung and the only one that is not Dispatcher.c's.** Nine of the
-ten instruments print from the digest, which runs *after* the batch, so every one of
-them describes the heap the run left behind. The question they were built to answer -
+**`P2 WHY` and `P2 ERR` are why the ladder grew past six rungs, and they are the two
+rows that decide whether a reading is even possible.** `boot-now-0923`
+prints a `P2 SEQ` line and no `WHY` beside it and no `ERR` below it, because
+`P2WhyLetter`/`P2MarkSeq` and the grouped `P2 ERR %r x%d` were added together, after
+that payload was built. `P2 SEQ` has been read off this panel three times and
+`P2 WHY` has been read zero times, which is exactly what a ladder whose oldest rung
+prints SEQ alone predicts. What that costs is the whole reading: `SEQ` is a string of
+`s` and `L`, and `L` means only *the load failed* - it names no status. `WHY` is the
+same positions with the status class in each one, and `P2 ERR` is those statuses
+again **grouped and counted**, which makes one short line - `P2 ERR Out of
+Resources x27`, or three lines if the causes differ - the complete answer to "did the
+batch fail for one reason or twenty-seven".
+
+**But the older spelling of that sentence was too strong, and step 4.98 is the step
+that measured it.** `boot-now-0923` does carry a row that names a status in words:
+`P2 DIAG %c %g %r`, one row per failure, `L <guid> Out of Resources`. What it lacks
+is `P2 WHY`, the *position table* that would let a reader index the `SEQ` string. So
+the corrected form of the claim is narrower and more useful:
+
+    **A panel showing `P2 SEQ` with no `P2 WHY` anywhere on it is running
+    `boot-now-0923`, and the `SEQ` string's positions cannot be resolved from that
+    screen - but its `P2 DIAG` rows name the failing status in words anyway, and
+    they are the rows one line below the `SEQ`.** `--expect P2ErrRow` is still the
+    gate that makes the next flash worth making; `--rows` is the gate that says
+    whether a payload prints `P2 DIAG` at all.
+
+The distinction is not pedantry, it is the difference between "read more carefully"
+and "build a new payload". `P2 DIAG` is not a rung of this ladder because a rung is
+an *instrument* - a function a build either has or has not - and `P2Digest` owns
+fifteen rows and is named by one of them. Step 4.97 read a rung report as an
+inventory of everything a payload can print, and paid for it; `--rows` below is the
+mode that answers the question it thought it was asking.
+
+**`P2 FW` is the rung that is not Dispatcher.c's.** The other thirteen print from the
+digest, which runs *after* the batch, so every one of them describes the heap the run
+left behind. The question they were built to answer -
 why a request byte for byte identical to one that succeeded a few milliseconds later
 was refused - is about the heap *at the failure*, and the only place that state exists
 is inside `FindFreePages`, at the instruction where the allocator gives up
@@ -65,7 +107,8 @@ allocator entirely, in `CoreLoadPeImage`'s own `AllocateRuntimePool`.
 
 **`P2 KEY` is what makes the bottom row of the panel readable, and it is in exactly
 one of the three.** `P2Digest` calls `P2Bins()` and then `P2Key()` last
-(`Dispatcher.c:2376`, `:2382`, with the comment at `:2378` saying so), and `P2Key`
+(`Dispatcher.c:2464` and `:2470`, with the comment above the second one saying so),
+and `P2Key`
 prints one of two lines unconditionally - so on the newest build the last populated
 row of the panel is *always* the `KEY` line, in every state, including after a
 wipe. On `p2-4.20` there is no `P2Key`, so the last populated row is the `P2 RETRY`
@@ -82,7 +125,8 @@ Which gives the categorical discriminator this tool was written for:
 
 So the markers are read out of the sources rather than typed here. That is not
 tidiness: the first draft of this tool carried a hand-typed `err=%a at=%d` for
-`P2Key`, the real format is `err=%r at=%d` (`:271`), and the tool therefore
+`P2Key`, the real format is `err=%r at=%d` (`Dispatcher.c:286`), and the tool
+therefore
 reported `P2Key` absent from an image that has it. A tool whose job is to tell
 which instrument is in an image cannot invent its own fingerprints; it reads them,
 and it fails loudly if the function it names no longer contains the line it
@@ -90,6 +134,7 @@ expects.
 
 Usage:
     tools/probe-fingerprint.py IMG...                    # the ladder, per image
+    tools/probe-fingerprint.py --rows IMG...             # every P2 row, not just rungs
     tools/probe-fingerprint.py --expect P2Key IMG        # pre-flight gate, exit 1
     tools/probe-fingerprint.py --read                    # dd `boot` first (TWRP)
     tools/probe-fingerprint.py --markers                 # what the names mean
@@ -97,6 +142,12 @@ Usage:
 `--expect` is the use this is for before a flash: it is the check that the payload
 being written is one whose screen the reader can actually decode. It costs nothing
 and it is the check that a size comparison silently passes.
+
+`--rows` exists because `--expect` was once mistaken for an inventory of everything
+a payload can print. It is not: it names instruments, and an instrument may own
+many rows. Step 4.98 measured the difference - `boot-now-0923` reports `6 of 14` on
+the ladder and prints 8 of the 27 rows the sources contain, and among the eight is
+`P2 DIAG`, the only row in the block that names a failing status in words.
 
 Exit status is 0 when every named instrument is resolved and every `--expect` holds;
 1 when an `--expect` fails, when an image cannot be walked, or when a marker no
@@ -138,8 +189,8 @@ def load_sibling(name, filename):
 # resolved against the sources at run time, so renaming a function or editing a
 # format string breaks this loudly instead of quietly reporting the wrong thing.
 #
-# The source column is why `P2 FW` is a different kind of entry from the other nine:
-# nine of the ten instruments are Dispatcher.c's, and `P2FreeWhy` is Mem/Page.c's,
+# The source column is why `P2 FW` is a different kind of entry from the other
+# thirteen: they are Dispatcher.c's, and `P2FreeWhy` is Mem/Page.c's,
 # because the record it prints has to be taken where the free map is - inside
 # FindFreePages, at the moment an allocation becomes terminal - and that state
 # cannot be recovered from anywhere else.
@@ -148,6 +199,9 @@ INSTRUMENTS = [
      "the free map at the moment a page allocation became terminal: the request, "
      "the largest run the search would have accepted, and how much of the map is "
      "still conventional"),
+    ("P2NoLoad", DISPATCHER, "CoreDisplayDiscoveredNotDispatched", "P2 NOLOAD ",
+     "the drivers that were discovered and never dispatched because their depex "
+     "was false - six rows and a total, and the only rows printed before the digest"),
     ("P2Digest", DISPATCHER, "P2Digest", "P2 FREE largest=",
      "the per-record census: P2 DIAG, P2 ERR, P2 WALK, and the largest allocation"),
     ("P2Apri",   DISPATCHER, "P2Digest", "P2 APRI",
@@ -158,6 +212,14 @@ INSTRUMENTS = [
      "the same positions as status classes - the row that has never been read"),
     ("P2ErrRow", DISPATCHER, "P2Digest", "P2 ERR ",
      "the failures grouped by status and counted, in words - the readable spelling"),
+    ("P2Diag",   DISPATCHER, "P2Digest", "P2 DIAG %c",
+     "one row per failure, carrying the driver's GUID and the status in words - "
+     "the per-driver half of P2ErrRow's grouping"),
+    ("P2Stats",  DISPATCHER, "P2Digest", "P2 STATS ",
+     "the six counts in one row: discovered, apriori promoted of the array, started, "
+     "diag and noload"),
+    ("P2Walk",   DISPATCHER, "P2Digest", "P2 WALK t=",
+     "one row per file type: how many were seen, how many iterations, which last"),
     ("P2Bins",   DISPATCHER, "P2Bins",   "P2 BIN init=",
      "the runtime bins' windows and the memory type information HOB"),
     ("P2Retry",  DISPATCHER, "P2Bins",   "P2 RETRY",
@@ -168,13 +230,34 @@ INSTRUMENTS = [
      "one row per attempted dispatch, so a run that stops inside the loop says where"),
 ]
 
+# The rungs above were ten until step 4.98, and the four that were added then are
+# the four whose absence caused that step's error. They are a different kind of
+# entry from the other ten: `P2 DIAG`, `P2 STATS` and `P2 WALK` are *rows of
+# P2Digest*, not functions, and they were skipped because the ladder was read as an
+# inventory of what a payload can print. It is not - it is a list of instruments,
+# and `P2Digest` deliberately names only one of its own rows (`P2 FREE largest=`)
+# because a function is the unit a build either has or has not. The consequence was
+# measured: `boot-now-0923` was reported "2 of 10" and read as a payload with almost
+# nothing to say, when its `DxeCore` carries eight `P2 ` rows - and the row one line
+# below the `SEQ` string it has been transcribed for is `P2 DIAG L <guid> <status>`,
+# the only row anywhere on this panel that names a failing status in words. `--rows`
+# below is the mode that answers the question the ladder was mistaken for.
+#
+# `P2 NOLOAD` is a rung and not a `P2Digest` row: it is
+# `CoreDisplayDiscoveredNotDispatched`'s, printed at `:2512` and `:2522`, *before*
+# the digest's first call at `:2552`. That order matters to a reader - the digest is
+# repeated forty-one times so that the panel ends up holding nothing but copies of
+# it, and the six NOLOAD rows are printed once and then wiped.
+
 # The ladder, in the order the rows appear on the panel. The three payloads of record
 # were built before `P2FreeWhy` existed, so its column is 'no' for all three. It is
 # built now, in `work/out/p2-freewhy` and `work/out/p2-freewhy-g`, which are the first
-# two rungs of the ladder to carry all ten - and the first two that need the head
-# markers in `resolve_markers()`, since the second build's `P2 FWHY` literal is not the
-# first's. `P2 FW` is what a build has to carry before the free map at the failure is
-# worth a flash: see docs/08-device-session.md, step 4.18 onward.
+# two rungs of the ladder to carry all ten of the original instruments - and the first
+# two that need the head markers in `resolve_markers()`, since the second build's
+# `P2 FWHY` literal is not the first's. `P2 FW` is what a build has to carry before the
+# free map at the failure is worth a flash: see docs/08-device-session.md, step 4.18
+# onward. The four rungs added above in step 4.98 predate all three payloads of record,
+# so they widen what those three report without changing which of them is complete.
 
 
 def literal_unescape(raw):
@@ -300,8 +383,112 @@ def resolve_markers():
     return resolved
 
 
-def instruments_in(img, markers, verbose=True):
-    """(present set, absent set, the FFS file each marker was found in).
+def all_functions(text):
+    r"""[(name, body_start, body_end, line)] for every function defined in `text`.
+
+    `function_body()` walks to the body of one named function; this walks to the
+    body of every one, so a literal can be attributed to its owner without the
+    owner being named in advance. That difference is the whole point: the rung
+    list above is hand-written and was wrong about which rows exist, and a census
+    that has to be told the function names repeats the mistake it is here to
+    catch.
+
+    `line` is the line of the opening brace, which is the number a reader gets
+    from `grep -n '^\s*DEBUG'` on the literal's own line only after adding the
+    newlines between. Pointing it at the `Name (` line instead would be off by
+    the two or three lines of the parameter list, which is exactly the kind of
+    citation drift step 4.98 had to correct by hand.
+
+    The guard that keeps a multi-line *call* from being taken for a definition is
+    the semicolon: a definition's parameter list is followed by `)` and then `{`,
+    a call's by `)` and then `;`. Without it `Foo (\n  arg\n  );` matches the same
+    regex as `Foo (\n  VOID\n  )` and the brace that follows belongs to whatever
+    is defined next.
+    """
+    out = []
+    for m in re.finditer(r"\n([A-Za-z_]\w*)[ \t]*\([ \t]*\n", text):
+        j = text.index(")", m.end() - 1)
+        head = text[j + 1:]
+        k = head.find("{")
+        if k < 0 or ";" in head[:k]:
+            continue
+        start = j + 1 + k
+        depth = 0
+        for i in range(start, len(text)):
+            if text[i] == "{":
+                depth += 1
+            elif text[i] == "}":
+                depth -= 1
+                if depth == 0:
+                    out.append((m.group(1), start, i + 1,
+                                text.count("\n", 0, start) + 1))
+                    break
+    return out
+
+
+def source_rows():
+    """[(owner, line, literal)] - every P2BRINGUP row the sources can print.
+
+    A row is a `DEBUG` format string that begins `P2 `, `K ` or `KEY `. That is
+    read off the sources rather than listed here for the reason the rungs are:
+    a hand-typed list of rows is a list of the rows someone remembered. The
+    prefixes cover all three spellings in this block - the digest's `P2 ...`
+    rows, `P2Tick`'s one-line `K %d ...`, and `P2Key`'s `KEY ...`.
+
+    The literals are taken with their offsets inside the enclosing function so
+    the row can be reported against a line number in the file a reader can open,
+    which is the whole reason this walk does not reuse `debug_literals()`.
+    """
+    prefixes = (b"P2 ", b"K ", b"KEY ")
+    out = []
+    for path in (DISPATCHER, PAGE):
+        text = open(path, encoding="utf-8", errors="replace").read()
+        for owner, start, end, fline in all_functions(text):
+            body = text[start:end]
+            for m in re.finditer(r"DEBUG\s*\(\s*\(", body):
+                depth, i, j = 1, m.end(), m.end()
+                while j < len(body) and depth:
+                    if body[j] == "(":
+                        depth += 1
+                    elif body[j] == ")":
+                        depth -= 1
+                    j += 1
+                lm = re.search(r'"((?:[^"\\]|\\.)*)"', body[i:j])
+                if not lm:
+                    continue
+                lit = literal_unescape(lm.group(1))
+                if lit.startswith(prefixes):
+                    line = fline + body.count("\n", 0, i + lm.start())
+                    out.append((owner, line, lit))
+    return out
+
+
+def rows_in(img):
+    """[(owner, line, literal, state, where)] - one entry per source row.
+
+    `state` is `present`, `older` (the row is in the image under a different
+    spelling of the same leading text - the image predates an edit to the format
+    string) or `ABSENT`. The distinction is the one the rungs already draw, and it
+    matters more here: a row that is `older` is a row the screen will show in a
+    shape the transcriptions in docs/08 were not written against.
+    """
+    files, offs, inner, err = walk_fv(img)
+    if err:
+        return None, err
+    out = []
+    for owner, line, lit in source_rows():
+        nm = find_literal(files, offs, inner, [lit])
+        if nm:
+            out.append((owner, line, lit, "present", nm))
+            continue
+        head = lit.split(b"%", 1)[0]
+        nm = find_literal(files, offs, inner, [head]) if len(head) >= 4 else None
+        out.append((owner, line, lit, "older" if nm else "ABSENT", nm or "-"))
+    return out, None
+
+
+def walk_fv(img):
+    """(files, offs, inner, err) - the FFS files and the decompressed volume.
 
     The walk is `fv-inventory`'s, not a second copy of it: the descent from the
     Android boot image through BootShim, FVMAIN_COMPACT and the LZMA GUIDed
@@ -321,10 +508,26 @@ def instruments_in(img, markers, verbose=True):
         return None, None, None, str(exc)
     except Exception as exc:                                   # noqa: BLE001
         return None, None, None, f"{os.path.basename(img)}: not walkable ({exc})"
-
     if not inner:
         return None, None, None, (f"{os.path.basename(img)}: the walk found no"
-                                 f" decompressible FVMAIN - nothing to fingerprint")
+                                  f" decompressible FVMAIN - nothing to fingerprint")
+    return files, offs, inner, None
+
+
+def find_literal(files, offs, inner, lits):
+    """The name of the first FFS file whose body contains every literal, or None."""
+    for (g, _t, s, nm, _st), o in zip(files, offs):
+        body = inner[o:o + s]
+        if all(lit in body for lit in lits):
+            return nm or g
+    return None
+
+
+def instruments_in(img, markers, verbose=True):
+    """(present set, absent set, the FFS file each marker was found in)."""
+    files, offs, inner, err = walk_fv(img)
+    if err:
+        return None, None, None, err
 
     where, found = {}, set()
     for name, _src, _func, marker, heads, _note in markers:
@@ -334,16 +537,12 @@ def instruments_in(img, markers, verbose=True):
         # statement from "present", and the difference is the whole reason the
         # `g=` field exists.
         for exact, tag in ((marker, ""), (heads, ", head-matched")):
-            for (g, _t, s, nm, _st), o in zip(files, offs):
-                body = inner[o:o + s]
-                if all(lit in body for lit in exact):
-                    found.add(name)
-                    plural = "s" if len(exact) > 1 else ""
-                    where[name] = f"{nm or g} ({len(exact)} line{plural}{tag})"
-                    break
-            else:
-                continue
-            break
+            nm = find_literal(files, offs, inner, exact)
+            if nm:
+                found.add(name)
+                plural = "s" if len(exact) > 1 else ""
+                where[name] = f"{nm} ({len(exact)} line{plural}{tag})"
+                break
     missing = {n for n, _s, _f, _m, _h, _n2 in markers} - found
     return found, missing, where, None
 
@@ -376,6 +575,49 @@ def dd_read(size, out):
     return got
 
 
+def rows_main(images):
+    """The row census: what the sources print, and which of it each image can.
+
+    This is the mode that answers the question the ladder is not. The ladder
+    asks "does the image carry this instrument", fourteen times; a reader who
+    wants to know what a screen will show has to ask "which of the rows the
+    source prints are in this image", and the two questions came apart in step
+    4.98 with a cost of several sessions: `P2 DIAG` is a row of `P2Digest`, it
+    was not a rung, and the rung report "2 of 10" was read as an inventory of the
+    payload's vocabulary when it is only a count of instruments.
+    """
+    rows = source_rows()
+    print(f"the sources print {len(rows)} P2 rows, "
+          f"{len({o for o, _l, _x in rows})} owners:")
+    for owner in dict.fromkeys(o for o, _l, _x in rows):
+        print(f"  {owner}()  {sum(1 for o, _l, _x in rows if o == owner)} rows")
+    bad = 0
+    for img in images:
+        if not os.path.isfile(img):
+            print(f"\n{img}: no such file")
+            bad = 1
+            continue
+        raw = open(img, "rb").read()
+        rel = os.path.relpath(img, ROOT) if img.startswith(ROOT) else img
+        print(f"\n{rel}")
+        print(f"  {len(raw):,} bytes   sha256 {hashlib.sha256(raw).hexdigest()}")
+        census, err = rows_in(img)
+        if err:
+            print(f"  !! {err}")
+            bad = 1
+            continue
+        have = [r for r in census if r[3] != "ABSENT"]
+        for owner, line, lit, state, nm in census:
+            tag = {"present": "  present", "older": "  OLDER  ",
+                   "ABSENT": "  ABSENT "}[state]
+            print(f"  {tag} {owner}():{line:<5} "
+                  f"{lit.decode('latin-1').splitlines()[0][:52]!r}")
+        print(f"  -> prints {len(have)} of the {len(census)} rows the source has; "
+              f"{sum(1 for r in have if r[3] == 'present')} in the spelling the "
+              f"source now uses")
+    return bad
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("images", nargs="*", help="payload .img, or a readback of `boot`")
@@ -389,6 +631,9 @@ def main():
                                                   "boot-readback.bin"))
     ap.add_argument("--markers", action="store_true",
                     help="print the format string each name resolves to and stop")
+    ap.add_argument("--rows", action="store_true",
+                    help="census every P2 row in the sources against every image, "
+                         "rather than the fourteen named instruments")
     args = ap.parse_args()
 
     markers = resolve_markers()
@@ -417,6 +662,9 @@ def main():
     if not images:
         sys.exit("probe-fingerprint: give an image, or --read to take one off the"
                  " phone. `--markers` prints what the names mean.")
+
+    if args.rows:
+        return rows_main(images)
 
     names = [n for n, _s, _f, _m, _h, _n in markers]
     bad = 0

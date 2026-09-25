@@ -19460,3 +19460,187 @@ prints eight rows, and the two it named were the two it knows.
 - Standing rules unchanged: `userdata`, the partition table and the firmware LUN are untouched;
   writes go to `boot` only; the control image is read before anything is overwritten; and the
   screen is read before the next flash.
+
+## Step 4.99 — the four rungs the ladder was missing, and the 27 rows it was never counting
+
+Step 4.98 ended with a diagnosis of why the status surface went unread for three
+sessions: `tools/probe-fingerprint.py`'s report — a rung count, which on the ten rungs
+the tool then had scored `boot-now-0923` at 2 — was taken for an inventory of
+everything that payload can print. It is not an inventory. It is a count of
+**instruments**, and an instrument may own many rows. This step repairs the instrument
+rather than the sentence about it.
+
+### What was changed, and it is one tool
+
+`INSTRUMENTS` in `tools/probe-fingerprint.py` carried ten entries. Four more are now
+in it, and all four are rows that were on the panel the whole time:
+
+| rung added | the row | owner | why it was missing |
+| --- | --- | --- | --- |
+| `P2Diag` | `P2 DIAG %c %g %r` | `P2Digest` | the row that names a failing status **in words**, and the one Step 4.98 found sitting below the transcribed `SEQ` |
+| `P2Stats` | `P2 STATS discovered=%d apriori=%d/%d started=%d diag=%d noload=%d` | `P2Digest` | six counts in one row, and the only field anywhere that can report a failure the `SEQ` string structurally cannot show |
+| `P2Walk` | `P2 WALK t=%d seen=%d iter=%d last=%g` | `P2Digest` | five rows establishing that the files are in the volume, which is half of what `P2 ERR Not Found` would have to be read against |
+| `P2NoLoad` | `P2 NOLOAD %g …` and `P2 NOLOAD total=%d shown=%d` | `CoreDisplayDiscoveredNotDispatched` | the other census: discovered and never dispatched, which is what `noload=` counts |
+
+They were missing because the ladder was built, rung by rung, out of *functions* —
+`P2Bins`, `P2Key`, `P2Tick`, `P2FreeWhyReport` — and `P2Digest` is fifteen rows
+reported as one. `P2Digest`'s own rung names `P2 FREE largest=`, the row that was
+added first, and nothing after it was ever added as a rung. The four above close the
+gap between "which instruments does this build have" and "which rows will this screen
+show", and that gap is exactly the width of the error.
+
+`P2NoLoad` is the one that is not a `P2Digest` row and is worth its own sentence: it
+belongs to `CoreDisplayDiscoveredNotDispatched` (`Dispatcher.c:2483`), which prints
+its two rows at `:2512` and `:2522` — **before** the digest's first call at `:2552`.
+The digest is then called forty-one times so that the panel ends up holding nothing
+but copies of it; the six `NOLOAD` rows are printed once and wiped. A reading of
+`noload=` therefore survives and a reading of the six rows naming which drivers did
+not load does not.
+
+### The measurement, which is the point
+
+Same six images, the widened ladder. Every value below is printed, none typed:
+
+| payload | before | now | what it is missing |
+| --- | --- | --- | --- |
+| `work/out/boot-now-0923.img` | 2 of 10 | **6 of 14** | `P2FreeWhy`, `P2Apri`, `P2Why`, `P2ErrRow`, `P2Bins`, `P2Retry`, `P2Key`, `P2Tick` |
+| `work/out/p2-4.20/Mu-gauguin-silicon-gzip.img` | 7 of 10 | **11 of 14** | `P2FreeWhy`, `P2Key`, `P2Tick` |
+| `work/out/p2-variants/Mu-gauguin-silicon-gzip.img` | 10 of 10 | **14 of 14** | nothing |
+| `work/out/p2-4.94/Mu-gauguin-silicon-gzip.img` | 10 of 10 | **14 of 14** | nothing |
+| `work/out/p2-freewhy/Mu-gauguin-silicon-gzip.img` | 10 of 10 | **14 of 14** | nothing (`P2 FWHY` head-matched) |
+| `work/out/usb-host/Mu-gauguin-xhci-host-gzip.img` | 10 of 10 | **14 of 14** | nothing |
+
+The `before` column is not a remembered number: it is the same run's result
+intersected with the ten names the ladder had, which is the only honest way to state
+it, because the four were added at once and no run of the old tool exists in this
+session to quote. It is worth reading down for one reason: the payload in `boot` and
+`p2-4.94` differ by **eight rungs** on the widened ladder and by **eight** on the old
+one, and the two gaps are equal only by coincidence — both images carry all four added
+rows, so both gained the same four. That is the whole shape of the mistake: four rows
+were invisible to the instrument on *every* payload, and the one image where the
+invisible rows were the only rows that mattered was the one in `boot`. The rung that
+carries the answer was the rung that was never listed.
+
+The row that matters is the first. `boot-now-0923` carries `P2Digest`, `P2Seq`,
+`P2Diag`, `P2Stats`, `P2Walk`, `P2NoLoad` — and `P2Why` is **ABSENT**, which is the
+independent confirmation of Step 4.98's withdrawal from a second direction: the
+ladder now says in one line what that step established by reading the FFS body.
+
+### The census, and the proof that it is complete
+
+`--rows` is new and answers the other question. It reads the rows out of the sources
+rather than listing them, the same way the markers are read, and for the same reason:
+a hand-typed list of rows is a list of the rows someone remembered, which is the
+failure that produced this step. It walks every function in `Dispatcher.c` and
+`Mem/Page.c`, takes every `DEBUG` format string that begins `P2 `, `K ` or `KEY `,
+and reports each one against the image as `present`, `OLDER` (the image predates an
+edit to the literal) or `ABSENT`:
+
+    the sources print 27 P2 rows, 6 owners:
+      P2Key()  2 rows
+      P2Bins()  5 rows
+      P2Tick()  1 rows
+      P2Digest()  15 rows
+      CoreDisplayDiscoveredNotDispatched()  2 rows
+      P2FreeWhyReport()  2 rows
+
+    work/out/boot-now-0923.img
+      -> prints 8 of the 27 rows the source has; 8 in the spelling the source now uses
+
+**The 8 is Step 4.98's number, arrived at independently.** That step counted the `P2 `
+literals in `boot-now-0923`'s `DxeCore` by hand and got eight; the tool now walks the
+whole tree and gets eight, and names them: `P2 SEQ (no Apriori…)`, `P2 SEQ [%a]`,
+`P2 DIAG`, `P2 STATS`, `P2 WALK`, `P2 FREE largest=`, and both `P2 NOLOAD` rows.
+`P2 WHY` is not among them.
+
+The 27 is not a count of what someone remembered either, and it is checkable three
+ways that agree: the walk finds 25 rows in `Dispatcher.c` and 2 in `Mem/Page.c`;
+`grep -rn '"P2 '` over the two files returns 25 and 2; and **no other file in the
+whole `Mu-Silicium` tree contains a `P2 ` literal at all**, so the census is complete
+over the platform and not just over the two files it reads. Within those two files
+the six printing functions contain 27 row literals and **zero** non-row `DEBUG`
+literals, so nothing is hiding behind a different prefix.
+
+### The citations the tool was carrying, and how far they had drifted
+
+Writing the row mode meant reading the tool's own front matter against the sources,
+and five numbers in it were stale. They are corrected here in the same change rather
+than left for a later step to trip over:
+
+| the tool said | measured | what it is |
+| --- | --- | --- |
+| `Dispatcher.c:2376`, `:2382`, comment at `:2378` | `:2464`, `:2470` | the `P2Bins()` and `P2Key()` calls — off by **88 lines**, and the comment is above `:2470`, not `:2378` |
+| `err=%r at=%d` at `:271` | `:286` | the `P2Key` literal the tool once typed wrong |
+| "nine of the ten instruments are Dispatcher.c's" | thirteen of the fourteen | the count after this step |
+| `p2-variants` sha256 `7c8fdb5a…` | `90b21643…` | the file is still 1,142,784 bytes under the same name, which is the table's own thesis arriving at the table |
+| the ladder table's `p2-variants` row: `P2 TICK` no | present | the row described the payload that used to carry that name |
+
+`p2-4.20`'s row in that table survives, and is worth recording because it is the one
+cell that was right for a reason: it says no `P2Key`, and `--expect P2Key` fails on it
+while passing on `p2-4.94`. Step 4.29's reading — the last populated row being
+`P2 RETRY` — is the same fact.
+
+One statement outside this document quotes the old count and is left standing,
+because it is a record of a build rather than of the tool: `docs/07-uefi-platform.md`
+`:2912-2916` says `probe-fingerprint.py` "reports the same ten-instrument ladder in
+this payload as in the sixth" and lists the ten names. Every one of those ten is
+present in the payloads that sentence is about, which is why it was written; the
+report it describes would read `14 of 14` today, and a reader who needs the count
+should run the tool rather than quote the page.
+
+One bug was made and caught inside this step rather than after it. `all_functions()`
+first reported each row against the line of its `Name (` line; the parameter list is
+two or three lines long, so every citation was low by that much. It was found by
+checking five of the tool's output lines against `grep -n` before writing any of them
+into this document, and the fix is that `line` is the line of the opening brace. The
+reported numbers now match `grep -n` exactly, which is the only test that matters for
+a number whose whole purpose is to be looked up.
+
+### The gate this makes possible
+
+`--expect` is the pre-flight check, and it can now name the row that carries the
+answer:
+
+    tools/probe-fingerprint.py --expect P2Diag --expect P2Stats work/out/boot-now-0923.img
+      ok    --expect P2Diag   boot-now-0923.img
+      ok    --expect P2Stats  boot-now-0923.img        exit 0
+    tools/probe-fingerprint.py --expect P2Why work/out/boot-now-0923.img
+      FAIL  --expect P2Why    boot-now-0923.img        exit 1
+
+So "the payload in `boot` must still be one whose `P2 DIAG` rows can be photographed"
+is now a command that exits non-zero, and it needs no device. The gate the next flash
+should clear is unchanged and is now expressible in the instrument that owns the row:
+`--expect P2ErrRow --expect P2Diag --expect P2Stats`.
+
+### Nothing was built and nothing was flashed
+
+- Two files change: `tools/probe-fingerprint.py`, **+298 / −50** against `63c7782`, and
+  this document, which is the rest of the diff and whose size is the step itself — it
+  is not quoted here, because a figure that counts the sentence quoting it is a figure
+  that is wrong by the time it is read. No `.c`, no `.inf`,
+  no `.asl`, no `APRIORI.inc`, no FFS file, no payload and no partition. The tool is
+  host-side; nothing it does reaches the phone.
+- **No build, no staging, no flash, and no write to any partition.** The device was not
+  attached to this host, so nothing here is a hardware reading and no panel was
+  photographed.
+- The payloads do not move, and every one of them is re-checked rather than recalled:
+  `work/out/p2-4.94/Mu-gauguin-silicon-gzip.img`, 1,144,832 B,
+  `d621f732f4763a303e980c5af04451479c2ace31801e796993a258f226c177a5`;
+  `work/out/p2-variants/Mu-gauguin-silicon-gzip.img`, 1,142,784 B,
+  `90b21643e3450c326fb3d24baf64d58d4692a5d155c36b76d2e020ff04a96b59`;
+  `work/out/boot-now-0923.img`, 1,142,784 B,
+  `3547fd0487d333874492e519760155b46164be8989ab3b5db743d42feefbe8ee`;
+  and the two `P2FreeWhy` builds, `eb1601ab98fe97d25ae87106b1dedfda0356e0012a8a3e728219066cef1eb3e3`
+  and `cbe5a13114fc4a0465677e480a29a76fa2836cf2ae00fb9e9838c490e0102132`. The unflashed
+  XHCI host payload, `work/out/usb-host/Mu-gauguin-xhci-host-gzip.img`, 1,169,408 B,
+  `efc8e10d09f0f286011e1aacc638a7edd2ed5fcd86884640b28d14628f58f9f3`, is
+  untouched and is still not a candidate for `boot` until the panel has been read.
+- Cited, re-read rather than remembered: `Dispatcher.c:78`, `:199`, `:466`, `:473`,
+  `:481`, `:489`, `:495`, `:2279`, `:2286`, `:2291`, `:2295`, `:2312`, `:2316`,
+  `:2339`, `:2348`, `:2349`, `:2373`, `:2403`, `:2422`, `:2431`, `:2454`, `:2462`,
+  `:2464`, `:2470`, `:2482`, `:2483`, `:2512`, `:2522`, `:2552`, `:2556`, and `:286`
+  for the `KEY` literal; `Mem/Page.c:1276`, `:1290`; and, in this document, Steps
+  4.18, 4.29, 4.30, 4.39, 4.97 and 4.98.
+- Standing rules unchanged: `userdata`, the partition table and the firmware LUN are
+  untouched; writes go to `boot` only; the control image is read before anything is
+  overwritten; and the screen is read before the next flash.
