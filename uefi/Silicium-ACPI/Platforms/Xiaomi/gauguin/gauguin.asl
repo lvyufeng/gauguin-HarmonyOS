@@ -227,718 +227,6 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
              0x00                                             // .
         })
 
-        /*
-         * The Type-C controller. Of the nodes this table still owes P3 it is
-         * the shortest to justify, and the best-attested: the node is 1,272
-         * bytes and 46 lines in lisa, in a52sxq and in the SC7280 CRD's DSDT,
-         * and the three are byte-identical to each other - zero differing
-         * lines in either comparison. Two of them are iasl output for EDK2;
-         * the third is creator `MSFT`, taken from a shipped Qualcomm UFS
-         * firmware capsule (qcfirmware7280_UFS/qcfirmware7280v_UFS03600000.cap,
-         * offset 0xb683a5, header `QCOMM `/`SDM7280 `, 85,861 bytes). The two
-         * EDK2 tables are family 0A, the family that gave this file GIO0's
-         * QCOM0A0C and URS0's QCOM0A8B, and the node is one id, one resource
-         * and five accessors.
-         *
-         * `_HID` is "QCOM0AA4" and the family byte is what settles it, the
-         * same way it settled GIO0's, the PMIC-GPIO node below. The suffix is not
-         * fixed across blocks and generations - it is 17 for the PEP, 0C for
-         * the TLMM, 8B for the URS controller and A4 for this one, and A4 is
-         * not even constant for this block: the Atoll and SM7325 tables spell
-         * it A9 (a52q's and miatoll's QCOM08A9, surya's QCOM14A9) while
-         * SDM7350 uses A4 (renoir's and Cedros_IDP's QCOM09A4). gauguin has
-         * no SDM7350 to follow and no Atoll to follow; it has lisa and
-         * a52sxq. And the id is claimed, which is the check the header above
-         * asks for: `tools/acpi-hid-census.py --drivers DIR --bind QCOM0AA4`
-         * reports qcusbcucsi7280/qcusbcucsi7280.inf, whose INF binds
-         * `ACPI\QCOM0AA4` to `qcusbcucsi7280.sys` and carries the
-         * `HKR,Resources,"BinaryPath",%REG_SZ%, %13%\UCS0.bin` line that
-         * hands the driver its own firmware blob.
-         *
-         * `_DEP` is deliberately absent, and it is the one place this node
-         * does not copy lisa. lisa's reads `Package (One) { \_SB.PEP0 }`, and
-         * PEP0 is the power engine: 2,501 lines and 96,100 bytes in lisa, and
-         * the same size in a52sxq's with exactly two lines differing - both in
-         * `_SUB`, which returns `"CRD07280"` on lisa and `"QRD07280"` on
-         * a52sxq from a branch keyed on `\_SB.PSUB`. That is generator output
-         * with a reference-platform string in it and not board data, and it is
-         * the sort of thing a port has to notice: this table's own PSUB is
-         * `"MTP07225"`, so lisa's `_SUB` verbatim would fall off the end of
-         * both branches and answer zero. PEP0 is dominated by one method of
-         * its own, and the domination is measurable rather than rhetorical:
-         * `THTZ` is a dispatch on (zone, trip point) and is 1,826 of lisa's
-         * 2,501 lines, and the node's total is a linear function of the number
-         * of zones that dispatch covers - 32 cases in lisa, 24 in venus and
-         * vili, and a shipped zero-zone PEP0 of 629 lines in
-         * Silicon-Qualcomm-Kailua-DSDT_MTP whose whole `THTZ` is
-         * `Return (0xFFFF)`. Nothing in any of the 20 tables that declare
-         * `THTZ` calls it, so it is an interface for the OS side and not
-         * internal logic. Its `_DEP` names `\_SB.IPCC`, and its skeleton also
-         * reaches `\_SB.ABD.ROP1` and `\_SB.AGR0`; none of the three is in this
-         * table. No part of it is in this table. Naming it anyway would put
-         * a reference into the namespace that cannot resolve, and an `_DEP`
-         * that evaluates to AE_NOT_FOUND is worth exactly what no `_DEP` is
-         * worth while costing more to read: a later step would meet it as a
-         * dangling name rather than as a node known to be missing. `_DEP` is
-         * advisory start ordering and there is nothing here to order against.
-         * The line to add when PEP0 lands is
-         * `Name (_DEP, Package (One) { \_SB.PEP0 })`, and it belongs
-         * alongside the matching one on URS0 - lisa's URS0 depends on both
-         * PEP0 and UCS0, and this file's URS0 carries no `_DEP` either.
-         *
-         * `_CRS` is one `GpioIo` on GIO0 pin 0x23. That makes it the first
-         * GpioIo this table has placed on GIO0 - everything on that node so
-         * far is Interrupt-only - which is precisely the condition OFNI's
-         * header names when it says 156 is inert only while nothing above 155
-         * is addressed. 0x23 is 35, so the value does not move, and the
-         * reason is not that 35 is small: the class extension validates a
-         * GpioIo pin against OFNI, and 35 is inside 156 on any reading of
-         * that value. The condition is now exercised rather than hypothetical.
-         *
-         * The five methods are one line each and all five return Names that
-         * already sit in this scope above - MUXC, CCST, DPPN, HPDS and HIRQ.
-         * They are how qcusbcucsi7280.sys reads the mux state, the CC state,
-         * the DP pin assignment and the hotplug lines: for those the driver
-         * does not touch a register, it calls into the namespace, and the
-         * namespace is AML that something on the board side is expected to
-         * keep current. lisa's node has no `_STA` and neither does this one,
-         * so the node is present whenever the table is.
-         *
-         * "Something on the board side" is `IC11` in the SC7280 CRD, and it is
-         * worth naming because it is why the five are constants here rather
-         * than a defect in this node. IC11's interrupt handlers Q21 and Q22
-         * read the PMIC's HPL0/HPH0 and write all five of these `_SB` values
-         * out of them, then `Notify (\_SB.UCS0, 0xA0)`. This table has no
-         * IC11, so nothing writes the five and the node answers five
-         * constants, which is what the header above says. The id for that
-         * missing engine is not a guess - `QCOM0A10`, claimed by
-         * qci2c7280.inf, carried by exactly two of the 66 corpus tables, lisa
-         * and a52sxq, the same pair that settled URS0's and this node's own
-         * ids. Which engine it is on this board is still open, and gauguin's
-         * tree has five I2C serial engines across two geniqup wrappers to
-         * choose from.
-         *
-         * The far end is missing as well, and it is the end that matters more
-         * than this one: this table has no `USBC000` device. In the CRD and
-         * four other corpus tables that is `UBTC`, `_HID EisaId("USBC000")`
-         * with `_CID PNP0CA0`, an MMIO mailbox, a child connector, and a `_DSM`
-         * under the UUID `6f8398c2-7ca4-11e4-ad36-631042b5008f` - the same
-         * string in every table that carries it. That is the ACPI UCSI device,
-         * it is bound by Windows rather than by anything in the 7280 driver
-         * set, and its `_DEP` names this node: `Package (0x03) { \_SB.IC11,
-         * \_SB.GIO0, \_SB.UCS0 }`. So PEP0's field on `\_SB.ABD.ROP1`, the
-         * `_DEP` this node cannot yet write, and the I2C addresses PML0 would
-         * need all wait on one node, and docs/08's Step 4.68 has the
-         * measurements for each of the three.
-         */
-        Device (UCS0)
-        {
-            Name (_HID, "QCOM0AA4")  // _HID: Hardware ID
-            Method (_CRS, 0, NotSerialized)  // _CRS: Current Resource Settings
-            {
-                Name (RBUF, ResourceTemplate ()
-                {
-                    GpioIo (Exclusive, PullDown, 0x0000, 0x0000, IoRestrictionNone,
-                        "\\_SB.GIO0", 0x00, ResourceConsumer, ,
-                        )
-                        {   // Pin list
-                            0x0023
-                        }
-                })
-                Return (RBUF) /* \_SB_.UCS0._CRS.RBUF */
-            }
-
-            Method (MUXV, 0, NotSerialized)
-            {
-                Return (\_SB.MUXC)
-            }
-
-            Method (CCVL, 0, NotSerialized)
-            {
-                Return (\_SB.CCST)
-            }
-
-            Method (DPVL, 0, NotSerialized)
-            {
-                Return (\_SB.DPPN)
-            }
-
-            Method (HPDM, 0, NotSerialized)
-            {
-                Return (\_SB.HPDS)
-            }
-
-            Method (HPDI, 0, NotSerialized)
-            {
-                Return (\_SB.HIRQ)
-            }
-        }
-
-        Device (URS0)
-        {
-            /*
-             * `_HID` was "QCOM0497" until Step 4.65 - bitra's, and bitra is
-             * family 04. The URS index is not fixed across tables the way UFS's
-             * is: it moves with the generator group, exactly as GIO0's and SPMI's
-             * do. Across the corpus, URS0 is 97 under families 04, 08 and 14 and
-             * 8B under 09, 0A, 0C, 1A and 25 - and gauguin is 0A, with both of
-             * that family's tables, lisa's and a52sxq's, reading "QCOM0A8B".
-             *
-             * Three angles agree, and none of them is bitra. lisa and a52sxq
-             * both carry Name (_HID, "QCOM0A8B") on a node that is otherwise
-             * identical to this one down to the _CID, the window and the _UID.
-             * UFS0 above is the opposite case and is why the two are worth
-             * separating: QCOM24A5 is 19 of 19 tables across every family, so
-             * its absence from a driver set is the set's gap, while QCOM0497 was
-             * this port's error. And where a table computes the id instead of
-             * naming it - Method (URSI), aliased to _HID on vayu, cepheus and
-             * caymanslm - the value it returns when its QUFN switch is zero is
-             * always that board's own family id, which for gauguin is 0A8B too.
-             */
-            Name (_HID, "QCOM0A8B")  // _HID: Hardware ID
-            Name (_CID, "PNP0CA1")  // _CID: Compatible ID
-            Alias (PSUB, _SUB)
-            Name (_UID, Zero)  // _UID: Unique ID
-            Name (_CCA, Zero)  // _CCA: Cache Coherency Attribute
-            Name (_CRS, ResourceTemplate ()  // _CRS: Current Resource Settings
-            {
-                Memory32Fixed (ReadWrite,
-                    0x0A600000,         // Address Base
-                    0x000FFFFF,         // Address Length
-                    )
-            })
-            Device (USB0)
-            {
-                Name (_ADR, Zero)  // _ADR: Address
-                Name (_S0W, 0x03)  // _S0W: S0 Device Wake State
-                Name (_PLD, Package (0x01)  // _PLD: Physical Location of Device
-                {
-                    ToPLD (
-                        PLD_Revision           = 0x2,
-                        PLD_IgnoreColor        = 0x1,
-                        PLD_Red                = 0x0,
-                        PLD_Green              = 0x0,
-                        PLD_Blue               = 0x0,
-                        PLD_Width              = 0x0,
-                        PLD_Height             = 0x0,
-                        PLD_UserVisible        = 0x1,
-                        PLD_Dock               = 0x0,
-                        PLD_Lid                = 0x0,
-                        PLD_Panel              = "BACK",
-                        PLD_VerticalPosition   = "CENTER",
-                        PLD_HorizontalPosition = "LEFT",
-                        PLD_Shape              = "VERTICALRECTANGLE",
-                        PLD_GroupOrientation   = 0x0,
-                        PLD_GroupToken         = 0x0,
-                        PLD_GroupPosition      = 0x0,
-                        PLD_Bay                = 0x0,
-                        PLD_Ejectable          = 0x0,
-                        PLD_EjectRequired      = 0x0,
-                        PLD_CabinetNumber      = 0x0,
-                        PLD_CardCageNumber     = 0x0,
-                        PLD_Reference          = 0x0,
-                        PLD_Rotation           = 0x0,
-                        PLD_Order              = 0x0,
-                        PLD_VerticalOffset     = 0xFFFF,
-                        PLD_HorizontalOffset   = 0xFFFF)
-
-                })
-                Name (_UPC, Package (0x04)  // _UPC: USB Port Capabilities
-                {
-                    One,
-                    0x09,
-                    Zero,
-                    Zero
-                })
-                Name (_CRS, ResourceTemplate ()  // _CRS: Current Resource Settings
-                {
-                    Interrupt (ResourceConsumer, Level, ActiveHigh, Shared, ,, )
-                    {
-                        0x000000A5,
-                    }
-                    Interrupt (ResourceConsumer, Level, ActiveHigh, SharedAndWake, ,, )
-                    {
-                        0x000000A2,
-                    }
-                    Interrupt (ResourceConsumer, Level, ActiveHigh, SharedAndWake, ,, )
-                    {
-                        0x000000A3,
-                    }
-                    // The three PHY wake lines, from the PDC. Order and trigger
-                    // types are bitra's: ss (PDC pin 17, level), then dm_hs
-                    // (pin 15, edge) and dp_hs (pin 14, edge). See the header.
-                    Interrupt (ResourceConsumer, Level, ActiveHigh, SharedAndWake, ,, )
-                    {
-                        0x00000211,
-                    }
-                    Interrupt (ResourceConsumer, Edge, ActiveHigh, SharedAndWake, ,, )
-                    {
-                        0x0000020F,
-                    }
-                    Interrupt (ResourceConsumer, Edge, ActiveHigh, SharedAndWake, ,, )
-                    {
-                        0x0000020E,
-                    }
-                })
-                Method (_STA, 0, NotSerialized)  // _STA: Status
-                {
-                    Return (0x0F)
-                }
-
-                // `DPM0` and `HSEN` stood here and are gone. Both were bitra's -
-                // lisa, a52sxq and the 7280 CRD have neither, and the CRD has no
-                // URS0 at all - both were definition-only in this table, and the
-                // shipped 7280 driver set references neither in any file: the
-                // only occurrences of `HSEN` in 770 extracted files are inside
-                // the Adreno shader compiler's own symbol,
-                // _ZNK4llvm18QGPUTargetLowering10LowerMULHSENS_..., and `DPM0`
-                // has none at all.
-                //
-                // `CCVL` went the same way in Step 4.68 and is the one of the
-                // three that took a measurement rather than a search. The UCSI
-                // driver really does ask for that name - the string
-                // QUCSAeiBCCVL in qcusbcucsi7280.sys - so the earlier reading
-                // kept it, on the reasoning that a name the driver looks up is a
-                // name the namespace owes. What settles it is that the driver
-                // asks for it on one device and this table answered on three: in
-                // lisa the string `CCVL` occurs exactly once in the whole table,
-                // inside `UCS0`, where it stood here on UCS0, on this USB0 and on
-                // UFN0. Two of the three resolved to the same `\_SB.CCST` and
-                // were copies nothing could reach - bitra's URS0 children each
-                // carried one, and Step 4.66 added the family-0A set on UCS0
-                // without taking them out. What the driver binds is UCS0, it is
-                // `ACPI\QCOM0AA4`, and it calls its accessors on itself.
-                //
-                // `PHYC` sits below in this same device and stays, which is why
-                // the rule is not "delete the duplicates". lisa binds `PHYC`
-                // three times - on this USB0, on UFN0, and on a `USB1` this table
-                // does not have - and a pass that removed names appearing more
-                // than once would have taken it out of the two nodes that are
-                // right. The test is which device the family binds a name on, not
-                // how often it appears, and for these five the family binds them
-                // on UCS0.
-                //
-                // Two sentences stood here until Step 4.66 and both were wrong.
-                // One said UCS0 "declares `_DEP` on PEP0, which this table also
-                // lacks", and the other drew the conclusion - "the node cannot be
-                // written correctly before the node it depends on exists". lisa's
-                // UCS0 does carry the `_DEP`, and this table's UCS0 deliberately
-                // does not, because a `_DEP` naming a node that is not in the
-                // namespace resolves to nothing: the declaration is advisory
-                // start ordering, and omitting it costs an ordering that has
-                // nothing to order against while including it costs a dangling
-                // name. See UCS0's own comment for the line to add when PEP0
-                // lands.
-                //
-                // `HSFL`, which HSEN used to read, is now read by nothing. It
-                // stays, with `PINA`, rather than being removed alongside the
-                // method: those two are the only members of the `_SB` value
-                // cluster around this device that lisa, a52sxq and the CRD all
-                // lack - every other member is in all three - and the cluster as
-                // a whole is definition-only here, which makes it inert.
-                // Removing half of it would leave a data block whose shape no
-                // longer says which table it was copied from.
-
-                Method (_DSM, 4, Serialized)  // _DSM: Device-Specific Method
-                {
-                    Switch (ToBuffer (Arg0))
-                    {
-                        Case (ToUUID ("ce2ee385-00e6-48cb-9f05-2edb927c4899") /* USB Controller */){                            Switch (ToInteger (Arg2))
-                            {
-                                Case (Zero)
-                                {
-                                    Switch (ToInteger (Arg1))
-                                    {
-                                        Case (Zero)
-                                        {
-                                            Return (Buffer (One)
-                                            {
-                                                 0x1D                                             // .
-                                            })
-                                            Break
-                                        }
-                                        Default
-                                        {
-                                            Return (Buffer (One)
-                                            {
-                                                 0x01                                             // .
-                                            })
-                                            Break
-                                        }
-
-                                    }
-
-                                    Return (Buffer (One)
-                                    {
-                                         0x00                                             // .
-                                    })
-                                    Break
-                                }
-                                Case (0x02)
-                                {
-                                    Return (Zero)
-                                    Break
-                                }
-                                Case (0x03)
-                                {
-                                    Return (Zero)
-                                    Break
-                                }
-                                Case (0x04)
-                                {
-                                    Return (0x02)
-                                    Break
-                                }
-                                Default
-                                {
-                                    Return (Buffer (One)
-                                    {
-                                         0x00                                             // .
-                                    })
-                                    Break
-                                }
-
-                            }
-                        }
-                        Default
-                        {
-                            Return (Buffer (One)
-                            {
-                                 0x00                                             // .
-                            })
-                            Break
-                        }
-
-                    }
-                }
-
-                Method (PHYC, 0, NotSerialized)
-                {
-                    Name (CFG0, Package (0x00){})
-                    Return (CFG0) /* \_SB_.URS0.USB0.PHYC.CFG0 */
-                }
-            }
-
-            Device (UFN0)
-            {
-                Name (_ADR, One)  // _ADR: Address
-                Name (_S0W, 0x03)  // _S0W: S0 Device Wake State
-                Name (_PLD, Package (0x01)  // _PLD: Physical Location of Device
-                {
-                    ToPLD (
-                        PLD_Revision           = 0x2,
-                        PLD_IgnoreColor        = 0x1,
-                        PLD_Red                = 0x0,
-                        PLD_Green              = 0x0,
-                        PLD_Blue               = 0x0,
-                        PLD_Width              = 0x0,
-                        PLD_Height             = 0x0,
-                        PLD_UserVisible        = 0x1,
-                        PLD_Dock               = 0x0,
-                        PLD_Lid                = 0x0,
-                        PLD_Panel              = "BACK",
-                        PLD_VerticalPosition   = "CENTER",
-                        PLD_HorizontalPosition = "LEFT",
-                        PLD_Shape              = "VERTICALRECTANGLE",
-                        PLD_GroupOrientation   = 0x0,
-                        PLD_GroupToken         = 0x0,
-                        PLD_GroupPosition      = 0x0,
-                        PLD_Bay                = 0x0,
-                        PLD_Ejectable          = 0x0,
-                        PLD_EjectRequired      = 0x0,
-                        PLD_CabinetNumber      = 0x0,
-                        PLD_CardCageNumber     = 0x0,
-                        PLD_Reference          = 0x0,
-                        PLD_Rotation           = 0x0,
-                        PLD_Order              = 0x0,
-                        PLD_VerticalOffset     = 0xFFFF,
-                        PLD_HorizontalOffset   = 0xFFFF)
-
-                })
-                Name (_UPC, Package (0x04)  // _UPC: USB Port Capabilities
-                {
-                    One,
-                    0x09,
-                    Zero,
-                    Zero
-                })
-                Name (_CRS, ResourceTemplate ()  // _CRS: Current Resource Settings
-                {
-                    Interrupt (ResourceConsumer, Level, ActiveHigh, Shared, ,, )
-                    {
-                        0x000000A5,
-                    }
-                    Interrupt (ResourceConsumer, Level, ActiveHigh, SharedAndWake, ,, )
-                    {
-                        0x000000A3,
-                    }
-                })
-                // `CCVL` stood here and is gone - see USB0's comment above for
-                // the measurement. lisa's UFN0 has no `CCVL` either, and the one
-                // this device carried was a third copy of a name the family binds
-                // once, on UCS0.
-
-                Method (_DSM, 4, Serialized)  // _DSM: Device-Specific Method
-                {
-                    Switch (ToBuffer (Arg0))
-                    {
-                        Case (ToUUID ("fe56cfeb-49d5-4378-a8a2-2978dbe54ad2") /* Unknown UUID */){                            Switch (ToInteger (Arg2))
-                            {
-                                Case (Zero)
-                                {
-                                    Switch (ToInteger (Arg1))
-                                    {
-                                        Case (Zero)
-                                        {
-                                            Return (Buffer (One)
-                                            {
-                                                 0x03                                             // .
-                                            })
-                                            Break
-                                        }
-                                        Default
-                                        {
-                                            Return (Buffer (One)
-                                            {
-                                                 0x01                                             // .
-                                            })
-                                            Break
-                                        }
-
-                                    }
-
-                                    Return (Buffer (One)
-                                    {
-                                         0x00                                             // .
-                                    })
-                                    Break
-                                }
-                                Case (One)
-                                {
-                                    Return (0x20)
-                                    Break
-                                }
-                                Default
-                                {
-                                    Return (Buffer (One)
-                                    {
-                                         0x00                                             // .
-                                    })
-                                    Break
-                                }
-
-                            }
-                        }
-                        Case (ToUUID ("18de299f-9476-4fc9-b43b-8aeb713ed751") /* Unknown UUID */){                            Switch (ToInteger (Arg2))
-                            {
-                                Case (Zero)
-                                {
-                                    Switch (ToInteger (Arg1))
-                                    {
-                                        Case (Zero)
-                                        {
-                                            Return (Buffer (One)
-                                            {
-                                                 0x03                                             // .
-                                            })
-                                            Break
-                                        }
-                                        Default
-                                        {
-                                            Return (Buffer (One)
-                                            {
-                                                 0x01                                             // .
-                                            })
-                                            Break
-                                        }
-
-                                    }
-
-                                    Return (Buffer (One)
-                                    {
-                                         0x00                                             // .
-                                    })
-                                    Break
-                                }
-                                Case (One)
-                                {
-                                    Return (0x39)
-                                    Break
-                                }
-                                Default
-                                {
-                                    Return (Buffer (One)
-                                    {
-                                         0x00                                             // .
-                                    })
-                                    Break
-                                }
-
-                            }
-                        }
-                        Default
-                        {
-                            Return (Buffer (One)
-                            {
-                                 0x00                                             // .
-                            })
-                            Break
-                        }
-
-                    }
-                }
-
-                Method (PHYC, 0, NotSerialized)
-                {
-                    Name (CFG0, Package (0x00){})
-                    Return (CFG0) /* \_SB_.URS0.UFN0.PHYC.CFG0 */
-                }
-            }
-        }
-
-        /*
-         * ---------------------------------------------------------------------
-         * The PMIC family: SPMI, PMIC, PM01.  Step 4.63.
-         *
-         * Three nodes, and every number in them is either gauguin's own or a
-         * constant measured across the corpus - nothing is inherited by
-         * resemblance. The ids are the three the 7280 driver set claims:
-         *
-         *   QCOM0A0B  qcspmi7280.inf        QCOM0A2B  qcpmic7280.inf
-         *   QCOM0A2D  qcpmicgpio7280.inf
-         *
-         * SPMI's window. gauguin's device tree gives the arbiter five regions:
-         *
-         *   core   0x0C440000 + 0x1100        obsrvr 0x0E600000 + 0x100000
-         *   chnls  0x0C600000 + 0x2000000     intr   0x0E700000 + 0xA0000
-         *   cnfg   0x0C40A000 + 0x26000
-         *
-         * which union to [0x0C40A000, 0x0E7A0000). _CRS states one window,
-         * 0x0C400000 + 0x2800000, and that is not a copy: it is the value 18 of
-         * the 20 SPMI _CRS in Silicium-ACPI carry - across SM8150, SM8250,
-         * SM8350, SM7150, SM7125, SM6250 and SDM7280 alike - and it contains
-         * every one of the five regions above. The same eight bytes appear
-         * little-endian at offset 0x12 of SPMI.CONF, which is the same window
-         * restated. The other two tables are Kailua's, and theirs is a different
-         * window (0x0C400000 + 0x500000) for a different arbiter.
-         *
-         * SPMI.CONF is byte-identical in all 18 of those tables, Kailua's being
-         * the sole variant, so it is copied verbatim rather than reconstructed:
-         * 26 bytes whose only platform-dependent part is the window _CRS
-         * already states. What the other 18 bytes configure is not established.
-         *
-         * PMIC.PMCF is the one method here with real platform content. 19 of the
-         * 22 tables in Silicium-ACPI that have an SPMI node carry it, and no
-         * table calls it: the PMIC driver calls it by name, so it is not
-         * optional for a table that means to bind. (The three that omit it -
-         * vili, kebab and Waipio - also omit PMAP and PMBM, and vili's whole
-         * PMIC section is PMIC and PM01 and nothing else.) Its package is
-         * <count>, then one entry per SPMI USID from 0 to the maximum, where a
-         * present USID is the key and an absent one is keyed 0x10, and the
-         * paired value is 0x10 on the newer platforms:
-         *
-         *   lisa, a52sxq (both 0A)   {0A, 0>10, 1>10, 2>10, 3>10, 4>10, 10>10 x5}
-         *   Lahaina, venus, lemonade {0B, 0..5>10, 10>10 x4}
-         *   renoir, Cedros (both 09) {06, 0,1,2,3>10, 10>10, 5>10}
-         *   Kailua, Waipio (0C)      {0D, 0..7>10, 10>10 x4, 0C>16}
-         *
-         * Two readings of this package fit the older tables and only one fits
-         * the newer. On SM8150/SM8250/SM7125 the values step by two -
-         * alioth's is {04, 0>1, 2>3, 4>5, 6>7} - which reads as <primary USID,
-         * companion USID>, one entry per PMIC, and that reading cannot explain
-         * lisa's consecutive keys 0,1,2,3,4 or renoir's key 0x10 sitting between
-         * 3 and 5. The reading that fits both is the one above: one entry per
-         * USID from 0 up, placeholders for the gaps, and a value whose meaning
-         * differs by generation - a companion on the old platforms, a peripheral
-         * type on the new, where 0x16 appears once (Kailua, USID 12) and shows
-         * the field is not a USID at all. The entry count is a per-family
-         * constant: 10 for family 0A, 10 for 1A, 13 for 0C, 6 for 09.
-         *
-         * gauguin's device tree populates USIDs 0 through 6 - pm6350 at 0 and 1,
-         * pm7250b at 2 and 3, pm6150l at 4 and 5, pmk8350 at 6, all seven
-         * children of spmi@c440000 and none of them disabled, the pm8008 at
-         * USID 8 being on I2C - and it is family 0A, so the package is lisa's
-         * with USID 5 present instead of absent. What 0x10 means is still not
-         * established; it is the value 12 tables give for every populated USID,
-         * including renoir, which is SM7350 to gauguin's SM7225 and the closest
-         * relative in the corpus.
-         *
-         * PM01's interrupt is the arbiter's own. The dts gives spmi@c440000
-         * interrupts-extended = <0x62 0x01 0x04> - PDC pin 1 - and 512 + 1 is
-         * 513 = 0x201, which all 21 PMIC-GPIO nodes in the corpus carry, Level,
-         * ActiveHigh, Shared, except Kailua and Waipio, whose PMIC on PDC pin 3
-         * adds a second. gauguin has no PMIC on pin 3.
-         *
-         * PM01._DSM: the GPIO Controller UUID, function 0 returning the bitmap
-         * 0x03 (functions 1 and 2), function 1 returning Package (0x02){0x07,
-         * 0x06}. The UUID, the bitmap and the pair are each constant across
-         * every table that carries them; the pair's meaning is not established.
-         * Four older tables return Buffer (One){0x00} at function 1 instead, and
-         * those are all pre-0A families.
-         *
-         * _STA returning 0x0F is this file's convention on every device it
-         * defines; the reference tables leave it out and are present by default.
-         *
-         * Deliberately not added here, with the reason each time. PMAP was the
-         * first entry on this list and is no longer on it: its _DEP is a
-         * three-entry package naming \_SB.PMIC, \_SB.ABD and \_SB.SCM0, two of
-         * which were absent from this file when that was written, so it would
-         * have been a dangling dependency. Steps 4.75 and 4.76 wrote ABD and
-         * SCM0, the last referent arrived, and Step 4.77 wrote the node; its
-         * own comment, below, carries the id and the GEPT that three sibling
-         * nodes share.
-         *
-         *   PMBM and PMGK are in the corpus, and no id of either is claimed by
-         * the 7280 set - eight ids over 17 declarations and five over 11, with
-         * QCOM0A2A and QCOM0A8E the two the lisa/a52sxq pair writes - so
-         * adding them would put two devices in Device Manager that nothing
-         * binds. PML0 (QCOM0AD3, which qcpmic7280.inf does claim) is
-         * reachable, but it is an I2C-attached PMIC - lisa's _CRS gives it
-         * four I2C addresses on \_SB.I2C2 - and this file has no I2C
-         * controller and gauguin's pm8008 is at a different address. PEP0
-         * (QCOM0A17, qcpep.wd7280.inf) is claimed and is the largest remaining
-         * single node in the reference, 2,501 lines in lisa - but only 629 of
-         * those are skeleton, the rest is one case per thermal zone, and it is
-         * the power engine besides: its own step, and its own comment above
-         * carries the measurement.
-         */
-        Device (SPMI)
-        {
-            Method (_STA, 0, NotSerialized)  // _STA: Status
-            {
-                Return (0x0F)
-            }
-
-            Name (_HID, "QCOM0A0B")  // _HID: Hardware ID
-            Alias (^PSUB, _SUB)
-            Name (_CID, "PNP0CA2")  // _CID: Compatible ID
-            Name (_UID, One)  // _UID: Unique ID
-            Name (_CCA, Zero)  // _CCA: Cache Coherency Attribute
-            Method (_CRS, 0, NotSerialized)  // _CRS: Current Resource Settings
-            {
-                Name (RBUF, ResourceTemplate ()
-                {
-                    Memory32Fixed (ReadWrite,
-                        0x0C400000,         // Address Base
-                        0x02800000,         // Address Length
-                        )
-                })
-                Return (RBUF) /* \_SB_.SPMI._CRS.RBUF */
-            }
-
-            Method (CONF, 0, NotSerialized)
-            {
-                Name (XBUF, Buffer (0x1A)
-                {
-                    /* 0000 */  0x00, 0x01, 0x01, 0x01, 0xFF, 0x00, 0x02, 0x00,
-                    /* 0008 */  0x0A, 0x07, 0x04, 0x07, 0x01, 0xFF, 0x10, 0x01,
-                    /* 0010 */  0x00, 0x01, 0x0C, 0x40, 0x00, 0x00, 0x02, 0x80,
-                    /* 0018 */  0x00, 0x00
-                })
-                Return (XBUF) /* \_SB_.SPMI.CONF.XBUF */
-            }
-        }
-
         // ABD - the ACPI Bridge Device: the second of the two nodes PEP0's own
         // text names. PEP0's _DEP names IPCC and its single Field names this
         // device's region, so the two are read together and are placed
@@ -1056,13 +344,19 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
         // PMAP, and its position is measured too. It is immediately followed by
         // PMIC in all 21 tables, and immediately preceded by SDC2 in 18 of them
         // and UFS0 in the other 3, which puts it third, fourth or fifth in every
-        // table. THIS file has no SDC1 or SDC2 node, so its slot is between SPMI
-        // and PMIC, and the whole node was moved there. The run continues in the
-        // corpus's own order behind it: PMIC, then PML0, then PM01 - PML0 sits
-        // between the two in 11 of the 21 tables that carry PMIC, and this file
-        // became one of the 11 in Step 4.79, which is why the node is here and
-        // not further down the file - then PMAP, then PRTC, and PM01 -> PMAP ->
-        // PRTC is unbroken in 20 of 20.
+        // table. THIS file has no SDC1 or SDC2 node, which leaves UFS0 as the
+        // node it follows, and Step 4.88 - the reordering to the corpus's own
+        // order - moved it to exactly there: immediately after UFS0, the slot the
+        // 3 tables without an SDC2 use, and immediately before PMIC, where all 21
+        // put it. Between Steps 4.78 and 4.87 the node stood between SPMI and
+        // PMIC, which was the same adjacency read against this file's then-current
+        // SPMI slot; SPMI was itself one of the eight units 4.88 moved, to its own
+        // slot after SCM0, and the two readings agree about PMIC. The run
+        // continues in the corpus's own order behind it: PMIC, then PML0, then
+        // PM01 - PML0 sits between the two in 11 of the 21 tables that carry
+        // PMIC, and this file became one of the 11 in Step 4.79, which is why the
+        // node is here and not further down the file - then PMAP, then PRTC, and
+        // PM01 -> PMAP -> PRTC is unbroken in 20 of 20.
         //
         // AVBL is read by nothing in this table, and could not be: in the
         // corpus its readers are the cameras (CAMS, CAMF, CAMI, CAMT, CAMU),
@@ -2020,22 +1314,23 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
         // tables, WLDS in 4 and PMGK in 1, never PRTC, so the relation the corpus
         // states is "immediately after that absent run", and the nearest preceding
         // node this table actually has is PRTC in 20 of 21 and PM01 in vili. So
-        // the pair goes immediately after PRTC - declaration 13 counting from
-        // zero, the numbering the corpus indices above use - which is where it was
-        // written.
+        // the pair goes immediately after PRTC - declaration 8 counting from
+        // zero, the numbering the corpus indices above use, and 13 until Step 4.88
+        // reordered the file - which is where it was written.
         //
         // Sixteen of the seventeen relations are satisfied at that slot and the
-        // seventeenth is SPMI's, and this file's order is why: SPMI is written at
-        // declaration 6 and ABD, PMIC and PM01 follow it at 7, 8 and 10, so
-        // "after PM01" and "before SPMI" cannot both hold. The corpus puts SPMI
+        // seventeenth was SPMI's, and this file's order was why: SPMI was written
+        // at declaration 6 and ABD, PMIC and PM01 followed it at 7, 8 and 10, so
+        // "after PM01" and "before SPMI" could not both hold. The corpus puts SPMI
         // at declaration 59 of 140 in lisa and 56 of 143 in a52sxq, counting
         // unique declarations from zero - after SCM0, TLOG and TREE. So this node
-        // costs 21 votes against SPMI and nothing
-        // else. That is recorded as a debt rather than a property, and it is the
-        // same placement the 128-relation accounting at TFTP charges twelve times:
-        // moving SPMI to its corpus slot would repair those twelve and this one
-        // together, and it is the first thing a later step that reorders this file
-        // should do. The two measurements now agree about where the fault is.
+        // cost 21 votes against SPMI and nothing
+        // else, and that was recorded as a debt rather than a property. Step 4.88
+        // paid it: the file was reordered into the corpus's own order, SPMI moved
+        // to its slot after SCM0, and all seventeen of these relations now hold.
+        // The debt's own sentence named this as "the first thing a later step that
+        // reorders this file should do", and the two measurements it cites did
+        // agree about where the fault was.
         //
         // The body is the shape all twenty-one agree on without exception: _HID in
         // 21, _UID One in 21, _CCA Zero in 21, _CRS in 21, and in the resource
@@ -2051,8 +1346,8 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
         // GLNK names IPCC and RPEN - and it is measured rather than assumed, the
         // way ABD's withheld dependency was.
         //
-        // What it hands forward: BAM5, which waits on the ADSP and its SLIMbus;
-        // and the SPMI reorder, which two independent measurements now point at.
+        // What it hands forward: BAM5, which waits on the ADSP and its SLIMbus. The
+        // SPMI reorder this comment used to hand forward was done in Step 4.88.
         Device (BAM1)
         {
             Name (_HID, "QCOM0A0A")  // _HID: Hardware ID
@@ -2073,118 +1368,6 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
                     }
                 })
                 Return (RBUF) /* \_SB_.BAM1._CRS.RBUF */
-            }
-        }
-
-        Device (GIO0)
-        {
-            Method (_STA, 0, NotSerialized)  // _STA: Status
-            {
-                Return (0x0F)
-            }
-
-            Name (_HID, "QCOM0A0C")  // _HID: Hardware ID
-            Alias (^PSUB, _SUB)
-            Name (_UID, Zero)  // _UID: Unique ID
-            Method (_CRS, 0, NotSerialized)  // _CRS: Current Resource Settings
-            {
-                Name (RBUF, ResourceTemplate ()
-                {
-                    Memory32Fixed (ReadWrite,
-                        0x0F100000,         // Address Base
-                        0x00300000,         // Address Length
-                        )
-                    Interrupt (ResourceConsumer, Level, ActiveHigh, Shared, ,, )
-                    {
-                        0x000000F0,
-                    }
-                    Interrupt (ResourceConsumer, Level, ActiveHigh, Shared, ,, )
-                    {
-                        0x000000F1,
-                    }
-                    Interrupt (ResourceConsumer, Level, ActiveHigh, Shared, ,, )
-                    {
-                        0x000000F2,
-                    }
-                    Interrupt (ResourceConsumer, Level, ActiveHigh, Shared, ,, )
-                    {
-                        0x000000F3,
-                    }
-                    Interrupt (ResourceConsumer, Level, ActiveHigh, Shared, ,, )
-                    {
-                        0x000000F4,
-                    }
-                    Interrupt (ResourceConsumer, Level, ActiveHigh, Shared, ,, )
-                    {
-                        0x000000F5,
-                    }
-                    Interrupt (ResourceConsumer, Level, ActiveHigh, Shared, ,, )
-                    {
-                        0x000000F6,
-                    }
-                    Interrupt (ResourceConsumer, Level, ActiveHigh, Shared, ,, )
-                    {
-                        0x000000F7,
-                    }
-                    Interrupt (ResourceConsumer, Level, ActiveHigh, Shared, ,, )
-                    {
-                        0x000000F8,
-                    }
-                    // dts SPIs 0xD0 to 0xD8, in order, all <... 0x04> = level
-                    // high. The rest of the corpus list is board data and is
-                    // not reproducible from gauguin's device tree - see above.
-                })
-                Return (RBUF) /* \_SB_.GIO0._CRS.RBUF */
-            }
-
-            // 156 = gauguin's TLMM GPIO count. The reader is qcgpio.sys, not a
-            // table, and the value's derivation is in the header - see the OFNI
-            // bullet above this node.
-            Method (OFNI, 0, NotSerialized)
-            {
-                Name (RBUF, Buffer (0x02)
-                {
-                     0x9C, 0x00                                       // ..
-                })
-                Return (RBUF) /* \_SB_.GIO0.OFNI.RBUF */
-            }
-
-            Name (GABL, Zero)
-            Method (_REG, 2, NotSerialized)  // _REG: Region Availability
-            {
-                If ((Arg0 == 0x08))
-                {
-                    GABL = Arg1
-                }
-            }
-
-            Method (_DSM, 4, NotSerialized)  // _DSM: Device-Specific Method
-            {
-                If ((ToBuffer (Arg0) == ToUUID ("4f248f40-d5e2-499f-834c-27758ea1cd3f") /* GPIO Controller */))
-                {
-                    If ((ToInteger (Arg2) == Zero))
-                    {
-                        Return (Buffer (One)
-                        {
-                             0x03
-                        })
-                    }
-
-                    If ((ToInteger (Arg2) == One))
-                    {
-                        Return (Package (0x01)
-                        {
-                            0x0100
-                        })
-                    }
-                }
-                Else
-                {
-                    Return (Buffer (One)
-                    {
-                         0x00
-                    })
-                }
             }
         }
 
@@ -2767,16 +1950,18 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
         // (21 of 21 each), PMAP and PRTC (20), the four-wire ports (10), PML0
         // (11) and I2C8 (9).
         // After: PILC (19 of 19), QGP1 and SCM0 (21), QGP0 (19) and IPCC (12).
-        // Six relations no slot can satisfy, and they are the same six PILC's
-        // comment now records: UCS0 (10 of 10), URS0, USB0, UFN0 and GIO0 (20
-        // each) and SPMI (21) all sit after RPEN in the corpus and all sit before
+        // Six relations no slot could satisfy, and they are the same six PILC's
+        // comment records: UCS0 (10 of 10), URS0, USB0, UFN0 and GIO0 (20
+        // each) and SPMI (21) all sit after RPEN in the corpus and all sat before
         // it in this file, because this file wrote the early block in an order of
         // its own in which ABD - unanimous before RPEN - keeps company with
-        // devices the corpus puts after. They are recorded and not repaired, as
+        // devices the corpus puts after. They were recorded and not repaired, as
         // there: a reordering is its own measurement. The full count of what this
-        // order costs the corpus is measured at TFTP below (Step 4.84) and these
-        // six are six of 128 broken relations, over seven placements, one of
-        // which is this one.
+        // order cost the corpus was measured at TFTP below (Step 4.84) and these
+        // six were six of the 128 broken relations, over seven placements, one of
+        // which was this one. Step 4.88 is that reordering, and all six are
+        // satisfied now that the four bus nodes, GIO0 and SPMI stand where the
+        // corpus puts them: this node has no broken relation left.
         Device (RPEN)
         {
             Method (_STA, 0, NotSerialized)  // _STA: Status
@@ -2959,466 +2144,6 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
             Method (_STA, 0, NotSerialized)  // _STA: Status
             {
                 Return (0x0F)
-            }
-        }
-
-        // IPC0 is the IPC router, and qcipcrouter7280.inf names it in one line:
-        // %IPC_ROUTER.DeviceDesc%=IPC_ROUTER_Device, ACPI\QCOM0A0D, description
-        // string "Qualcomm(R) Data IPC Router Device", service QCIPC_ROUTER,
-        // binary qcipcrouter7280.sys, KMDF 1.33, class SYSTEM, StartType 3. It
-        // rides the transport GLNK and its inf says so in a place a name can be
-        // read off: every one of its five transports carries PortName "IPCRTR".
-        //
-        // It is also the first node here whose driver ships a user-mode half.
-        // The same inf copies qsocketipcrum.dll into the system directory and
-        // grants the device one ACE more than qcglink7280.inf does -
-        // (A;;GA;;;S-1-5-84-0-0-0-0-0), the user-mode-driver SID, on top of the
-        // administrators and LocalSystem that both infs grant - which is what a
-        // device with a user-mode client should look like and what the transport
-        // next door, with none, does not.
-        //
-        // Its transport list is five entries, all Type 1, Transport "SMEM", Port
-        // "IPCRTR" and MaxIntents 4, differing only in RemoteSS: "mpss", "lpass",
-        // "dsps", "cdsp", "wpss". The board declares three glink-edges, labelled
-        // "lpass", "modem" and "cdsp". Three of the five names line up and two
-        // have no remoteproc here at all - "dsps" and "wpss" - and the one
-        // difference in wording is the modem, which this inf calls "mpss" and
-        // the board labels "modem". qcglink7280.inf's own SMP2P_interrupts table
-        // is a second sighting of the same four remote processors, with host ids
-        // SMEM_MODEM 1, SMEM_ADSP 2, SMEM_CDSP 5 and SMEM_WPSS 13 against IPCC
-        // clients MPSS 2, LPASS 3, NSP0 6 and WPSS 24 - and the first three are
-        // this board's remote-pids exactly, 1, 2 and 5.
-        //
-        // The id is GLNK's, one generation down, and the two are issued as a
-        // pair. Twenty-one tables declare an IPC0, under nine ids, and they line
-        // up with the twenty-one GLNK ids table for table:
-        //
-        //   gen   GLNK   IPC0   tables
-        //   02    02F9   021C   caymanslm
-        //   05    058D   050E   mh2, cepheus, nabu, pipa, vayu
-        //   08    088D   080E   a52q, miatoll
-        //   09    0984   090D   renoir, Cedros IDP
-        //   0A    0A84   0A0D   a52sxq, lisa
-        //   0C    0C84   0C0D   Kailua MTP, Kailua QRD, Waipio
-        //   14    148D   140E   surya
-        //   1A    1A84   1A0D   lemonade, venus, vili, Lahaina MTP
-        //   25    2584   250D   alioth
-        //
-        // The high byte is never different between the two ids of a row, and the
-        // low byte never crosses between the groups: GLNK 84 goes with IPC0 0D,
-        // 8D with 0E, and F9 with 1C, and no table departs from its row. So the
-        // transport and the router are issued as a pair the way RPEN and PILC are
-        // (06E1 and 06E0) - and unlike those two the pairing carries no
-        // generation of its own, because there is no IPC0 whose high byte differs
-        // from its own GLNK's. QGP0 and QGP1 are the third index over the same
-        // nine generations and they partition them the same way - 93 for 05/08/14,
-        // 88 for 09/0A/0C/1A/25, F4 for 02 - so three indices now agree on the
-        // families. They do not agree on the offset between them: 93 to 8D is six
-        // and 88 to 84 is four and F4 to F9 goes the other way by five. The
-        // family is a property of the table and the spacing between the indices
-        // is not.
-        //
-        // With the generation fixed at 0A by QGP0 and QGP1's QCOM0A88, the row is
-        // the only one that matters here, and both halves of it are written: 0A84
-        // was GLNK's, in Step 4.82, and 0A0D is this node's. The corpus's only
-        // two 0A tables, a52sxq and lisa, both write it. The driver set agrees
-        // and agrees only that far, which is the shape the GLNK comment already
-        // records: of the nine IPC0 ids exactly one appears anywhere in the 112
-        // infs, QCOM0A0D in qcipcrouter7280.inf, and of the nine GLNK ids exactly
-        // one does, QCOM0A84 in qcglink7280.inf. The drivers claim one generation
-        // out of nine and it is the one QGP0 had already put this table in.
-        //
-        // The body is the smallest of any node this file has written: a _DEP
-        // naming \_SB.GLNK alone in all twenty-one, an _HID, and the alias. No
-        // _UID anywhere in the corpus - none in twenty-one, where the GLNK above
-        // it has one in twenty-one - and no _CRS in any table, including the nine
-        // where GLNK carries nine Interrupt descriptors. Those nine are the
-        // transport's own lines and they stay on the transport. No _STA but the
-        // same two tables, vili and Waipio. The alias in twenty and Waipio's
-        // Method (_SUB) in the twenty-first: that is the second node in a row
-        // where Waipio is the only departure, and with _STA it makes three
-        // members on which this board and vili's are the corpus's whole
-        // disagreement about this node.
-        //
-        // Position: the corpus agrees on what follows this node and not on what
-        // precedes it. Immediately after it, in 21 of 21, is GLNK. Immediately
-        // before it there is no agreement at all - RP1 in 14 tables, GIO0 in 3,
-        // QPPX in 2, and RPEN and IPCC in one each - so the run is anchored at its
-        // bottom and not its top. Three unanimous relations pin the slot exactly.
-        // RPEN precedes IPC0 in 21 of 21 and PILC in 19 of 19, the two tables
-        // without a PILC being vili and Waipio, the same two as everywhere else;
-        // GLNK follows it in 21 of 21. In this file RPEN, PILC and GLNK are
-        // consecutive, so of the two slots those relations allow - above PILC or
-        // below it - only the second survives, and this node lands between PILC
-        // and GLNK, which is where the GLNK comment said it would land and for
-        // the reason it gave. Twenty-four unanimous relations are satisfied by
-        // that slot, one more than GLNK's slot satisfied on its own, the
-        // difference being the GLNK relation this node now supplies. Not one of
-        // the six GLNK's slot breaks is repaired, and they are the same six by
-        // name: MMU0 and MMU1 (20 of 20) sit above IPC0 in the corpus and below
-        // it here, and UCS0 (10 of 10), UFN0, URS0 and USB0 (20 each) sit below
-        // it and above it here. The cause is the early block this file wrote in
-        // an order of its own; a reordering is its own measurement, so they are
-        // recorded and not repaired, as at RPEN and PILC and GLNK.
-        //
-        // Three nodes the corpus puts before IPC0 in every table that has both
-        // were not in this table when that paragraph was written - BAM1 and BAM5
-        // (21 of 21) and TFTP (21 of 21) - and the prediction made here was that
-        // TFTP would be written above this node and not below it. It was written
-        // in Step 4.84 and it landed above, but the prediction was coarse: the
-        // corpus puts PILC before TFTP in 19 of 19 tables that have both, so the
-        // slot is not the one above IPC0's other side but the one between PILC
-        // and this node. On the 602 table-votes TFTP's relations carry that slot
-        // scores 491 and is the unique maximum; the runner-up scores 472 and
-        // loses PILC's 19. The adjacency predicted here is unchanged - TFTP is
-        // immediately before this node in this file now, and IPC0 is still
-        // immediately before GLNK, which is the adjacency the corpus does state,
-        // 21 of 21. BAM1 and BAM5 are still absent and their constraint is
-        // unchanged and now sharper: they precede both TFTP and this node in 21
-        // of 21, so whichever of the two slots they take, they take it above.
-        Device (IPC0)
-        {
-            Name (_HID, "QCOM0A0D")  // _HID: Hardware ID
-            Alias (^PSUB, _SUB)  // _SUB: Subsystem ID
-            Name (_DEP, Package (One)  // _DEP: Dependencies
-            {
-                \_SB.GLNK
-            })
-        }
-
-        // GLNK is the Generic Link transport, and the name for it that ships is
-        // in qcglink7280.inf: one hardware id, %GLINK.DeviceDesc%=GLINK_Device,
-        // ACPI\QCOM0A84, and one description string, "Qualcomm(R) Shared Memory
-        // Port Device". It is the channel layer the remote processors talk over
-        // - each remoteproc on this board carries a glink-edge, and this node is
-        // the other end of all of them.
-        //
-        // The board states the three pieces of it. The transport's memory is the
-        // reserved region the smem node points at - memory@80900000,
-        // reg = <0x00 0x80900000 0x00 0x200000>, phandle 0x2c - and smem itself
-        // is { compatible = "qcom,smem"; memory-region = <0x2c>;
-        // hwlocks = <0x2d 0x03> }, the lock being hwlock 3 of hwlock@1f40000
-        // (qcom,tcsr-mutex, reg = <0x1f40000 0x40000>). The edges are three:
-        //
-        //   adsp  remoteproc@3000000  glink-edge { label = "lpass"; remote-pid = 2 }
-        //   mpss  (the modem)         glink-edge { label = "modem"; remote-pid = 1 }
-        //   cdsp  remoteproc@8300000  glink-edge { label = "cdsp";  remote-pid = 5 }
-        //
-        // - and all three mbox into the same controller, phandle 0x2e, which is
-        // mailbox@408000, qcom,sm6350-ipcc. That controller is already this
-        // table's IPCC node, written in Step 4.73 at the id the driver set claims
-        // for it and at the board's own single line, INTID 0x104. So the entry
-        // this node's _DEP carries is not a namespace formality: it is the
-        // interrupt path the board's three glink-edges actually ride on, and this
-        // is the first dependency in this table that the board states and the
-        // corpus only confirms.
-        //
-        // The id. Twenty-one tables declare a GLNK, under nine ids: QCOM058D five
-        // times, QCOM1A84 four, QCOM0C84 three, QCOM088D, QCOM0A84 and QCOM0984
-        // twice each, and QCOM02F9, QCOM2584 and QCOM148D once. The low byte is
-        // 84 in five of the nine (09, 0A, 0C, 1A, 25), 8D in three (05, 08, 14)
-        // and F9 in one (02) - the same three-way grouping QGP0's comment
-        // measured on its own index, 88/93/F4, which is a second sighting of the
-        // families and not a coincidence.
-        //
-        // What settles the id is this table's own four, and the shape of the
-        // argument is the hardest form of the standing rule so far. This table
-        // already writes PILC QCOM06E0, RPEN QCOM06E1, IPCC QCOM06C2 and QGP0 and
-        // QGP1 QCOM0A88. Six corpus tables write the first three of those
-        // together - a52sxq, lisa, renoir, Cedros' IDP, and Kailua's MTP and QRD
-        // - and they split three ways on GLNK:
-        //
-        //   a52sxq, lisa                   IDP07280      QCOM0A84
-        //   renoir, Cedros IDP             IDP07350      QCOM0984
-        //   Kailua MTP, Kailua QRD         MTP/QRD08550  QCOM0C84
-        //
-        // Two tables each, and Waipio - the seventh table whose RPEN is 06E1 and
-        // whose IPCC is 06C2, and the one table of the seven with no PILC - is a
-        // third vote for 0C84. Six tables with byte-identical service ids carry
-        // three different transport ids, so the service series does not determine
-        // the transport series; the table owns both and numbers them apart. That
-        // is why this id could not be read off as "the generation after 06", the
-        // way RPEN's could not be counted up from PILC's.
-        //
-        // The fourth id already here decides it. QGP0 and QGP1 are QCOM0A88, and
-        // 0A is in the 88 group with 09, 0C, 1A and 25, so this table's QUP-side
-        // family was fixed at 0A when those two nodes were written - by the same
-        // driver-set argument QGP0's comment records at length. Within 0A there
-        // is one GLNK id in the corpus and both of its tables write it: QCOM0A84.
-        // The driver set agrees twice rather than once, because the pair is
-        // claimed whole: qcglink7280.inf takes ACPI\QCOM0A84 and
-        // qcipcrouter7280.inf takes ACPI\QCOM0A0D, and those two are the only
-        // 0A-generation ids anywhere in the 112 infs - 0A0D being the next node's
-        // and not written here. So the corpus and the drivers both put this node
-        // in 0A, and they are two measurements of one thing rather than one
-        // measurement repeated.
-        //
-        // The body is the corpus's, and its shape is one switch with three
-        // symptoms. Nine of the twenty-one carry a Method (_CRS) returning nine
-        // Interrupt descriptors - eight Edge, one Level - and a one-entry _DEP
-        // naming \_SB.RPEN alone; twelve carry no _CRS at all and a two-entry
-        // _DEP naming \_SB.IPCC and \_SB.RPEN. The two properties are not merely
-        // correlated but coincident: the nine with the resource list are exactly
-        // the nine tables that declare no IPCC device, and the twelve without one
-        // are exactly the twelve that do. And the same line divides the
-        // generations - 02, 05, 08 and 14 on one side, 09, 0A, 0C, 1A and 25 on
-        // the other - so the block changed shape once, in the same generation
-        // step that added the IPCC node to these tables. This table is on the
-        // newer side and this node takes the newer form: the _DEP written and the
-        // _CRS not. The withheld resource is withheld for a better reason than
-        // the QGP interrupts were: there is no family-0A GLNK _CRS to copy, and
-        // the nine that exist are on GIC lines belonging to other boards.
-        //
-        // _UID is Zero in all twenty-one, as it is on UFS0, URS0, ABD and GIO0
-        // here. So is the alias, in all twenty-one - twenty as
-        // Alias (\_SB.PSUB, _SUB) and one, Waipio, as the Method (_SUB) form the
-        // PEP0 comment records as that board's habit. No _STA: the two tables
-        // that carry one are vili and Waipio, and they are also the two tables
-        // that write a GLNK _STA on a table whose RPEN has no PILC beside it.
-        // That is left as the observation it is.
-        //
-        // Position, and it is forced by two relations rather than fixed by many.
-        // Before: UFS0, DEV0, ABD, PMIC and PM01 (21 of 21 each), PMAP and PRTC
-        // (20), the four-wire ports (10), PML0 (11), I2C8 (9) and I2C9 (3), and
-        // then the two
-        // nodes above - RPEN (21 of 21) and PILC (19 of 19). After: QGP0 (19 of
-        // 19) and QGP1 (21 of 21), then CPU0 to CPU3 (21 each) and CPU4 to CPU7
-        // (19 each). All twenty-three of those unanimous relations are satisfied
-        // by one slot, and it is the only slot that satisfies them: PILC is above
-        // it and QGP0 is below it and the two are adjacent in this file, so the
-        // choice here is this node or no position at all. Two relations the
-        // corpus nearly agrees on are broken by that slot and are recorded rather
-        // than repaired - SCM0 precedes GLNK in 20 of 21 and IPCC in 11 of 12,
-        // and this file placed both after it, SCM0 in Step 4.71 and IPCC in 4.73.
-        // Six more are unsatisfiable in any slot, and they are the same six the
-        // PILC and RPEN comments record: UCS0 (10 of 10), URS0, USB0, UFN0, MMU0
-        // and MMU1 (20 each) sit on the far side of GLNK in the corpus and on the
-        // near side here, because this file wrote its early block in an order
-        // that is not the corpus's.
-        //
-        // The one thing this slot cannot reproduce is the adjacency it was
-        // measured on: the corpus puts GLNK immediately after IPC0 in all
-        // twenty-one tables. IPC0 was written in Step 4.83 and landed between
-        // PILC and this node, as predicted here, because three unanimous
-        // relations leave no other slot - RPEN before it (21 of 21), PILC before
-        // it (19 of 19) and GLNK after it (21 of 21) against this file's
-        // consecutive RPEN, PILC and GLNK. The prediction was right and it was
-        // also short: it counted two relations where the corpus has three, and
-        // it did not know that the six relations this slot breaks are the same
-        // six by name. That is recorded on IPC0's own comment, not here.
-        Device (GLNK)
-        {
-            Name (_HID, "QCOM0A84")  // _HID: Hardware ID
-            Alias (^PSUB, _SUB)  // _SUB: Subsystem ID
-            Name (_UID, Zero)  // _UID: Unique ID
-            Name (_DEP, Package (0x02)  // _DEP: Dependencies
-            {
-                \_SB.IPCC,
-                \_SB.RPEN
-            })
-        }
-
-        // QGP0 and QGP1 are the two GPI DMA controllers, and they are here
-        // because the QUP engines above are not self-driving. Two independent
-        // sources say so. The corpus: lisa's SP14 and a52sxq's IC14 each carry
-        // a three-entry _DEP of \_SB.PEP0, \_SB.QGP1 and \_SB.MMU0 - engine,
-        // its own wrapper's GPI DMA controller, and the SMMU in front of it.
-        // The board: every live engine in gauguin's tree names one in its dmas
-        //
-        //   spi@880000   dmas <0x186 0 0 1 0x40 0>, <0x186 1 0 1 0x40 0>
-        //   i2c@984000   dmas <0x190 0 1 3 0x40 0>, <0x190 1 1 3 0x40 0>
-        //   i2c@988000   dmas <0x190 0 2 3 0x40 0>, <0x190 1 2 3 0x40 0>
-        //   spi@98c000   dmas <0x190 0 3 1 0x40 0>, <0x190 1 3 1 0x40 0>
-        //   i2c@990000   dmas <0x190 0 4 3 0x40 0>, <0x190 1 4 3 0x40 0>
-        //
-        // - and the phandle is the wrapper's, not the engine's: 0x186 is
-        // qcom,gpi-dma@800000 and every wrapper-1 engine names 0x190,
-        // qcom,gpi-dma@900000. Each engine's two specifiers are tx and rx in
-        // the order its dma-names gives, and they differ in exactly one cell,
-        // the first, 0 then 1 - so the cells after the phandle read <tx/rx, SE
-        // index, code, 0x40, 0> and the list above quotes the tx one. The
-        // second cell is the engine's index within its wrapper in all five - 0,
-        // 1, 2, 3, 4 for wrapper 0's SPI0 and the four wrapper-1 buses. It is the
-        // wrapper-relative index and not the global SE number: the two coincide
-        // on wrapper 0's SPI0 - index 0, SE 0 - and differ by six on the other
-        // four, indexes 1 through 4 at SE 7 through 10. This comment read it as
-        // a second measurement "of the numbering the IC nodes above were built
-        // on" until Step 4.87 separated the two, and the separation is the step:
-        // this property, like the _STR beside it, measures the index, and the IC
-        // nodes' _UIDs follow the global number. The third cell is constant per
-        // protocol - 1 on the two SPI engines and 3 on the three I2C engines -
-        // which is one more statement of which protocol sits at each slot, and
-        // it is read here and not decoded. The fourth and fifth are 0x40 and 0
-        // in all ten specifiers. The UART has no dmas property at all - it is
-        // the wrapper-0 four-wire port and runs in FIFO mode - and it was
-        // called the console here until Step 4.86 read the two console nodes
-        // the board declares and found this one is not either of them.
-        //
-        // Those two _DEPs are also the corpus's cleanest statement of the rule
-        // this table has been built on, and it is worth the four lines. lisa's
-        // SP14 and a52sxq's IC14 are the same engine: 0x00A94000 + 0x4000,
-        // _UID 0x0E, _STR "QUP_1_SE_5", INTID 0x186, the same _DEP - and the
-        // two tables differ in exactly two lines, the _HID and the name. lisa
-        // calls it QCOM0A0E, an SPI engine, and names it SP14; a52sxq calls the
-        // same slot QCOM0A10, an I2C engine, and names it IC14. So the slot
-        // identifies the engine and the protocol is the board's, which is
-        // exactly what Step 4.70 found on gauguin when the board's tree and the
-        // payload's disagreed about two addresses - except that here two
-        // shipping boards disagree about one, and the family has been doing
-        // this all along. It is also why the letter in an engine's name is the
-        // protocol and not the slot: gauguin's two live SPI engines are slots 1
-        // and 10 and would be SP1 and SP10, and lisa's SP14 is a52sxq's IC14.
-        //
-        // The id is QCOM0A88, and the family evidence is broad rather than a
-        // pair for once: 20 of the 66 tables declare a QGP device, under nine
-        // distinct ids, and the same block is indexed 88 in five families (09,
-        // 0A, 0C, 1A, 25), 93 in three (05, 08, 14) and F4 in one (02) - so
-        // the index is a property of the family generation and not a constant,
-        // and 0A sits in the 88 group. It is claimed outright:
-        //
-        //   qcgpi7280.inf -> %QCGPI.DeviceDesc%=QCGPI_Device, ACPI\QCOM0A88
-        //
-        // The resources are the derivation and not a copy, which is why the
-        // family's exact numbers are correct here. The board gives each
-        // controller a 0x60000 region named "gpi-top" - reg = <0x800000
-        // 0x60000> and <0x900000 0x60000> - and the corpus's _CRS is that
-        // region less its first 0x4000: 0x50000 long from base + 0x4000, on
-        // lisa and on a52sxq alike. Both of gauguin's regions are 0x60000, so
-        // the same subtraction gives the same window, and the GPI TOP block
-        // the family steps over is the first 0x4000 of a region whose name
-        // says it is there.
-        //
-        // The interrupts do not transfer, and this is the one place in the
-        // block where the corpus's values would have been wrong. Each board
-        // declares the controller ten interrupt lines - qcom,max-num-gpii = 10
-        // on both - and gauguin's are 0x114 through 0x11D on wrapper 0 and
-        // 0x2A5 through 0x2AE on wrapper 1. The family declares two of them on
-        // both its controllers, and at wrapper 0 those two are gauguin's first
-        // two to the digit, 0x114 and 0x115, which is why the family's count is
-        // kept and only its numbers are replaced. At wrapper 1 lisa's two are
-        // its own lines, 0x137 and 0x138, and gauguin's are 0x2A5 and 0x2A6:
-        // the numbering agrees between the two SoCs for the whole wrapper-0
-        // ladder and disagrees completely at wrapper 1, and nothing here
-        // explains the split, so both numbers are measured rather than argued.
-        // qcom,gpii-mask says how many of the ten are instantiated on this
-        // board - 0x1F, five, on wrapper 0 and 0x3F, six, on wrapper 1 - and
-        // the two the family declares are inside both masks.
-        //
-        // Neither node carries _DEP: the family's QGP nodes have none, and the
-        // dependency runs the other way, from a QUP engine to its GPI DMA. The
-        // family's record of that direction is real but not uniform. Three
-        // engines per table carry it, and the controller each names is its own
-        // wrapper's - the same pairing gauguin's dmas show:
-        //
-        //   lisa    I2C2 (slot 2)  _DEP {PEP0, QGP0, MMU0}
-        //           I2C5 (slot 5)  _DEP {PEP0, QGP0}
-        //           SP14 (slot 14) _DEP {PEP0, QGP1, MMU0}
-        //
-        //   a52sxq  I2C2 (slot 2)  _DEP {PEP0, QGP0, MMU0}
-        //           I2C4 (slot 4)  _DEP {PEP0, QGP0}
-        //           IC14 (slot 14) _DEP {PEP0, QGP1, MMU0}
-        //
-        // - and the third entry, MMU0, is on two of the three and not on the
-        // third in both tables, so the family's _DEP is not a uniform statement
-        // about this hardware and is not a complete one either: gauguin's dmas
-        // put all five live engines on a controller where the family records
-        // three.
-        //
-        // The UARTs take the same kind of entry and a shorter one. Across the 34
-        // UART nodes the corpus carries, 31 write _DEP {PEP0} alone - lisa's
-        // UARD and UAR8, a52sxq's, alioth's, and the rest of the family - three
-        // write {PEP0, MMU0}, the UAR4 of a52q, miatoll and surya and the only
-        // UART _DEP in the corpus with two entries, and none writes none at all.
-        // Six of the 31 write the package width as One rather than 0x01 -
-        // caymanslm's two and pipa's four - which is how a first pass here,
-        // reading only 0xNN widths, came to count six nodes as having no _DEP
-        // before Step 4.86 re-read them. GIO0 never appears in one. This file
-        // said it did - "both tables' UARD carries {PEP0, GIO0}" stood here until
-        // Step 4.86 counted the 34 - and what named GIO0 was the GpioInt in the
-        // UART's _CRS, which 30 of the 34 carry, lisa's UAR8 on pin 0x1F and
-        // lisa's UARD on 0x17, the four that do not being pipa's UARD, UR14,
-        // UR18 and UR20. A _CRS resource is not a dependency, and the
-        // correction is recorded rather than quietly made. GIO0 does carry _DEP
-        // entries elsewhere in the family - {PEP0, GIO0, SPI1} in three tables,
-        // {GIO0, I2C4} in three, {AFT1, GIO0, IC10} in one - so the reference
-        // would be writable here, this table having declared GIO0 as its twelfth
-        // device. It is not written because every UART shape the family writes
-        // begins with PEP0, which is absent.
-        //
-        // This table therefore writes no engine _DEP at all, for the same reason
-        // the IC nodes above do not: every family shape here needs PEP0, which
-        // is absent, and the entries the family writes beside it - GIO0's today,
-        // MMU0's since Step 4.72 - are the family's second and third entries
-        // rather than entries of their own. One alone would be a shape no engine
-        // in the corpus writes. That is a preference about the shape and is
-        // recorded as one, not a claim that the entry is un-writable.
-        // The consequence is worth stating rather than hiding - qci2c7280.inf
-        // and qcgpi7280.inf are both in the Windows driver set, so once those
-        // two bind, nothing in this table orders the GPI DMA ahead of the
-        // engines that DMA for it. Engine _DEPs wait on PEP0, and when it lands
-        // all four shapes can be written in the family's own form at once.
-        // Neither QGP node carries _STA either; both nodes in the board's tree
-        // are ok and a52sxq's QGP0 and QGP1 are literally byte-identical in the
-        // two tables of that family, so there is nothing about this block for a
-        // _STA to disagree with. What is deliberately not here is the SMMU:
-        // gauguin's controllers sit behind it (iommus = <&apps_smmu 0x56 0> and
-        // <&apps_smmu 0x4D6 0>, and phandle 0x17 is apps-smmu@15000000) and
-        // every family _DEP that names the GPI DMA names MMU0 beside it, but
-        // the family's QGP nodes do not describe it. What would is MMU0, and
-        // this table has it as of Step 4.72, two nodes below; the engine _DEPs
-        // that want a GPI DMA and an SMMU together can now resolve that half of
-        // the reference, and still wait on the half that is PEP0.
-        Device (QGP0)
-        {
-            Name (_HID, "QCOM0A88")  // _HID: Hardware ID
-            Alias (^PSUB, _SUB)
-            Name (_UID, Zero)  // _UID: Unique ID
-            Name (_CCA, Zero)  // _CCA: Cache Coherency Attribute
-            Method (_CRS, 0, NotSerialized)  // _CRS: Current Resource Settings
-            {
-                Name (RBUF, ResourceTemplate ()
-                {
-                    Memory32Fixed (ReadWrite,
-                        0x00804000,         // Address Base
-                        0x00050000,         // Address Length
-                        )
-                    Interrupt (ResourceConsumer, Level, ActiveHigh, Exclusive, ,, )
-                    {
-                        0x00000114,
-                    }
-                    Interrupt (ResourceConsumer, Level, ActiveHigh, Exclusive, ,, )
-                    {
-                        0x00000115,
-                    }
-                })
-                Return (RBUF) /* \_SB_.QGP0._CRS.RBUF */
-            }
-        }
-
-        Device (QGP1)
-        {
-            Name (_HID, "QCOM0A88")  // _HID: Hardware ID
-            Alias (^PSUB, _SUB)
-            Name (_UID, One)  // _UID: Unique ID
-            Name (_CCA, Zero)  // _CCA: Cache Coherency Attribute
-            Method (_CRS, 0, NotSerialized)  // _CRS: Current Resource Settings
-            {
-                Name (RBUF, ResourceTemplate ()
-                {
-                    Memory32Fixed (ReadWrite,
-                        0x00904000,         // Address Base
-                        0x00050000,         // Address Length
-                        )
-                    Interrupt (ResourceConsumer, Level, ActiveHigh, Exclusive, ,, )
-                    {
-                        0x000002A5,
-                    }
-                    Interrupt (ResourceConsumer, Level, ActiveHigh, Exclusive, ,, )
-                    {
-                        0x000002A6,
-                    }
-                })
-                Return (RBUF) /* \_SB_.QGP1._CRS.RBUF */
             }
         }
 
@@ -4056,6 +2781,261 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
             }
         }
 
+        /*
+         * ---------------------------------------------------------------------
+         * The PMIC family: SPMI, PMIC, PM01.  Step 4.63.
+         *
+         * Three nodes, and every number in them is either gauguin's own or a
+         * constant measured across the corpus - nothing is inherited by
+         * resemblance. The ids are the three the 7280 driver set claims:
+         *
+         *   QCOM0A0B  qcspmi7280.inf        QCOM0A2B  qcpmic7280.inf
+         *   QCOM0A2D  qcpmicgpio7280.inf
+         *
+         * SPMI's window. gauguin's device tree gives the arbiter five regions:
+         *
+         *   core   0x0C440000 + 0x1100        obsrvr 0x0E600000 + 0x100000
+         *   chnls  0x0C600000 + 0x2000000     intr   0x0E700000 + 0xA0000
+         *   cnfg   0x0C40A000 + 0x26000
+         *
+         * which union to [0x0C40A000, 0x0E7A0000). _CRS states one window,
+         * 0x0C400000 + 0x2800000, and that is not a copy: it is the value 18 of
+         * the 20 SPMI _CRS in Silicium-ACPI carry - across SM8150, SM8250,
+         * SM8350, SM7150, SM7125, SM6250 and SDM7280 alike - and it contains
+         * every one of the five regions above. The same eight bytes appear
+         * little-endian at offset 0x12 of SPMI.CONF, which is the same window
+         * restated. The other two tables are Kailua's, and theirs is a different
+         * window (0x0C400000 + 0x500000) for a different arbiter.
+         *
+         * SPMI.CONF is byte-identical in all 18 of those tables, Kailua's being
+         * the sole variant, so it is copied verbatim rather than reconstructed:
+         * 26 bytes whose only platform-dependent part is the window _CRS
+         * already states. What the other 18 bytes configure is not established.
+         *
+         * PMIC.PMCF is the one method here with real platform content. 19 of the
+         * 22 tables in Silicium-ACPI that have an SPMI node carry it, and no
+         * table calls it: the PMIC driver calls it by name, so it is not
+         * optional for a table that means to bind. (The three that omit it -
+         * vili, kebab and Waipio - also omit PMAP and PMBM, and vili's whole
+         * PMIC section is PMIC and PM01 and nothing else.) Its package is
+         * <count>, then one entry per SPMI USID from 0 to the maximum, where a
+         * present USID is the key and an absent one is keyed 0x10, and the
+         * paired value is 0x10 on the newer platforms:
+         *
+         *   lisa, a52sxq (both 0A)   {0A, 0>10, 1>10, 2>10, 3>10, 4>10, 10>10 x5}
+         *   Lahaina, venus, lemonade {0B, 0..5>10, 10>10 x4}
+         *   renoir, Cedros (both 09) {06, 0,1,2,3>10, 10>10, 5>10}
+         *   Kailua, Waipio (0C)      {0D, 0..7>10, 10>10 x4, 0C>16}
+         *
+         * Two readings of this package fit the older tables and only one fits
+         * the newer. On SM8150/SM8250/SM7125 the values step by two -
+         * alioth's is {04, 0>1, 2>3, 4>5, 6>7} - which reads as <primary USID,
+         * companion USID>, one entry per PMIC, and that reading cannot explain
+         * lisa's consecutive keys 0,1,2,3,4 or renoir's key 0x10 sitting between
+         * 3 and 5. The reading that fits both is the one above: one entry per
+         * USID from 0 up, placeholders for the gaps, and a value whose meaning
+         * differs by generation - a companion on the old platforms, a peripheral
+         * type on the new, where 0x16 appears once (Kailua, USID 12) and shows
+         * the field is not a USID at all. The entry count is a per-family
+         * constant: 10 for family 0A, 10 for 1A, 13 for 0C, 6 for 09.
+         *
+         * gauguin's device tree populates USIDs 0 through 6 - pm6350 at 0 and 1,
+         * pm7250b at 2 and 3, pm6150l at 4 and 5, pmk8350 at 6, all seven
+         * children of spmi@c440000 and none of them disabled, the pm8008 at
+         * USID 8 being on I2C - and it is family 0A, so the package is lisa's
+         * with USID 5 present instead of absent. What 0x10 means is still not
+         * established; it is the value 12 tables give for every populated USID,
+         * including renoir, which is SM7350 to gauguin's SM7225 and the closest
+         * relative in the corpus.
+         *
+         * PM01's interrupt is the arbiter's own. The dts gives spmi@c440000
+         * interrupts-extended = <0x62 0x01 0x04> - PDC pin 1 - and 512 + 1 is
+         * 513 = 0x201, which all 21 PMIC-GPIO nodes in the corpus carry, Level,
+         * ActiveHigh, Shared, except Kailua and Waipio, whose PMIC on PDC pin 3
+         * adds a second. gauguin has no PMIC on pin 3.
+         *
+         * PM01._DSM: the GPIO Controller UUID, function 0 returning the bitmap
+         * 0x03 (functions 1 and 2), function 1 returning Package (0x02){0x07,
+         * 0x06}. The UUID, the bitmap and the pair are each constant across
+         * every table that carries them; the pair's meaning is not established.
+         * Four older tables return Buffer (One){0x00} at function 1 instead, and
+         * those are all pre-0A families.
+         *
+         * _STA returning 0x0F is this file's convention on every device it
+         * defines; the reference tables leave it out and are present by default.
+         *
+         * Deliberately not added here, with the reason each time. PMAP was the
+         * first entry on this list and is no longer on it: its _DEP is a
+         * three-entry package naming \_SB.PMIC, \_SB.ABD and \_SB.SCM0, two of
+         * which were absent from this file when that was written, so it would
+         * have been a dangling dependency. Steps 4.75 and 4.76 wrote ABD and
+         * SCM0, the last referent arrived, and Step 4.77 wrote the node; its
+         * own comment, below, carries the id and the GEPT that three sibling
+         * nodes share.
+         *
+         *   PMBM and PMGK are in the corpus, and no id of either is claimed by
+         * the 7280 set - eight ids over 17 declarations and five over 11, with
+         * QCOM0A2A and QCOM0A8E the two the lisa/a52sxq pair writes - so
+         * adding them would put two devices in Device Manager that nothing
+         * binds. PML0 (QCOM0AD3, which qcpmic7280.inf does claim) is
+         * reachable, but it is an I2C-attached PMIC - lisa's _CRS gives it
+         * four I2C addresses on \_SB.I2C2 - and this file has no I2C
+         * controller and gauguin's pm8008 is at a different address. PEP0
+         * (QCOM0A17, qcpep.wd7280.inf) is claimed and is the largest remaining
+         * single node in the reference, 2,501 lines in lisa - but only 629 of
+         * those are skeleton, the rest is one case per thermal zone, and it is
+         * the power engine besides: its own step, and its own comment above
+         * carries the measurement.
+         */
+        Device (SPMI)
+        {
+            Method (_STA, 0, NotSerialized)  // _STA: Status
+            {
+                Return (0x0F)
+            }
+
+            Name (_HID, "QCOM0A0B")  // _HID: Hardware ID
+            Alias (^PSUB, _SUB)
+            Name (_CID, "PNP0CA2")  // _CID: Compatible ID
+            Name (_UID, One)  // _UID: Unique ID
+            Name (_CCA, Zero)  // _CCA: Cache Coherency Attribute
+            Method (_CRS, 0, NotSerialized)  // _CRS: Current Resource Settings
+            {
+                Name (RBUF, ResourceTemplate ()
+                {
+                    Memory32Fixed (ReadWrite,
+                        0x0C400000,         // Address Base
+                        0x02800000,         // Address Length
+                        )
+                })
+                Return (RBUF) /* \_SB_.SPMI._CRS.RBUF */
+            }
+
+            Method (CONF, 0, NotSerialized)
+            {
+                Name (XBUF, Buffer (0x1A)
+                {
+                    /* 0000 */  0x00, 0x01, 0x01, 0x01, 0xFF, 0x00, 0x02, 0x00,
+                    /* 0008 */  0x0A, 0x07, 0x04, 0x07, 0x01, 0xFF, 0x10, 0x01,
+                    /* 0010 */  0x00, 0x01, 0x0C, 0x40, 0x00, 0x00, 0x02, 0x80,
+                    /* 0018 */  0x00, 0x00
+                })
+                Return (XBUF) /* \_SB_.SPMI.CONF.XBUF */
+            }
+        }
+
+        Device (GIO0)
+        {
+            Method (_STA, 0, NotSerialized)  // _STA: Status
+            {
+                Return (0x0F)
+            }
+
+            Name (_HID, "QCOM0A0C")  // _HID: Hardware ID
+            Alias (^PSUB, _SUB)
+            Name (_UID, Zero)  // _UID: Unique ID
+            Method (_CRS, 0, NotSerialized)  // _CRS: Current Resource Settings
+            {
+                Name (RBUF, ResourceTemplate ()
+                {
+                    Memory32Fixed (ReadWrite,
+                        0x0F100000,         // Address Base
+                        0x00300000,         // Address Length
+                        )
+                    Interrupt (ResourceConsumer, Level, ActiveHigh, Shared, ,, )
+                    {
+                        0x000000F0,
+                    }
+                    Interrupt (ResourceConsumer, Level, ActiveHigh, Shared, ,, )
+                    {
+                        0x000000F1,
+                    }
+                    Interrupt (ResourceConsumer, Level, ActiveHigh, Shared, ,, )
+                    {
+                        0x000000F2,
+                    }
+                    Interrupt (ResourceConsumer, Level, ActiveHigh, Shared, ,, )
+                    {
+                        0x000000F3,
+                    }
+                    Interrupt (ResourceConsumer, Level, ActiveHigh, Shared, ,, )
+                    {
+                        0x000000F4,
+                    }
+                    Interrupt (ResourceConsumer, Level, ActiveHigh, Shared, ,, )
+                    {
+                        0x000000F5,
+                    }
+                    Interrupt (ResourceConsumer, Level, ActiveHigh, Shared, ,, )
+                    {
+                        0x000000F6,
+                    }
+                    Interrupt (ResourceConsumer, Level, ActiveHigh, Shared, ,, )
+                    {
+                        0x000000F7,
+                    }
+                    Interrupt (ResourceConsumer, Level, ActiveHigh, Shared, ,, )
+                    {
+                        0x000000F8,
+                    }
+                    // dts SPIs 0xD0 to 0xD8, in order, all <... 0x04> = level
+                    // high. The rest of the corpus list is board data and is
+                    // not reproducible from gauguin's device tree - see above.
+                })
+                Return (RBUF) /* \_SB_.GIO0._CRS.RBUF */
+            }
+
+            // 156 = gauguin's TLMM GPIO count. The reader is qcgpio.sys, not a
+            // table, and the value's derivation is in the header - see the OFNI
+            // bullet above this node.
+            Method (OFNI, 0, NotSerialized)
+            {
+                Name (RBUF, Buffer (0x02)
+                {
+                     0x9C, 0x00                                       // ..
+                })
+                Return (RBUF) /* \_SB_.GIO0.OFNI.RBUF */
+            }
+
+            Name (GABL, Zero)
+            Method (_REG, 2, NotSerialized)  // _REG: Region Availability
+            {
+                If ((Arg0 == 0x08))
+                {
+                    GABL = Arg1
+                }
+            }
+
+            Method (_DSM, 4, NotSerialized)  // _DSM: Device-Specific Method
+            {
+                If ((ToBuffer (Arg0) == ToUUID ("4f248f40-d5e2-499f-834c-27758ea1cd3f") /* GPIO Controller */))
+                {
+                    If ((ToInteger (Arg2) == Zero))
+                    {
+                        Return (Buffer (One)
+                        {
+                             0x03
+                        })
+                    }
+
+                    If ((ToInteger (Arg2) == One))
+                    {
+                        Return (Package (0x01)
+                        {
+                            0x0100
+                        })
+                    }
+                }
+                Else
+                {
+                    Return (Buffer (One)
+                    {
+                         0x00
+                    })
+                }
+            }
+        }
+
 
         // device PEP0's own _DEP names and therefore the first link of the chain
         // every remaining _DEP in the family begins with. Unlike the last four
@@ -4378,6 +3358,262 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
             Name (_TZP, Zero)
         }
 
+        // IPC0 is the IPC router, and qcipcrouter7280.inf names it in one line:
+        // %IPC_ROUTER.DeviceDesc%=IPC_ROUTER_Device, ACPI\QCOM0A0D, description
+        // string "Qualcomm(R) Data IPC Router Device", service QCIPC_ROUTER,
+        // binary qcipcrouter7280.sys, KMDF 1.33, class SYSTEM, StartType 3. It
+        // rides the transport GLNK and its inf says so in a place a name can be
+        // read off: every one of its five transports carries PortName "IPCRTR".
+        //
+        // It is also the first node here whose driver ships a user-mode half.
+        // The same inf copies qsocketipcrum.dll into the system directory and
+        // grants the device one ACE more than qcglink7280.inf does -
+        // (A;;GA;;;S-1-5-84-0-0-0-0-0), the user-mode-driver SID, on top of the
+        // administrators and LocalSystem that both infs grant - which is what a
+        // device with a user-mode client should look like and what the transport
+        // next door, with none, does not.
+        //
+        // Its transport list is five entries, all Type 1, Transport "SMEM", Port
+        // "IPCRTR" and MaxIntents 4, differing only in RemoteSS: "mpss", "lpass",
+        // "dsps", "cdsp", "wpss". The board declares three glink-edges, labelled
+        // "lpass", "modem" and "cdsp". Three of the five names line up and two
+        // have no remoteproc here at all - "dsps" and "wpss" - and the one
+        // difference in wording is the modem, which this inf calls "mpss" and
+        // the board labels "modem". qcglink7280.inf's own SMP2P_interrupts table
+        // is a second sighting of the same four remote processors, with host ids
+        // SMEM_MODEM 1, SMEM_ADSP 2, SMEM_CDSP 5 and SMEM_WPSS 13 against IPCC
+        // clients MPSS 2, LPASS 3, NSP0 6 and WPSS 24 - and the first three are
+        // this board's remote-pids exactly, 1, 2 and 5.
+        //
+        // The id is GLNK's, one generation down, and the two are issued as a
+        // pair. Twenty-one tables declare an IPC0, under nine ids, and they line
+        // up with the twenty-one GLNK ids table for table:
+        //
+        //   gen   GLNK   IPC0   tables
+        //   02    02F9   021C   caymanslm
+        //   05    058D   050E   mh2, cepheus, nabu, pipa, vayu
+        //   08    088D   080E   a52q, miatoll
+        //   09    0984   090D   renoir, Cedros IDP
+        //   0A    0A84   0A0D   a52sxq, lisa
+        //   0C    0C84   0C0D   Kailua MTP, Kailua QRD, Waipio
+        //   14    148D   140E   surya
+        //   1A    1A84   1A0D   lemonade, venus, vili, Lahaina MTP
+        //   25    2584   250D   alioth
+        //
+        // The high byte is never different between the two ids of a row, and the
+        // low byte never crosses between the groups: GLNK 84 goes with IPC0 0D,
+        // 8D with 0E, and F9 with 1C, and no table departs from its row. So the
+        // transport and the router are issued as a pair the way RPEN and PILC are
+        // (06E1 and 06E0) - and unlike those two the pairing carries no
+        // generation of its own, because there is no IPC0 whose high byte differs
+        // from its own GLNK's. QGP0 and QGP1 are the third index over the same
+        // nine generations and they partition them the same way - 93 for 05/08/14,
+        // 88 for 09/0A/0C/1A/25, F4 for 02 - so three indices now agree on the
+        // families. They do not agree on the offset between them: 93 to 8D is six
+        // and 88 to 84 is four and F4 to F9 goes the other way by five. The
+        // family is a property of the table and the spacing between the indices
+        // is not.
+        //
+        // With the generation fixed at 0A by QGP0 and QGP1's QCOM0A88, the row is
+        // the only one that matters here, and both halves of it are written: 0A84
+        // was GLNK's, in Step 4.82, and 0A0D is this node's. The corpus's only
+        // two 0A tables, a52sxq and lisa, both write it. The driver set agrees
+        // and agrees only that far, which is the shape the GLNK comment already
+        // records: of the nine IPC0 ids exactly one appears anywhere in the 112
+        // infs, QCOM0A0D in qcipcrouter7280.inf, and of the nine GLNK ids exactly
+        // one does, QCOM0A84 in qcglink7280.inf. The drivers claim one generation
+        // out of nine and it is the one QGP0 had already put this table in.
+        //
+        // The body is the smallest of any node this file has written: a _DEP
+        // naming \_SB.GLNK alone in all twenty-one, an _HID, and the alias. No
+        // _UID anywhere in the corpus - none in twenty-one, where the GLNK above
+        // it has one in twenty-one - and no _CRS in any table, including the nine
+        // where GLNK carries nine Interrupt descriptors. Those nine are the
+        // transport's own lines and they stay on the transport. No _STA but the
+        // same two tables, vili and Waipio. The alias in twenty and Waipio's
+        // Method (_SUB) in the twenty-first: that is the second node in a row
+        // where Waipio is the only departure, and with _STA it makes three
+        // members on which this board and vili's are the corpus's whole
+        // disagreement about this node.
+        //
+        // Position: the corpus agrees on what follows this node and not on what
+        // precedes it. Immediately after it, in 21 of 21, is GLNK. Immediately
+        // before it there is no agreement at all - RP1 in 14 tables, GIO0 in 3,
+        // QPPX in 2, and RPEN and IPCC in one each - so the run is anchored at its
+        // bottom and not its top. Three unanimous relations pin the slot exactly.
+        // RPEN precedes IPC0 in 21 of 21 and PILC in 19 of 19, the two tables
+        // without a PILC being vili and Waipio, the same two as everywhere else;
+        // GLNK follows it in 21 of 21. In this file RPEN, PILC and GLNK are
+        // consecutive, so of the two slots those relations allow - above PILC or
+        // below it - only the second survives, and this node lands between PILC
+        // and GLNK, which is where the GLNK comment said it would land and for
+        // the reason it gave. Twenty-four unanimous relations are satisfied by
+        // that slot, one more than GLNK's slot satisfied on its own, the
+        // difference being the GLNK relation this node now supplies. Not one of
+        // the six GLNK's slot breaks is repaired, and they are the same six by
+        // name: MMU0 and MMU1 (20 of 20) sit above IPC0 in the corpus and below
+        // it here, and UCS0 (10 of 10), UFN0, URS0 and USB0 (20 each) sit below
+        // it and above it here. The cause is the early block this file wrote in
+        // an order of its own; a reordering is its own measurement, so they are
+        // recorded and not repaired, as at RPEN and PILC and GLNK.
+        //
+        // Three nodes the corpus puts before IPC0 in every table that has both
+        // were not in this table when that paragraph was written - BAM1 and BAM5
+        // (21 of 21) and TFTP (21 of 21) - and the prediction made here was that
+        // TFTP would be written above this node and not below it. It was written
+        // in Step 4.84 and it landed above, but the prediction was coarse: the
+        // corpus puts PILC before TFTP in 19 of 19 tables that have both, so the
+        // slot is not the one above IPC0's other side but the one between PILC
+        // and this node. On the 602 table-votes TFTP's relations carry that slot
+        // scores 491 and is the unique maximum; the runner-up scores 472 and
+        // loses PILC's 19. The adjacency predicted here is unchanged - TFTP is
+        // immediately before this node in this file now, and IPC0 is still
+        // immediately before GLNK, which is the adjacency the corpus does state,
+        // 21 of 21. BAM1 and BAM5 are still absent and their constraint is
+        // unchanged and now sharper: they precede both TFTP and this node in 21
+        // of 21, so whichever of the two slots they take, they take it above.
+        Device (IPC0)
+        {
+            Name (_HID, "QCOM0A0D")  // _HID: Hardware ID
+            Alias (^PSUB, _SUB)  // _SUB: Subsystem ID
+            Name (_DEP, Package (One)  // _DEP: Dependencies
+            {
+                \_SB.GLNK
+            })
+        }
+
+        // GLNK is the Generic Link transport, and the name for it that ships is
+        // in qcglink7280.inf: one hardware id, %GLINK.DeviceDesc%=GLINK_Device,
+        // ACPI\QCOM0A84, and one description string, "Qualcomm(R) Shared Memory
+        // Port Device". It is the channel layer the remote processors talk over
+        // - each remoteproc on this board carries a glink-edge, and this node is
+        // the other end of all of them.
+        //
+        // The board states the three pieces of it. The transport's memory is the
+        // reserved region the smem node points at - memory@80900000,
+        // reg = <0x00 0x80900000 0x00 0x200000>, phandle 0x2c - and smem itself
+        // is { compatible = "qcom,smem"; memory-region = <0x2c>;
+        // hwlocks = <0x2d 0x03> }, the lock being hwlock 3 of hwlock@1f40000
+        // (qcom,tcsr-mutex, reg = <0x1f40000 0x40000>). The edges are three:
+        //
+        //   adsp  remoteproc@3000000  glink-edge { label = "lpass"; remote-pid = 2 }
+        //   mpss  (the modem)         glink-edge { label = "modem"; remote-pid = 1 }
+        //   cdsp  remoteproc@8300000  glink-edge { label = "cdsp";  remote-pid = 5 }
+        //
+        // - and all three mbox into the same controller, phandle 0x2e, which is
+        // mailbox@408000, qcom,sm6350-ipcc. That controller is already this
+        // table's IPCC node, written in Step 4.73 at the id the driver set claims
+        // for it and at the board's own single line, INTID 0x104. So the entry
+        // this node's _DEP carries is not a namespace formality: it is the
+        // interrupt path the board's three glink-edges actually ride on, and this
+        // is the first dependency in this table that the board states and the
+        // corpus only confirms.
+        //
+        // The id. Twenty-one tables declare a GLNK, under nine ids: QCOM058D five
+        // times, QCOM1A84 four, QCOM0C84 three, QCOM088D, QCOM0A84 and QCOM0984
+        // twice each, and QCOM02F9, QCOM2584 and QCOM148D once. The low byte is
+        // 84 in five of the nine (09, 0A, 0C, 1A, 25), 8D in three (05, 08, 14)
+        // and F9 in one (02) - the same three-way grouping QGP0's comment
+        // measured on its own index, 88/93/F4, which is a second sighting of the
+        // families and not a coincidence.
+        //
+        // What settles the id is this table's own four, and the shape of the
+        // argument is the hardest form of the standing rule so far. This table
+        // already writes PILC QCOM06E0, RPEN QCOM06E1, IPCC QCOM06C2 and QGP0 and
+        // QGP1 QCOM0A88. Six corpus tables write the first three of those
+        // together - a52sxq, lisa, renoir, Cedros' IDP, and Kailua's MTP and QRD
+        // - and they split three ways on GLNK:
+        //
+        //   a52sxq, lisa                   IDP07280      QCOM0A84
+        //   renoir, Cedros IDP             IDP07350      QCOM0984
+        //   Kailua MTP, Kailua QRD         MTP/QRD08550  QCOM0C84
+        //
+        // Two tables each, and Waipio - the seventh table whose RPEN is 06E1 and
+        // whose IPCC is 06C2, and the one table of the seven with no PILC - is a
+        // third vote for 0C84. Six tables with byte-identical service ids carry
+        // three different transport ids, so the service series does not determine
+        // the transport series; the table owns both and numbers them apart. That
+        // is why this id could not be read off as "the generation after 06", the
+        // way RPEN's could not be counted up from PILC's.
+        //
+        // The fourth id already here decides it. QGP0 and QGP1 are QCOM0A88, and
+        // 0A is in the 88 group with 09, 0C, 1A and 25, so this table's QUP-side
+        // family was fixed at 0A when those two nodes were written - by the same
+        // driver-set argument QGP0's comment records at length. Within 0A there
+        // is one GLNK id in the corpus and both of its tables write it: QCOM0A84.
+        // The driver set agrees twice rather than once, because the pair is
+        // claimed whole: qcglink7280.inf takes ACPI\QCOM0A84 and
+        // qcipcrouter7280.inf takes ACPI\QCOM0A0D, and those two are the only
+        // 0A-generation ids anywhere in the 112 infs - 0A0D being the next node's
+        // and not written here. So the corpus and the drivers both put this node
+        // in 0A, and they are two measurements of one thing rather than one
+        // measurement repeated.
+        //
+        // The body is the corpus's, and its shape is one switch with three
+        // symptoms. Nine of the twenty-one carry a Method (_CRS) returning nine
+        // Interrupt descriptors - eight Edge, one Level - and a one-entry _DEP
+        // naming \_SB.RPEN alone; twelve carry no _CRS at all and a two-entry
+        // _DEP naming \_SB.IPCC and \_SB.RPEN. The two properties are not merely
+        // correlated but coincident: the nine with the resource list are exactly
+        // the nine tables that declare no IPCC device, and the twelve without one
+        // are exactly the twelve that do. And the same line divides the
+        // generations - 02, 05, 08 and 14 on one side, 09, 0A, 0C, 1A and 25 on
+        // the other - so the block changed shape once, in the same generation
+        // step that added the IPCC node to these tables. This table is on the
+        // newer side and this node takes the newer form: the _DEP written and the
+        // _CRS not. The withheld resource is withheld for a better reason than
+        // the QGP interrupts were: there is no family-0A GLNK _CRS to copy, and
+        // the nine that exist are on GIC lines belonging to other boards.
+        //
+        // _UID is Zero in all twenty-one, as it is on UFS0, URS0, ABD and GIO0
+        // here. So is the alias, in all twenty-one - twenty as
+        // Alias (\_SB.PSUB, _SUB) and one, Waipio, as the Method (_SUB) form the
+        // PEP0 comment records as that board's habit. No _STA: the two tables
+        // that carry one are vili and Waipio, and they are also the two tables
+        // that write a GLNK _STA on a table whose RPEN has no PILC beside it.
+        // That is left as the observation it is.
+        //
+        // Position, and it is forced by two relations rather than fixed by many.
+        // Before: UFS0, DEV0, ABD, PMIC and PM01 (21 of 21 each), PMAP and PRTC
+        // (20), the four-wire ports (10), PML0 (11), I2C8 (9) and I2C9 (3), and
+        // then the two
+        // nodes above - RPEN (21 of 21) and PILC (19 of 19). After: QGP0 (19 of
+        // 19) and QGP1 (21 of 21), then CPU0 to CPU3 (21 each) and CPU4 to CPU7
+        // (19 each). All twenty-three of those unanimous relations are satisfied
+        // by one slot, and it is the only slot that satisfies them: PILC is above
+        // it and QGP0 is below it and the two are adjacent in this file, so the
+        // choice here is this node or no position at all. Two relations the
+        // corpus nearly agrees on are broken by that slot and are recorded rather
+        // than repaired - SCM0 precedes GLNK in 20 of 21 and IPCC in 11 of 12,
+        // and this file placed both after it, SCM0 in Step 4.71 and IPCC in 4.73.
+        // Six more are unsatisfiable in any slot, and they are the same six the
+        // PILC and RPEN comments record: UCS0 (10 of 10), URS0, USB0, UFN0, MMU0
+        // and MMU1 (20 each) sit on the far side of GLNK in the corpus and on the
+        // near side here, because this file wrote its early block in an order
+        // that is not the corpus's.
+        //
+        // The one thing this slot cannot reproduce is the adjacency it was
+        // measured on: the corpus puts GLNK immediately after IPC0 in all
+        // twenty-one tables. IPC0 was written in Step 4.83 and landed between
+        // PILC and this node, as predicted here, because three unanimous
+        // relations leave no other slot - RPEN before it (21 of 21), PILC before
+        // it (19 of 19) and GLNK after it (21 of 21) against this file's
+        // consecutive RPEN, PILC and GLNK. The prediction was right and it was
+        // also short: it counted two relations where the corpus has three, and
+        // it did not know that the six relations this slot breaks are the same
+        // six by name. That is recorded on IPC0's own comment, not here.
+        Device (GLNK)
+        {
+            Name (_HID, "QCOM0A84")  // _HID: Hardware ID
+            Alias (^PSUB, _SUB)  // _SUB: Subsystem ID
+            Name (_UID, Zero)  // _UID: Unique ID
+            Name (_DEP, Package (0x02)  // _DEP: Dependencies
+            {
+                \_SB.IPCC,
+                \_SB.RPEN
+            })
+        }
+
         Device (CPU0)
         {
             Name (_HID, "ACPI0007")
@@ -4432,6 +3668,779 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
             Name (_HID, "ACPI0007")
             Name (_UID, 7)
             Method (_STA, 0, NotSerialized) { Return (0x0F) }
+        }
+
+        // QGP0 and QGP1 are the two GPI DMA controllers, and they are here
+        // because the QUP engines above are not self-driving. Two independent
+        // sources say so. The corpus: lisa's SP14 and a52sxq's IC14 each carry
+        // a three-entry _DEP of \_SB.PEP0, \_SB.QGP1 and \_SB.MMU0 - engine,
+        // its own wrapper's GPI DMA controller, and the SMMU in front of it.
+        // The board: every live engine in gauguin's tree names one in its dmas
+        //
+        //   spi@880000   dmas <0x186 0 0 1 0x40 0>, <0x186 1 0 1 0x40 0>
+        //   i2c@984000   dmas <0x190 0 1 3 0x40 0>, <0x190 1 1 3 0x40 0>
+        //   i2c@988000   dmas <0x190 0 2 3 0x40 0>, <0x190 1 2 3 0x40 0>
+        //   spi@98c000   dmas <0x190 0 3 1 0x40 0>, <0x190 1 3 1 0x40 0>
+        //   i2c@990000   dmas <0x190 0 4 3 0x40 0>, <0x190 1 4 3 0x40 0>
+        //
+        // - and the phandle is the wrapper's, not the engine's: 0x186 is
+        // qcom,gpi-dma@800000 and every wrapper-1 engine names 0x190,
+        // qcom,gpi-dma@900000. Each engine's two specifiers are tx and rx in
+        // the order its dma-names gives, and they differ in exactly one cell,
+        // the first, 0 then 1 - so the cells after the phandle read <tx/rx, SE
+        // index, code, 0x40, 0> and the list above quotes the tx one. The
+        // second cell is the engine's index within its wrapper in all five - 0,
+        // 1, 2, 3, 4 for wrapper 0's SPI0 and the four wrapper-1 buses. It is the
+        // wrapper-relative index and not the global SE number: the two coincide
+        // on wrapper 0's SPI0 - index 0, SE 0 - and differ by six on the other
+        // four, indexes 1 through 4 at SE 7 through 10. This comment read it as
+        // a second measurement "of the numbering the IC nodes above were built
+        // on" until Step 4.87 separated the two, and the separation is the step:
+        // this property, like the _STR beside it, measures the index, and the IC
+        // nodes' _UIDs follow the global number. The third cell is constant per
+        // protocol - 1 on the two SPI engines and 3 on the three I2C engines -
+        // which is one more statement of which protocol sits at each slot, and
+        // it is read here and not decoded. The fourth and fifth are 0x40 and 0
+        // in all ten specifiers. The UART has no dmas property at all - it is
+        // the wrapper-0 four-wire port and runs in FIFO mode - and it was
+        // called the console here until Step 4.86 read the two console nodes
+        // the board declares and found this one is not either of them.
+        //
+        // Those two _DEPs are also the corpus's cleanest statement of the rule
+        // this table has been built on, and it is worth the four lines. lisa's
+        // SP14 and a52sxq's IC14 are the same engine: 0x00A94000 + 0x4000,
+        // _UID 0x0E, _STR "QUP_1_SE_5", INTID 0x186, the same _DEP - and the
+        // two tables differ in exactly two lines, the _HID and the name. lisa
+        // calls it QCOM0A0E, an SPI engine, and names it SP14; a52sxq calls the
+        // same slot QCOM0A10, an I2C engine, and names it IC14. So the slot
+        // identifies the engine and the protocol is the board's, which is
+        // exactly what Step 4.70 found on gauguin when the board's tree and the
+        // payload's disagreed about two addresses - except that here two
+        // shipping boards disagree about one, and the family has been doing
+        // this all along. It is also why the letter in an engine's name is the
+        // protocol and not the slot: gauguin's two live SPI engines are slots 1
+        // and 10 and would be SP1 and SP10, and lisa's SP14 is a52sxq's IC14.
+        //
+        // The id is QCOM0A88, and the family evidence is broad rather than a
+        // pair for once: 20 of the 66 tables declare a QGP device, under nine
+        // distinct ids, and the same block is indexed 88 in five families (09,
+        // 0A, 0C, 1A, 25), 93 in three (05, 08, 14) and F4 in one (02) - so
+        // the index is a property of the family generation and not a constant,
+        // and 0A sits in the 88 group. It is claimed outright:
+        //
+        //   qcgpi7280.inf -> %QCGPI.DeviceDesc%=QCGPI_Device, ACPI\QCOM0A88
+        //
+        // The resources are the derivation and not a copy, which is why the
+        // family's exact numbers are correct here. The board gives each
+        // controller a 0x60000 region named "gpi-top" - reg = <0x800000
+        // 0x60000> and <0x900000 0x60000> - and the corpus's _CRS is that
+        // region less its first 0x4000: 0x50000 long from base + 0x4000, on
+        // lisa and on a52sxq alike. Both of gauguin's regions are 0x60000, so
+        // the same subtraction gives the same window, and the GPI TOP block
+        // the family steps over is the first 0x4000 of a region whose name
+        // says it is there.
+        //
+        // The interrupts do not transfer, and this is the one place in the
+        // block where the corpus's values would have been wrong. Each board
+        // declares the controller ten interrupt lines - qcom,max-num-gpii = 10
+        // on both - and gauguin's are 0x114 through 0x11D on wrapper 0 and
+        // 0x2A5 through 0x2AE on wrapper 1. The family declares two of them on
+        // both its controllers, and at wrapper 0 those two are gauguin's first
+        // two to the digit, 0x114 and 0x115, which is why the family's count is
+        // kept and only its numbers are replaced. At wrapper 1 lisa's two are
+        // its own lines, 0x137 and 0x138, and gauguin's are 0x2A5 and 0x2A6:
+        // the numbering agrees between the two SoCs for the whole wrapper-0
+        // ladder and disagrees completely at wrapper 1, and nothing here
+        // explains the split, so both numbers are measured rather than argued.
+        // qcom,gpii-mask says how many of the ten are instantiated on this
+        // board - 0x1F, five, on wrapper 0 and 0x3F, six, on wrapper 1 - and
+        // the two the family declares are inside both masks.
+        //
+        // Neither node carries _DEP: the family's QGP nodes have none, and the
+        // dependency runs the other way, from a QUP engine to its GPI DMA. The
+        // family's record of that direction is real but not uniform. Three
+        // engines per table carry it, and the controller each names is its own
+        // wrapper's - the same pairing gauguin's dmas show:
+        //
+        //   lisa    I2C2 (slot 2)  _DEP {PEP0, QGP0, MMU0}
+        //           I2C5 (slot 5)  _DEP {PEP0, QGP0}
+        //           SP14 (slot 14) _DEP {PEP0, QGP1, MMU0}
+        //
+        //   a52sxq  I2C2 (slot 2)  _DEP {PEP0, QGP0, MMU0}
+        //           I2C4 (slot 4)  _DEP {PEP0, QGP0}
+        //           IC14 (slot 14) _DEP {PEP0, QGP1, MMU0}
+        //
+        // - and the third entry, MMU0, is on two of the three and not on the
+        // third in both tables, so the family's _DEP is not a uniform statement
+        // about this hardware and is not a complete one either: gauguin's dmas
+        // put all five live engines on a controller where the family records
+        // three.
+        //
+        // The UARTs take the same kind of entry and a shorter one. Across the 34
+        // UART nodes the corpus carries, 31 write _DEP {PEP0} alone - lisa's
+        // UARD and UAR8, a52sxq's, alioth's, and the rest of the family - three
+        // write {PEP0, MMU0}, the UAR4 of a52q, miatoll and surya and the only
+        // UART _DEP in the corpus with two entries, and none writes none at all.
+        // Six of the 31 write the package width as One rather than 0x01 -
+        // caymanslm's two and pipa's four - which is how a first pass here,
+        // reading only 0xNN widths, came to count six nodes as having no _DEP
+        // before Step 4.86 re-read them. GIO0 never appears in one. This file
+        // said it did - "both tables' UARD carries {PEP0, GIO0}" stood here until
+        // Step 4.86 counted the 34 - and what named GIO0 was the GpioInt in the
+        // UART's _CRS, which 30 of the 34 carry, lisa's UAR8 on pin 0x1F and
+        // lisa's UARD on 0x17, the four that do not being pipa's UARD, UR14,
+        // UR18 and UR20. A _CRS resource is not a dependency, and the
+        // correction is recorded rather than quietly made. GIO0 does carry _DEP
+        // entries elsewhere in the family - {PEP0, GIO0, SPI1} in three tables,
+        // {GIO0, I2C4} in three, {AFT1, GIO0, IC10} in one - so the reference
+        // would be writable here, this table having declared GIO0 as its twelfth
+        // device. It is not written because every UART shape the family writes
+        // begins with PEP0, which is absent.
+        //
+        // This table therefore writes no engine _DEP at all, for the same reason
+        // the IC nodes above do not: every family shape here needs PEP0, which
+        // is absent, and the entries the family writes beside it - GIO0's today,
+        // MMU0's since Step 4.72 - are the family's second and third entries
+        // rather than entries of their own. One alone would be a shape no engine
+        // in the corpus writes. That is a preference about the shape and is
+        // recorded as one, not a claim that the entry is un-writable.
+        // The consequence is worth stating rather than hiding - qci2c7280.inf
+        // and qcgpi7280.inf are both in the Windows driver set, so once those
+        // two bind, nothing in this table orders the GPI DMA ahead of the
+        // engines that DMA for it. Engine _DEPs wait on PEP0, and when it lands
+        // all four shapes can be written in the family's own form at once.
+        // Neither QGP node carries _STA either; both nodes in the board's tree
+        // are ok and a52sxq's QGP0 and QGP1 are literally byte-identical in the
+        // two tables of that family, so there is nothing about this block for a
+        // _STA to disagree with. What is deliberately not here is the SMMU:
+        // gauguin's controllers sit behind it (iommus = <&apps_smmu 0x56 0> and
+        // <&apps_smmu 0x4D6 0>, and phandle 0x17 is apps-smmu@15000000) and
+        // every family _DEP that names the GPI DMA names MMU0 beside it, but
+        // the family's QGP nodes do not describe it. What would is MMU0, and
+        // this table has it as of Step 4.72, two nodes below; the engine _DEPs
+        // that want a GPI DMA and an SMMU together can now resolve that half of
+        // the reference, and still wait on the half that is PEP0.
+        Device (QGP0)
+        {
+            Name (_HID, "QCOM0A88")  // _HID: Hardware ID
+            Alias (^PSUB, _SUB)
+            Name (_UID, Zero)  // _UID: Unique ID
+            Name (_CCA, Zero)  // _CCA: Cache Coherency Attribute
+            Method (_CRS, 0, NotSerialized)  // _CRS: Current Resource Settings
+            {
+                Name (RBUF, ResourceTemplate ()
+                {
+                    Memory32Fixed (ReadWrite,
+                        0x00804000,         // Address Base
+                        0x00050000,         // Address Length
+                        )
+                    Interrupt (ResourceConsumer, Level, ActiveHigh, Exclusive, ,, )
+                    {
+                        0x00000114,
+                    }
+                    Interrupt (ResourceConsumer, Level, ActiveHigh, Exclusive, ,, )
+                    {
+                        0x00000115,
+                    }
+                })
+                Return (RBUF) /* \_SB_.QGP0._CRS.RBUF */
+            }
+        }
+
+        Device (QGP1)
+        {
+            Name (_HID, "QCOM0A88")  // _HID: Hardware ID
+            Alias (^PSUB, _SUB)
+            Name (_UID, One)  // _UID: Unique ID
+            Name (_CCA, Zero)  // _CCA: Cache Coherency Attribute
+            Method (_CRS, 0, NotSerialized)  // _CRS: Current Resource Settings
+            {
+                Name (RBUF, ResourceTemplate ()
+                {
+                    Memory32Fixed (ReadWrite,
+                        0x00904000,         // Address Base
+                        0x00050000,         // Address Length
+                        )
+                    Interrupt (ResourceConsumer, Level, ActiveHigh, Exclusive, ,, )
+                    {
+                        0x000002A5,
+                    }
+                    Interrupt (ResourceConsumer, Level, ActiveHigh, Exclusive, ,, )
+                    {
+                        0x000002A6,
+                    }
+                })
+                Return (RBUF) /* \_SB_.QGP1._CRS.RBUF */
+            }
+        }
+
+        Device (URS0)
+        {
+            /*
+             * `_HID` was "QCOM0497" until Step 4.65 - bitra's, and bitra is
+             * family 04. The URS index is not fixed across tables the way UFS's
+             * is: it moves with the generator group, exactly as GIO0's and SPMI's
+             * do. Across the corpus, URS0 is 97 under families 04, 08 and 14 and
+             * 8B under 09, 0A, 0C, 1A and 25 - and gauguin is 0A, with both of
+             * that family's tables, lisa's and a52sxq's, reading "QCOM0A8B".
+             *
+             * Three angles agree, and none of them is bitra. lisa and a52sxq
+             * both carry Name (_HID, "QCOM0A8B") on a node that is otherwise
+             * identical to this one down to the _CID, the window and the _UID.
+             * UFS0 above is the opposite case and is why the two are worth
+             * separating: QCOM24A5 is 19 of 19 tables across every family, so
+             * its absence from a driver set is the set's gap, while QCOM0497 was
+             * this port's error. And where a table computes the id instead of
+             * naming it - Method (URSI), aliased to _HID on vayu, cepheus and
+             * caymanslm - the value it returns when its QUFN switch is zero is
+             * always that board's own family id, which for gauguin is 0A8B too.
+             */
+            Name (_HID, "QCOM0A8B")  // _HID: Hardware ID
+            Name (_CID, "PNP0CA1")  // _CID: Compatible ID
+            Alias (PSUB, _SUB)
+            Name (_UID, Zero)  // _UID: Unique ID
+            Name (_CCA, Zero)  // _CCA: Cache Coherency Attribute
+            Name (_CRS, ResourceTemplate ()  // _CRS: Current Resource Settings
+            {
+                Memory32Fixed (ReadWrite,
+                    0x0A600000,         // Address Base
+                    0x000FFFFF,         // Address Length
+                    )
+            })
+            Device (USB0)
+            {
+                Name (_ADR, Zero)  // _ADR: Address
+                Name (_S0W, 0x03)  // _S0W: S0 Device Wake State
+                Name (_PLD, Package (0x01)  // _PLD: Physical Location of Device
+                {
+                    ToPLD (
+                        PLD_Revision           = 0x2,
+                        PLD_IgnoreColor        = 0x1,
+                        PLD_Red                = 0x0,
+                        PLD_Green              = 0x0,
+                        PLD_Blue               = 0x0,
+                        PLD_Width              = 0x0,
+                        PLD_Height             = 0x0,
+                        PLD_UserVisible        = 0x1,
+                        PLD_Dock               = 0x0,
+                        PLD_Lid                = 0x0,
+                        PLD_Panel              = "BACK",
+                        PLD_VerticalPosition   = "CENTER",
+                        PLD_HorizontalPosition = "LEFT",
+                        PLD_Shape              = "VERTICALRECTANGLE",
+                        PLD_GroupOrientation   = 0x0,
+                        PLD_GroupToken         = 0x0,
+                        PLD_GroupPosition      = 0x0,
+                        PLD_Bay                = 0x0,
+                        PLD_Ejectable          = 0x0,
+                        PLD_EjectRequired      = 0x0,
+                        PLD_CabinetNumber      = 0x0,
+                        PLD_CardCageNumber     = 0x0,
+                        PLD_Reference          = 0x0,
+                        PLD_Rotation           = 0x0,
+                        PLD_Order              = 0x0,
+                        PLD_VerticalOffset     = 0xFFFF,
+                        PLD_HorizontalOffset   = 0xFFFF)
+
+                })
+                Name (_UPC, Package (0x04)  // _UPC: USB Port Capabilities
+                {
+                    One,
+                    0x09,
+                    Zero,
+                    Zero
+                })
+                Name (_CRS, ResourceTemplate ()  // _CRS: Current Resource Settings
+                {
+                    Interrupt (ResourceConsumer, Level, ActiveHigh, Shared, ,, )
+                    {
+                        0x000000A5,
+                    }
+                    Interrupt (ResourceConsumer, Level, ActiveHigh, SharedAndWake, ,, )
+                    {
+                        0x000000A2,
+                    }
+                    Interrupt (ResourceConsumer, Level, ActiveHigh, SharedAndWake, ,, )
+                    {
+                        0x000000A3,
+                    }
+                    // The three PHY wake lines, from the PDC. Order and trigger
+                    // types are bitra's: ss (PDC pin 17, level), then dm_hs
+                    // (pin 15, edge) and dp_hs (pin 14, edge). See the header.
+                    Interrupt (ResourceConsumer, Level, ActiveHigh, SharedAndWake, ,, )
+                    {
+                        0x00000211,
+                    }
+                    Interrupt (ResourceConsumer, Edge, ActiveHigh, SharedAndWake, ,, )
+                    {
+                        0x0000020F,
+                    }
+                    Interrupt (ResourceConsumer, Edge, ActiveHigh, SharedAndWake, ,, )
+                    {
+                        0x0000020E,
+                    }
+                })
+                Method (_STA, 0, NotSerialized)  // _STA: Status
+                {
+                    Return (0x0F)
+                }
+
+                // `DPM0` and `HSEN` stood here and are gone. Both were bitra's -
+                // lisa, a52sxq and the 7280 CRD have neither, and the CRD has no
+                // URS0 at all - both were definition-only in this table, and the
+                // shipped 7280 driver set references neither in any file: the
+                // only occurrences of `HSEN` in 770 extracted files are inside
+                // the Adreno shader compiler's own symbol,
+                // _ZNK4llvm18QGPUTargetLowering10LowerMULHSENS_..., and `DPM0`
+                // has none at all.
+                //
+                // `CCVL` went the same way in Step 4.68 and is the one of the
+                // three that took a measurement rather than a search. The UCSI
+                // driver really does ask for that name - the string
+                // QUCSAeiBCCVL in qcusbcucsi7280.sys - so the earlier reading
+                // kept it, on the reasoning that a name the driver looks up is a
+                // name the namespace owes. What settles it is that the driver
+                // asks for it on one device and this table answered on three: in
+                // lisa the string `CCVL` occurs exactly once in the whole table,
+                // inside `UCS0`, where it stood here on UCS0, on this USB0 and on
+                // UFN0. Two of the three resolved to the same `\_SB.CCST` and
+                // were copies nothing could reach - bitra's URS0 children each
+                // carried one, and Step 4.66 added the family-0A set on UCS0
+                // without taking them out. What the driver binds is UCS0, it is
+                // `ACPI\QCOM0AA4`, and it calls its accessors on itself.
+                //
+                // `PHYC` sits below in this same device and stays, which is why
+                // the rule is not "delete the duplicates". lisa binds `PHYC`
+                // three times - on this USB0, on UFN0, and on a `USB1` this table
+                // does not have - and a pass that removed names appearing more
+                // than once would have taken it out of the two nodes that are
+                // right. The test is which device the family binds a name on, not
+                // how often it appears, and for these five the family binds them
+                // on UCS0.
+                //
+                // Two sentences stood here until Step 4.66 and both were wrong.
+                // One said UCS0 "declares `_DEP` on PEP0, which this table also
+                // lacks", and the other drew the conclusion - "the node cannot be
+                // written correctly before the node it depends on exists". lisa's
+                // UCS0 does carry the `_DEP`, and this table's UCS0 deliberately
+                // does not, because a `_DEP` naming a node that is not in the
+                // namespace resolves to nothing: the declaration is advisory
+                // start ordering, and omitting it costs an ordering that has
+                // nothing to order against while including it costs a dangling
+                // name. See UCS0's own comment for the line to add when PEP0
+                // lands.
+                //
+                // `HSFL`, which HSEN used to read, is now read by nothing. It
+                // stays, with `PINA`, rather than being removed alongside the
+                // method: those two are the only members of the `_SB` value
+                // cluster around this device that lisa, a52sxq and the CRD all
+                // lack - every other member is in all three - and the cluster as
+                // a whole is definition-only here, which makes it inert.
+                // Removing half of it would leave a data block whose shape no
+                // longer says which table it was copied from.
+
+                Method (_DSM, 4, Serialized)  // _DSM: Device-Specific Method
+                {
+                    Switch (ToBuffer (Arg0))
+                    {
+                        Case (ToUUID ("ce2ee385-00e6-48cb-9f05-2edb927c4899") /* USB Controller */){                            Switch (ToInteger (Arg2))
+                            {
+                                Case (Zero)
+                                {
+                                    Switch (ToInteger (Arg1))
+                                    {
+                                        Case (Zero)
+                                        {
+                                            Return (Buffer (One)
+                                            {
+                                                 0x1D                                             // .
+                                            })
+                                            Break
+                                        }
+                                        Default
+                                        {
+                                            Return (Buffer (One)
+                                            {
+                                                 0x01                                             // .
+                                            })
+                                            Break
+                                        }
+
+                                    }
+
+                                    Return (Buffer (One)
+                                    {
+                                         0x00                                             // .
+                                    })
+                                    Break
+                                }
+                                Case (0x02)
+                                {
+                                    Return (Zero)
+                                    Break
+                                }
+                                Case (0x03)
+                                {
+                                    Return (Zero)
+                                    Break
+                                }
+                                Case (0x04)
+                                {
+                                    Return (0x02)
+                                    Break
+                                }
+                                Default
+                                {
+                                    Return (Buffer (One)
+                                    {
+                                         0x00                                             // .
+                                    })
+                                    Break
+                                }
+
+                            }
+                        }
+                        Default
+                        {
+                            Return (Buffer (One)
+                            {
+                                 0x00                                             // .
+                            })
+                            Break
+                        }
+
+                    }
+                }
+
+                Method (PHYC, 0, NotSerialized)
+                {
+                    Name (CFG0, Package (0x00){})
+                    Return (CFG0) /* \_SB_.URS0.USB0.PHYC.CFG0 */
+                }
+            }
+
+            Device (UFN0)
+            {
+                Name (_ADR, One)  // _ADR: Address
+                Name (_S0W, 0x03)  // _S0W: S0 Device Wake State
+                Name (_PLD, Package (0x01)  // _PLD: Physical Location of Device
+                {
+                    ToPLD (
+                        PLD_Revision           = 0x2,
+                        PLD_IgnoreColor        = 0x1,
+                        PLD_Red                = 0x0,
+                        PLD_Green              = 0x0,
+                        PLD_Blue               = 0x0,
+                        PLD_Width              = 0x0,
+                        PLD_Height             = 0x0,
+                        PLD_UserVisible        = 0x1,
+                        PLD_Dock               = 0x0,
+                        PLD_Lid                = 0x0,
+                        PLD_Panel              = "BACK",
+                        PLD_VerticalPosition   = "CENTER",
+                        PLD_HorizontalPosition = "LEFT",
+                        PLD_Shape              = "VERTICALRECTANGLE",
+                        PLD_GroupOrientation   = 0x0,
+                        PLD_GroupToken         = 0x0,
+                        PLD_GroupPosition      = 0x0,
+                        PLD_Bay                = 0x0,
+                        PLD_Ejectable          = 0x0,
+                        PLD_EjectRequired      = 0x0,
+                        PLD_CabinetNumber      = 0x0,
+                        PLD_CardCageNumber     = 0x0,
+                        PLD_Reference          = 0x0,
+                        PLD_Rotation           = 0x0,
+                        PLD_Order              = 0x0,
+                        PLD_VerticalOffset     = 0xFFFF,
+                        PLD_HorizontalOffset   = 0xFFFF)
+
+                })
+                Name (_UPC, Package (0x04)  // _UPC: USB Port Capabilities
+                {
+                    One,
+                    0x09,
+                    Zero,
+                    Zero
+                })
+                Name (_CRS, ResourceTemplate ()  // _CRS: Current Resource Settings
+                {
+                    Interrupt (ResourceConsumer, Level, ActiveHigh, Shared, ,, )
+                    {
+                        0x000000A5,
+                    }
+                    Interrupt (ResourceConsumer, Level, ActiveHigh, SharedAndWake, ,, )
+                    {
+                        0x000000A3,
+                    }
+                })
+                // `CCVL` stood here and is gone - see USB0's comment above for
+                // the measurement. lisa's UFN0 has no `CCVL` either, and the one
+                // this device carried was a third copy of a name the family binds
+                // once, on UCS0.
+
+                Method (_DSM, 4, Serialized)  // _DSM: Device-Specific Method
+                {
+                    Switch (ToBuffer (Arg0))
+                    {
+                        Case (ToUUID ("fe56cfeb-49d5-4378-a8a2-2978dbe54ad2") /* Unknown UUID */){                            Switch (ToInteger (Arg2))
+                            {
+                                Case (Zero)
+                                {
+                                    Switch (ToInteger (Arg1))
+                                    {
+                                        Case (Zero)
+                                        {
+                                            Return (Buffer (One)
+                                            {
+                                                 0x03                                             // .
+                                            })
+                                            Break
+                                        }
+                                        Default
+                                        {
+                                            Return (Buffer (One)
+                                            {
+                                                 0x01                                             // .
+                                            })
+                                            Break
+                                        }
+
+                                    }
+
+                                    Return (Buffer (One)
+                                    {
+                                         0x00                                             // .
+                                    })
+                                    Break
+                                }
+                                Case (One)
+                                {
+                                    Return (0x20)
+                                    Break
+                                }
+                                Default
+                                {
+                                    Return (Buffer (One)
+                                    {
+                                         0x00                                             // .
+                                    })
+                                    Break
+                                }
+
+                            }
+                        }
+                        Case (ToUUID ("18de299f-9476-4fc9-b43b-8aeb713ed751") /* Unknown UUID */){                            Switch (ToInteger (Arg2))
+                            {
+                                Case (Zero)
+                                {
+                                    Switch (ToInteger (Arg1))
+                                    {
+                                        Case (Zero)
+                                        {
+                                            Return (Buffer (One)
+                                            {
+                                                 0x03                                             // .
+                                            })
+                                            Break
+                                        }
+                                        Default
+                                        {
+                                            Return (Buffer (One)
+                                            {
+                                                 0x01                                             // .
+                                            })
+                                            Break
+                                        }
+
+                                    }
+
+                                    Return (Buffer (One)
+                                    {
+                                         0x00                                             // .
+                                    })
+                                    Break
+                                }
+                                Case (One)
+                                {
+                                    Return (0x39)
+                                    Break
+                                }
+                                Default
+                                {
+                                    Return (Buffer (One)
+                                    {
+                                         0x00                                             // .
+                                    })
+                                    Break
+                                }
+
+                            }
+                        }
+                        Default
+                        {
+                            Return (Buffer (One)
+                            {
+                                 0x00                                             // .
+                            })
+                            Break
+                        }
+
+                    }
+                }
+
+                Method (PHYC, 0, NotSerialized)
+                {
+                    Name (CFG0, Package (0x00){})
+                    Return (CFG0) /* \_SB_.URS0.UFN0.PHYC.CFG0 */
+                }
+            }
+        }
+
+        /*
+         * The Type-C controller. Of the nodes this table still owes P3 it is
+         * the shortest to justify, and the best-attested: the node is 1,272
+         * bytes and 46 lines in lisa, in a52sxq and in the SC7280 CRD's DSDT,
+         * and the three are byte-identical to each other - zero differing
+         * lines in either comparison. Two of them are iasl output for EDK2;
+         * the third is creator `MSFT`, taken from a shipped Qualcomm UFS
+         * firmware capsule (qcfirmware7280_UFS/qcfirmware7280v_UFS03600000.cap,
+         * offset 0xb683a5, header `QCOMM `/`SDM7280 `, 85,861 bytes). The two
+         * EDK2 tables are family 0A, the family that gave this file GIO0's
+         * QCOM0A0C and URS0's QCOM0A8B, and the node is one id, one resource
+         * and five accessors.
+         *
+         * `_HID` is "QCOM0AA4" and the family byte is what settles it, the
+         * same way it settled GIO0's, the PMIC-GPIO node below. The suffix is not
+         * fixed across blocks and generations - it is 17 for the PEP, 0C for
+         * the TLMM, 8B for the URS controller and A4 for this one, and A4 is
+         * not even constant for this block: the Atoll and SM7325 tables spell
+         * it A9 (a52q's and miatoll's QCOM08A9, surya's QCOM14A9) while
+         * SDM7350 uses A4 (renoir's and Cedros_IDP's QCOM09A4). gauguin has
+         * no SDM7350 to follow and no Atoll to follow; it has lisa and
+         * a52sxq. And the id is claimed, which is the check the header above
+         * asks for: `tools/acpi-hid-census.py --drivers DIR --bind QCOM0AA4`
+         * reports qcusbcucsi7280/qcusbcucsi7280.inf, whose INF binds
+         * `ACPI\QCOM0AA4` to `qcusbcucsi7280.sys` and carries the
+         * `HKR,Resources,"BinaryPath",%REG_SZ%, %13%\UCS0.bin` line that
+         * hands the driver its own firmware blob.
+         *
+         * `_DEP` is deliberately absent, and it is the one place this node
+         * does not copy lisa. lisa's reads `Package (One) { \_SB.PEP0 }`, and
+         * PEP0 is the power engine: 2,501 lines and 96,100 bytes in lisa, and
+         * the same size in a52sxq's with exactly two lines differing - both in
+         * `_SUB`, which returns `"CRD07280"` on lisa and `"QRD07280"` on
+         * a52sxq from a branch keyed on `\_SB.PSUB`. That is generator output
+         * with a reference-platform string in it and not board data, and it is
+         * the sort of thing a port has to notice: this table's own PSUB is
+         * `"MTP07225"`, so lisa's `_SUB` verbatim would fall off the end of
+         * both branches and answer zero. PEP0 is dominated by one method of
+         * its own, and the domination is measurable rather than rhetorical:
+         * `THTZ` is a dispatch on (zone, trip point) and is 1,826 of lisa's
+         * 2,501 lines, and the node's total is a linear function of the number
+         * of zones that dispatch covers - 32 cases in lisa, 24 in venus and
+         * vili, and a shipped zero-zone PEP0 of 629 lines in
+         * Silicon-Qualcomm-Kailua-DSDT_MTP whose whole `THTZ` is
+         * `Return (0xFFFF)`. Nothing in any of the 20 tables that declare
+         * `THTZ` calls it, so it is an interface for the OS side and not
+         * internal logic. Its `_DEP` names `\_SB.IPCC`, and its skeleton also
+         * reaches `\_SB.ABD.ROP1` and `\_SB.AGR0`; none of the three is in this
+         * table. No part of it is in this table. Naming it anyway would put
+         * a reference into the namespace that cannot resolve, and an `_DEP`
+         * that evaluates to AE_NOT_FOUND is worth exactly what no `_DEP` is
+         * worth while costing more to read: a later step would meet it as a
+         * dangling name rather than as a node known to be missing. `_DEP` is
+         * advisory start ordering and there is nothing here to order against.
+         * The line to add when PEP0 lands is
+         * `Name (_DEP, Package (One) { \_SB.PEP0 })`, and it belongs
+         * alongside the matching one on URS0 - lisa's URS0 depends on both
+         * PEP0 and UCS0, and this file's URS0 carries no `_DEP` either.
+         *
+         * `_CRS` is one `GpioIo` on GIO0 pin 0x23. That makes it the first
+         * GpioIo this table has placed on GIO0 - everything on that node so
+         * far is Interrupt-only - which is precisely the condition OFNI's
+         * header names when it says 156 is inert only while nothing above 155
+         * is addressed. 0x23 is 35, so the value does not move, and the
+         * reason is not that 35 is small: the class extension validates a
+         * GpioIo pin against OFNI, and 35 is inside 156 on any reading of
+         * that value. The condition is now exercised rather than hypothetical.
+         *
+         * The five methods are one line each and all five return Names that
+         * already sit in this scope above - MUXC, CCST, DPPN, HPDS and HIRQ.
+         * They are how qcusbcucsi7280.sys reads the mux state, the CC state,
+         * the DP pin assignment and the hotplug lines: for those the driver
+         * does not touch a register, it calls into the namespace, and the
+         * namespace is AML that something on the board side is expected to
+         * keep current. lisa's node has no `_STA` and neither does this one,
+         * so the node is present whenever the table is.
+         *
+         * "Something on the board side" is `IC11` in the SC7280 CRD, and it is
+         * worth naming because it is why the five are constants here rather
+         * than a defect in this node. IC11's interrupt handlers Q21 and Q22
+         * read the PMIC's HPL0/HPH0 and write all five of these `_SB` values
+         * out of them, then `Notify (\_SB.UCS0, 0xA0)`. This table has no
+         * IC11, so nothing writes the five and the node answers five
+         * constants, which is what the header above says. The id for that
+         * missing engine is not a guess - `QCOM0A10`, claimed by
+         * qci2c7280.inf, carried by exactly two of the 66 corpus tables, lisa
+         * and a52sxq, the same pair that settled URS0's and this node's own
+         * ids. Which engine it is on this board is still open, and gauguin's
+         * tree has five I2C serial engines across two geniqup wrappers to
+         * choose from.
+         *
+         * The far end is missing as well, and it is the end that matters more
+         * than this one: this table has no `USBC000` device. In the CRD and
+         * four other corpus tables that is `UBTC`, `_HID EisaId("USBC000")`
+         * with `_CID PNP0CA0`, an MMIO mailbox, a child connector, and a `_DSM`
+         * under the UUID `6f8398c2-7ca4-11e4-ad36-631042b5008f` - the same
+         * string in every table that carries it. That is the ACPI UCSI device,
+         * it is bound by Windows rather than by anything in the 7280 driver
+         * set, and its `_DEP` names this node: `Package (0x03) { \_SB.IC11,
+         * \_SB.GIO0, \_SB.UCS0 }`. So PEP0's field on `\_SB.ABD.ROP1`, the
+         * `_DEP` this node cannot yet write, and the I2C addresses PML0 would
+         * need all wait on one node, and docs/08's Step 4.68 has the
+         * measurements for each of the three.
+         */
+        Device (UCS0)
+        {
+            Name (_HID, "QCOM0AA4")  // _HID: Hardware ID
+            Method (_CRS, 0, NotSerialized)  // _CRS: Current Resource Settings
+            {
+                Name (RBUF, ResourceTemplate ()
+                {
+                    GpioIo (Exclusive, PullDown, 0x0000, 0x0000, IoRestrictionNone,
+                        "\\_SB.GIO0", 0x00, ResourceConsumer, ,
+                        )
+                        {   // Pin list
+                            0x0023
+                        }
+                })
+                Return (RBUF) /* \_SB_.UCS0._CRS.RBUF */
+            }
+
+            Method (MUXV, 0, NotSerialized)
+            {
+                Return (\_SB.MUXC)
+            }
+
+            Method (CCVL, 0, NotSerialized)
+            {
+                Return (\_SB.CCST)
+            }
+
+            Method (DPVL, 0, NotSerialized)
+            {
+                Return (\_SB.DPPN)
+            }
+
+            Method (HPDM, 0, NotSerialized)
+            {
+                Return (\_SB.HPDS)
+            }
+
+            Method (HPDI, 0, NotSerialized)
+            {
+                Return (\_SB.HIRQ)
+            }
         }
     }
 }

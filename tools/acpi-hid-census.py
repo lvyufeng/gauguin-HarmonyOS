@@ -484,11 +484,24 @@ def bind_lookup(args, hids):
 
 
 def disassemble(aml, cache):
-    """(dsl_path or None) - iasl -d, cached, because 36 trees take ~90 s."""
+    """(dsl_path or None) - iasl -d, cached, because 36 trees take ~90 s.
+
+    The cache is a function of the tree, not of /tmp's history: a `.dsl` older
+    than its `.aml` is ignored and rebuilt. The first form of this keyed on the
+    path alone, and the one table that changes in this tree is our own - so the
+    corpus silently kept a disassembly of `gauguin/DSDT.aml` from an earlier
+    revision, and `tools/acpi-order-votes.py` scored the file against a copy of
+    itself that no longer matched the file on disk. Measured at Step 4.88: 65 of
+    the 66 cached disassemblies were current and that one was 4,830 bytes of AML
+    behind. A stale cache is worse than no cache here, because it looks like a
+    reading: the numbers a caller prints are reproducible from /tmp and not from
+    the repository.
+    """
     rel = os.path.relpath(aml, DEFAULT_TREE)
     name = rel.replace("/", "-").replace(".aml", "")
     dsl = os.path.join(cache, name + ".dsl")
-    if not os.path.exists(dsl):
+    if (not os.path.exists(dsl)
+            or os.path.getmtime(dsl) < os.path.getmtime(aml)):
         subprocess.run(["iasl", "-d", "-p", os.path.join(cache, name), aml],
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     return dsl if os.path.exists(dsl) else None

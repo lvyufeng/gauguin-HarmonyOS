@@ -16536,3 +16536,353 @@ and `PML0`, whose `_DEP` and the two `I2cSerialBusV2` entries now name `\_SB.IC1
   reading. The payload in `boot` is still the **4.74** set and its panel reading
   is **still owed** under 先读屏，再刷下一次. Step 4.87 changes the payload in
   `work/out/p2-4.87` and not the one on the device.
+
+## Step 4.88 — the order the corpus states rather than the order this file grew, and a voter that was this table
+
+### What this step was
+
+Wrote no node, added no id, moved no resource. Reordered the 35 top-level device
+declarations of `tools/acpi/gauguin.asl` into the order the corpus declares them,
+and rewrote the three comment preambles that had recorded the price of the old
+order — `ABD`'s, `BAM1`'s and `RPEN`'s — because that price is now paid.
+
+The step also found two faults in the apparatus that had been pricing it, and one
+of them is why the price was, in part, an artifact: the corpus carries a
+disassembly of *this* table and was counting it as one of the table's own voters;
+and `tools/acpi-hid-census.py` cached disassemblies by path, so that copy was
+never rebuilt once this file started changing. Both are fixed, and both are
+recorded below, because numbers earlier steps published were measured through
+them.
+
+### The two orders
+
+The file declares 38 devices, of which 35 are top-level and three are nested:
+`DEV0` inside `UFS0`, and `USB0` and `UFN0` inside `URS0`. Only the 35 are units
+of this order — a nested device travels with its parent and is never scored
+separately.
+
+```
+4.87  UFS0 UCS0 URS0 SPMI ABD PMIC PML0 PM01 PMAP PRTC BAM1 GIO0 I2C8 I2C9
+      UAR2 IC11 RPEN PILC TFTP IPC0 GLNK QGP0 QGP1 MMU0 MMU1 SCM0 IPCC
+      CPU0 … CPU7
+
+4.88  UFS0 ABD PMIC PML0 PM01 PMAP PRTC BAM1 I2C8 I2C9 UAR2 IC11 RPEN PILC
+      TFTP MMU0 MMU1 SCM0 SPMI GIO0 IPCC IPC0 GLNK CPU0 … CPU7 QGP0 QGP1
+      URS0 UCS0
+```
+
+The new order is the corpus's own declaration order — read off the 21 tables that
+carry both `ABD` and `PMIC` — restricted to the nodes this file actually has, so
+the corpus's absent members (`PMBM`, `BCL1`, `PMGK`, `PEP0` between `PRTC` and
+`BAM1`, among others) leave no gap. The four QUP engines stay where they were
+relative to each other, which the fixed-point measurement below shows is a choice
+and not a result.
+
+### The measurement
+
+`tools/acpi-order-votes.py`, scored against the 57 corpus tables that are not
+this one:
+
+| order | tables | pairs | votes | broken | score | ceiling |
+|---|---|---|---|---|---|---|
+| 4.87 | 57 | 558 | 9,840 | 112 of 1,782 | 7,874 | 9,768 |
+| 4.88 | 57 | 558 | 9,840 | **0 of 0** | **9,768** | 9,768 |
+
+The 4.87 order contradicts 112 relations over 32 nodes: `MMU0` and `MMU1` 8
+each; the three QUP engines, `RPEN`, `PILC`, `TFTP`, `SCM0` and each of the
+eight CPUs 4 each; `ABD`, `PMIC`, `PM01`, `PMAP`, `PRTC`, `BAM1` and `PML0` 3
+each; `SPMI`, `GIO0`, `IPC0`, `GLNK`, `QGP0`, `QGP1` and `IPCC` 2 each; and
+`URS0` 1. The 4.88 order contradicts none, and its score is the ceiling exactly
+— **every vote any order could win, it wins.**
+
+The relocation is minimal in the sense the tool states, the longest common
+subsequence against the old order:
+
+```
+relocations: 8 of 35 units; kept 27
+  SPMI  from  3 to 18      QGP0  from 21 to 31
+  GIO0  from 11 to 19      QGP1  from 22 to 32
+  IPC0  from 19 to 21      URS0  from  2 to 33
+  GLNK  from 20 to 22      UCS0  from  1 to 34
+```
+
+with `UFS0` at index 0 in both. `MMU0`, `MMU1`, `SCM0` and `IPCC` change index
+without being relocated — they are kept, and the eight moves carry them — which
+is the distinction the tool reports and the file's `ABD` comment repeats: *eight*
+units moved.
+
+`ABD`'s old slot is the clearest of the eight. It stood between `SPMI` and
+`PMIC` from 4.78 to 4.87 under the reading "immediately after its earlier
+neighbour, immediately before its later one", and that reading was made against a
+`SPMI` slot that was itself wrong: the corpus puts `SPMI` after `SCM0`, in 21 of
+21 tables. With `SPMI` moved, `ABD` follows `UFS0` — the slot the 3 tables with
+no `SDC2` use, since this file has no `SDC` node at all — and precedes `PMIC`,
+where all 21 put it. Both readings agree about `PMIC`; only one of them is
+measurable.
+
+### What the ceiling cannot buy
+
+`--prove` prints the ceiling as the sum, over every pair, of the larger of the
+pair's two counts, and then prints what that bound excludes: **72 votes in 60
+pairs** where a single table dissents from a majority. The count decomposes and
+agrees with itself — 48 of the 60 pairs have one dissenting table and 12 have
+two, and 48 × 1 + 12 × 2 = 72. 9,840 − 72 = 9,768, which is the ceiling and the
+score. So the reorder is not merely good: it is optimal, and the residue is
+structural rather than a defect this order could repair.
+
+The dissenters are named per pair and are few: `Platforms-Xiaomi-vili-DSDT.dsl`
+alone in most of them (including all of `GIO0`'s and `IPCC`'s), `vili` with
+`Platforms-OnePlus-kebab-DSDT.dsl` on the `SPMI` pairs, and then nine pairs where
+the two OnePlus and ZTE boards act alone — `Platforms-OnePlus-aston-DSDT.dsl` by
+itself on `I2C9` against each of `CPU0` through `CPU3` and against `UFS0`, and
+`aston` with `Platforms-ZTE-nx729j-DSDT.dsl` on `CPU0` through `CPU3` against
+`UFS0`. Those nine are the only pairs of the 60 that `vili` does not join, which
+is a fact about which tables declare which nodes rather than about the nodes
+themselves. Every one is a single-table abstention from a pair the rest of the
+corpus answers, the same shape 4.72 recorded when the corpus was unanimous and
+the board was the lone dissenter — read from the other side.
+
+This also supersedes the denominator 4.84 published. 4.84 counted **128** broken
+relations for the file as it then stood; the same measurement on the 4.87 order
+reads **112**, with the self-copy out (116 with it in, and the four extra are the
+copy's own exclusive pairs — see the cache section below). The difference is
+three steps of written and renamed nodes, and neither number is this step's
+doing: what 4.88 does is take the 112 to 0.
+
+### The voter that was this table
+
+The corpus is Mu-Silicium's own `Silicium-ACPI` submodule, and
+`tools/sync-uefi-platform.sh` installs this table into it — so
+`Platforms/Xiaomi/gauguin/DSDT.aml` *is* `tools/acpi/gauguin.asl`, compiled. The
+scoring loop took every table in the tree that declares two of this file's
+nodes, and that one qualifies. It was therefore one of the 58 voters, and it
+voted for whatever order the file already had, which is not a measurement.
+
+The tool now leaves out a voter whose name is the table being scored, prints
+which one it dropped, and offers `--keep-self` for the other framing rather than
+choosing silently — a name-based exclusion is weaker than the content identity
+the rest of this repository insists on, so both readings are available. They
+agree on the verdict here:
+
+| framing | tables | pairs | votes | broken | score | ceiling |
+|---|---|---|---|---|---|---|
+| copy out (default) | 57 | 558 | 9,840 | 0 | 9,768 | 9,768 |
+| copy in (`--keep-self`) | 58 | 595 | 10,440 | 0 | 10,368 | 10,368 |
+
+and differ by the 37 pairs and 600 votes the copy contributes.
+
+### The cache that was keyed by the wrong thing
+
+`tools/acpi-hid-census.py`'s `disassemble()` cached an `iasl -d` output at
+`/tmp/acpi-hid-census/<flattened path>.dsl` and rebuilt it only when the file was
+*missing*. That is right for the corpus's other 35 trees, which do not change,
+and wrong for the one whose `.aml` this repository rewrites every step: its cache
+entry was built once and never looked at again.
+
+Measured when the fault was found: of 66 cached disassemblies, **65 were current
+and one was not**, and the one was this table's — built from a **1,520-byte**
+AML, 4,830 bytes behind the 6,350-byte file it was a copy of, which is the table
+as it stood many steps earlier.
+
+The obvious guess about what that copy costs is wrong, and this step rebuilt it
+rather than reasoning about it. A tree whose `gauguin/DSDT.aml` is that
+1,520-byte file (`/tmp/stalecorpus`, scored with `--keep-self` so the copy is a
+voter) reads:
+
+| framing | tables | pairs | votes | broken | score | ceiling |
+|---|---|---|---|---|---|---|
+| **stale** copy in | 58 | 558 | 9,890 | **0** | 9,805 | 9,805 |
+| current copy out (default) | 57 | 558 | 9,840 | 0 | 9,768 | 9,768 |
+
+So the stale copy **changes no verdict**: broken stays 0 and the score still
+equals the ceiling, in both readings. It cannot be caught by the pair count
+either, which is the same 558 on both lines — because it contributes **no new
+pair at all**. Its node sequence is `UFS0 URS0 CPU0 … CPU7`, the P2-era skeleton,
+which declares no QUP engine, and every pair ten such nodes can make is already
+declared by other tables. All it does is add votes to pairs that already existed,
+and those raise the score and the ceiling together: the numbers move, 9,768 →
+9,805, and the conclusion does not. That is why the fault survived several steps
+unnoticed — it is invisible from the verdict and visible only from the totals,
+and the totals are the number a step quotes least often.
+
+The fix is a staleness test rather than a flag: a `.dsl` older than its `.aml` is
+rebuilt. The cache is now current and every number in this step is measured on
+it; the 9,805 above is deliberately a re-measurement and not a memory, because
+the stale tree is reproducible on demand.
+
+One claim this step made while the fault was fresh is corrected here, because the
+same arithmetic was read the wrong way round. The number that looks like the
+stale copy's damage — **116 broken where the corpus alone says 112**, on the 4.87
+order — belongs to the *current* copy, not the stale one, and its four relations
+are real: `SPMI`, `GIO0`, `URS0` and `UCS0`, each of them after `UAR2`, voted the
+other way by a copy that holds the 4.88 order, at weight 1 apiece. Those four are
+the sharp end of the fact the fixed point below states from the other side: of
+the 595 pairs this table's 35 units can make, **37 are declared by no other table
+in the corpus** — 34 of them `UAR2`'s, three `I2C8`'s — and on those the only
+voter in the corpus is this file.
+
+### The fixed point: four slots the corpus does not decide
+
+`--fixed-point` asks a different question from optimality: for each node, is its
+slot one of the ones that maximises the score? 31 of the 35 answer yes. Four do
+not, and they are the four QUP engines:
+
+```
+free      I2C8   at  8: ties with [8, 9, 10, 11]
+free      I2C9   at  9: ties with [8, 9, 10]
+free      UAR2   at 10: ties with [0 … 34]     — every slot
+free      IC11   at 11: ties with [10, 11]
+```
+
+`UAR2` is the extreme case and worth stating plainly: **the corpus contains no
+pair that constrains it at all**, so the vote says nothing about where it goes
+and the file's slot is one of 35 equal choices. The other three are constrained
+only to the four-slot window the engines occupy. So the region `I2C8 I2C9 UAR2
+IC11` is a window and not an order, and the order inside it is this file's
+decision — which is the third thing in three steps to be measured rather than
+derived, after 4.87's naming correction and 4.86's six-SE wrapper.
+
+That is a fact about the corpus and not a defect in it: these are four engines of
+one wrapper, and a table that declares one of them has no reason to say which of
+its siblings comes first. It is now a measured fact as well. Of the 595 pairs
+this table's own 35 units can make, **37 are declared by this table and by no
+other table in the corpus** — 34 of them `UAR2`'s, the remaining three `I2C8`'s
+against `I2C9`, `IC11` and `IPCC`. With the copy left out, as the default framing
+does, those 37 pairs leave the corpus entirely: `UAR2` goes from 34 pairs to
+**0**, which is why it ties with every slot, while `I2C8` keeps 30 of its 34,
+`I2C9`, `IC11` and `IPCC` keep 32 each and `QGP0` 33. The corpus's silence about
+the QUP engines is not diffuse — it is these 37 pairs, and on them this file is
+the only witness there is.
+
+### The text is moved, not edited
+
+The step's claim is that the file was *reordered*, and the claim was checked
+rather than asserted, because a reorder and a rewrite produce the same file size
+class and look alike in a diff:
+
+- **the multiset of non-comment lines is identical** between the 4.87 and 4.88
+  files: not one line of ASL differs, only its position. The line-multiset
+  difference between the two versions is 28 comment lines out and 37 in;
+- the diff's removed regions total **1,284 lines, 834 of them non-comment**, and
+  its inserted regions total **1,284 lines, 834 non-comment** — balanced, so no
+  text was lost or invented;
+- the only same-position hunks are **six**, and all six are comment-only
+  (`noncomment 0`): `ABD`'s 7 lines became 13, `BAM1`'s four hunks 3→3, 3→3,
+  6→7, 2→2, and `RPEN`'s three 3→3, 1→1, 3→5.
+
+This is 4.87's own lesson applied before the fact rather than after: a
+search-and-replace over a table with several related parts is not several
+independent string operations, and the check that catches a botched one is
+enumerating the parts afterwards, not reading the diff. Here the enumeration is
+the line multiset, and it is exact.
+
+### The body
+
+No device was written, so the body of this step is the order itself — the
+declaration sequence, with the eight relocated units marked:
+
+```asl
+Device (UFS0)   { Device (DEV0) {...} ... }
+Device (ABD)                                 // moved: was after SPMI
+Device (PMIC)
+Device (PML0)
+Device (PM01)
+Device (PMAP)
+Device (PRTC)
+Device (BAM1)
+Device (I2C8)   Device (I2C9)   Device (UAR2)   Device (IC11)
+Device (RPEN)   Device (PILC)   Device (TFTP)
+Device (MMU0)   Device (MMU1)   Device (SCM0)
+Device (SPMI)                                // moved: was 4th of 35
+Device (GIO0)                                // moved: was 12th
+Device (IPCC)
+Device (IPC0)                                // moved: was 20th
+Device (GLNK)                                // moved: was 21st
+Device (CPU0) ... Device (CPU7)
+Device (QGP0)   Device (QGP1)                // moved: were 22nd and 23rd
+Device (URS0)   { Device (USB0) {...} Device (UFN0) {...} }   // moved: was 3rd
+Device (UCS0)                                // moved: was 2nd
+```
+
+and the three comment preambles, each rewritten only where it carried a *rule*
+and left alone where it is historic narrative:
+
+- `ABD`'s now reads that the node follows `UFS0` in the corpus's own order, and
+  keeps the sentence about the 4.78–4.87 slot as the record of a reading that was
+  taken against a wrong `SPMI` slot;
+- `BAM1`'s recorded a debt — it cost 21 votes against `SPMI` because `SPMI` was
+  written at declaration 6 while `ABD`, `PMIC` and `PM01` followed it, so "after
+  `PM01`" and "before `SPMI`" could not both hold. Its own text named the cure as
+  "the first thing a later step that reorders this file should do". The debt is
+  marked paid, `SPMI`'s move is credited, and the declaration index it sat at is
+  recorded as 13 before and 8 after;
+- `RPEN`'s recorded six relations no slot could satisfy, charged as six of 4.84's
+  128. It keeps the 128 as the number 4.84 published and adds that all six are
+  satisfied now that the four bus nodes, `GIO0` and `SPMI` stand where the corpus
+  puts them.
+
+### The ladder
+
+- `tools/acpi/gauguin.asl` is **4,446 lines**, 247,241 bytes,
+  md5 `488d9d9bdf5b99cfe55f88a4071dc7f7` (from 4,437 lines and 246,445 bytes at
+  `eb0c8b5dce0c7ddcb3ca9a21304b0b6b` — +9 lines, +796 bytes, both accounted for
+  by the six comment hunks), matching
+  `uefi/Silicium-ACPI/Platforms/Xiaomi/gauguin/gauguin.asl` and
+  `work/uefi/Mu-Silicium/…/gauguin.asl` — the full three-stage chain run, all
+  three copies the same.
+- `iasl -p /tmp/chk488 -tc gauguin.asl`: AML **6,350 bytes, 266 opcodes, 409
+  named objects**, checksum `0xcc`, length `0x18ce`, byte sum `0x00`,
+  sha256 `3f8d74726eff718f6084e16e7bf4fd0331be54fa6275e8e38acddbd72cd6ebd5`.
+  **Size, opcode count, named-object count and checksum are all 4.87's exactly**,
+  and that is a derivation and not a coincidence: a reorder of whole declarations
+  permutes the AML's bytes and leaves its multiset unchanged, so nothing that
+  depends on the multiset — length, checksum, the three counts — can move. The
+  control is explicit: the 4.87 source compiled now is 6,350 bytes with the same
+  byte multiset as this one, first differing at offset 314. Only the sha256
+  changes, `b4f900f9…` → `3f8d7472…`.
+- The **ids move with their declarations**, and that is the one measurement that
+  separates a reorder from a rename: `QCOM0A16` now sits at 1695 where it was at
+  3099, the three `QCOM0A10` at 1455, 1575 and 1815 where they were at 2859, 2979
+  and 3219, `QCOM06DC` at 2007 from 3411, `QCOM0A0D` at 4790 from 3464 and
+  `QCOM0A84` at 4833 from 3507, with `QCOM0A0A` at 1367, `QCOM0A0B` at 3088 and
+  `QCOM0A0C` at 3238. 4.87's rename left every offset where it was, because the
+  old and new names are both four bytes; nothing can leave them where they are
+  across a change of declaration order, which is why this bullet reads
+  differently from every step since 4.69.
+- Build: `PROGRESS - Success` followed by the known benign
+  `ValueError: DTB image must not be empty.` from Mu-Silicium's own `.img`.
+- `--dump-fvmain`: 7,356,416 bytes (`0x704000`),
+  sha256 `c62b4df08bbbc7b04917ed06d0d9574c07e493bde341692d0d6a3c4e8f8b1045`,
+  byte-identical to `Build/…/FV/FVMAIN.Fv`. `EFI_FV_TAKEN_SIZE = 0x703fe8`, the
+  third step unmoved — the volume's *layout* does not care where inside a file
+  the bytes were permuted, and the file did not grow. `FVMAIN_COMPACT`'s
+  `EFI_FV_TAKEN_SIZE = 0x10afe0`, down `0x18` from 4.87's `0x10aff8`: that is the
+  compressed size of a differently-ordered DSDT, and it is the only number in the
+  ladder that moves for a reason other than the comment text.
+- The ACPI readback: 6 tables, `DSDT` at `0x0054d4c8` — **the same offset for an
+  eighteenth step** — 6,350 bytes with a valid checksum and **byte-identical to
+  the direct compile** (`3f8d7472…`), extracted at that offset from the built
+  payload. `SSDT` (61 bytes), `APIC` (724) and `GTDT` (156) valid; `FACP` (276)
+  and `FACS` (64) do not checksum, as expected before `AcpiTableDxe` runs and
+  only those two.
+- The three payloads are `45469770…42485ec8` (silicon/gzip, 1,142,784 bytes),
+  `4a2301f8…1b9fa240` (stock/gzip, 1,150,976 bytes) and `d4a1c572…6df85bff`
+  (stock/none, 3,248,128 bytes) — **all three matching GenFv's map at 123 offsets
+  and GUIDs, zero mismatches**, 123 FFS files and `0x703def` bytes of file
+  headers and data. They are archived in `work/out/p2-4.88`.
+- `work/out/p2-variants` **still holds the 4.74 set** — `90b21643…`, `e693e1a0…`,
+  `26919861…`. **Twelfth** step running.
+- Device count **38** `Device (` declarations — 35 top-level and 3 nested —
+  unchanged, and the census is **51 `_HID`/`_CID` declarations, 37 distinct**,
+  also unchanged. `QCOM0A10` is still claimed by `qci2c7280.inf` and carried by
+  `I2C8`, `I2C9` and `IC11`; `QCOM0A16` by `qcuart7280.inf` on `UAR2`. The same
+  two remain unclaimed as every step since 4.70: `QCOM0A8B` (`URS0`) and
+  `QCOM24A5` (`UFS0`). Nothing in this step is about ids, which is why nothing in
+  the census moves.
+- The device is absent from this host throughout, so nothing here is a hardware
+  reading. The payload in `boot` is still the **4.74** set and its panel reading
+  is **still owed** under 先读屏，再刷下一次. Step 4.88 changes the payload in
+  `work/out/p2-4.88` and not the one on the device, and it changes no node, so
+  flashing it instead of 4.74 would test nothing this step claims: the payload
+  ladder is here to prove the reorder reached the artifact, not to be booted for
+  its own sake.
