@@ -196,6 +196,14 @@ def build(image):
     Apriori array out of the volume, and `fv-inventory.py` owns the walk that gets
     inside the LZMA section. Both have documented histories of being wrong in ways
     that still produced plausible output, so there is exactly one copy of each.
+
+    `ctx` carries the walk's own `files`, `offsets` and `inner` alongside the
+    module that produced them, so a caller that needs the volume's full roster
+    does not have to read and walk it a second time. That matters for more than
+    speed: `fv-inventory.unpack` prints the FD and its top-level files every time
+    it is called, so a redundant call puts a second copy of that block in front of
+    the caller's answer, where it reads as a second volume rather than as the same
+    one read twice.
     """
     fvi = load_sibling("fvi", "fv-inventory.py")
     ao = load_sibling("ao", "apriori-order.py")
@@ -211,7 +219,8 @@ def build(image):
         t, nm, size, o = by_guid.get(g.upper(), (None, "", 0, None))
         out.append({"file": i, "guid": g, "type": t, "name": nm, "size": size,
                     "off": o})
-    return out, nfiles, {"inner": inner, "fvi": fvi}
+    return out, nfiles, {"inner": inner, "fvi": fvi, "files": files,
+                         "offsets": offsets}
 
 
 def section_stream(raw):

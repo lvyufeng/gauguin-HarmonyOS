@@ -744,6 +744,24 @@ Eight of the thirteen, in the order `CoreAllEfiServicesAvailable ()` walks them.
 The five that *are* present — CPU, Metronome, Timer, Runtime, Variable Write —
 matter more than the eight that are not, because they rule things out.
 
+> **Corrected by Step 4.95: it is nine, not eight, and `Variable Write` is one of
+> the missing.** `Variable` and `Variable Write` are installed two statements apart
+> by one driver — `VariableDxe.c:578` inside `VariableServiceInitialize` and `:396`
+> inside `VariableWriteServiceInitializeDxe`, which is reached only from that same
+> entry point — and that driver, `VariableRuntimeDxe`, carries `L` at a-priori 31 /
+> `SEQ 30`. `L` is stamped before the entry point is called, so its code never ran
+> and it installed neither protocol. Nothing else in the volume installs either.
+> The list above is also not a transcription of the panel's text but a compression
+> of it: the panel prints `mMissingProtocols[]`'s strings **in full**, and two of
+> the eight above are short forms of them — `Watchdog` for `Watchdog Timer`,
+> `Monotonic` for `Monotonic Counter`. So the reading below is right about
+> *which* protocols were absent and wrong about *how many*: one name was lost, and
+> it is the one whose producer is shared with its neighbour in `mArchProtocols[]`.
+> `tools/arch-protocol-census.py` decides the set from the volume and the source
+> and names the loss; Step 4.95 is that run and the account of where the count
+> propagated. **The set is nine, and the four that are present are CPU, Metronome,
+> Timer and Runtime.**
+
 **What the static pass established, and what it killed.** Reading the built
 dependency expressions straight out of the volume (`/tmp/FvMain.bin`, GUID names
 resolved through `Guid.xref` — the `.inf` `[Depex]` text is *not* the built depex,
@@ -781,12 +799,19 @@ Five more candidates died the same way:
 
 - **The Apriori file.** FvMain's file `[0]`, GUID `FC510EE7-FFDC-11D4-BD41-0080C73C8881`,
   is one `EFI_SECTION_RAW` of 1120 bytes = 70 GUIDs. **All 70 name a real file in
-  the volume, and all eight missing providers are in it.** Measured against the
+  the volume, and all eight missing producers are in it.** Measured against the
   FV's own map, the 70 are the files at index 1–31, 33–40, 42–49, 51–70 and
   72–74 — that is, the whole front of the volume minus five entries, not a
-  curated list of anything. **All thirteen arch-protocol providers are in it,
-  the five that ran and the eight that did not alike**, so membership separates
-  them perfectly evenly and explains nothing on its own. What membership does
+  curated list of anything.
+  > **Corrected by Step 4.95:** this said "eight missing providers", which is the
+  > panel's protocol count wearing the noun for a driver. There are **eight
+  > producers** and they owe **nine** protocols: the one missing from the count —
+  > `Variable Write` — is in this file too, as part of the entry that carries
+  > `Variable`, so the *indices* this argument rests on are unchanged. Read it as
+  > nine protocols on eight a-priori entries.
+  **All thirteen arch-protocol providers are in it,
+  the four that are present and the nine that are not alike**, so membership
+  separates them perfectly evenly and explains nothing on its own. What membership does
   give is the mechanism: `CorePreProcessDepex` marks a-priori members
   `Dependent = TRUE`, the promotion loop clears it, and the sweep at
   `Dispatcher.c:1204` only evaluates `CoreIsSchedulable` for entries still
@@ -813,14 +838,22 @@ in FV file order:
 | 8 | 7 | `MetronomeDxe` | Metronome | **present** |
 | 9 | 8 | `TimerDxe` | Timer | **present** |
 | 10–30 | 9–29 | 21 modules — `SmemDxe` … `TzDxeLA` — none installs an arch protocol | — | unobservable |
-| 31 | 30 | `VariableRuntimeDxe` | Variable | **missing** |
+| 31 | 30 | `VariableRuntimeDxe` | Variable **and Variable Write** | **missing** |
 | 34 | 33 | `ResetSystemRuntimeDxe` | Reset | **missing** |
-| 36 | 35 | `WatchdogTimer` | Watchdog | **missing** |
+| 36 | 35 | `WatchdogTimer` | Watchdog Timer | **missing** |
 | 37 | 36 | `SecurityStubDxe` | Security | **missing** |
-| 38 | 37 | `EmbeddedMonotonicCounter` | Monotonic | **missing** |
-| 39 | 38 | `RealTimeClockRuntimeDxe` | RTC | **missing** |
+| 38 | 37 | `EmbeddedMonotonicCounter` | Monotonic Counter | **missing** |
+| 39 | 38 | `RealTimeClockRuntimeDxe` | Real Time Clock | **missing** |
 | 42 | 41 | `CapsuleRuntimeDxe` | Capsule | **missing** |
 | 44 | 43 | `BdsDxe` | Bds | **missing** |
+
+> **Corrected by Step 4.95.** The `VariableRuntimeDxe` row carries two protocols,
+> not one, so this table has eight rows and nine failures; the "protocol it owes"
+> column now uses the strings `mMissingProtocols[]` actually holds, which is what
+> the panel prints and what a transcription of it has to match. The driver names
+> are the `.inf` filenames in the `CpuDxe`/`TimerDxe` rows and the built
+> `BASE_NAME` in the rest — the volume's names are `ArmCpuDxe`, `ArmTimerDxe` and
+> `RealTimeClock`, and `tools/arch-protocol-census.py` matches on those.
 
 The two numberings differ because `APRIORI.inc` has 72 `INF` lines and the
 volume's Apriori file has 70 GUIDs — the two `Display*` lines are behind a
@@ -846,10 +879,11 @@ satisfied in this order — `TimerDxe` (9) precedes `WatchdogTimer` (36),
 list is not the fix. The reference platforms schedule a batch of the same size
 (72 entries here; `lavender` 63, `nabu` 73, `vili` 81) and dispatch it fine.
 What the order does settle is narrower and more useful: because nothing in the
-batch is retried and nothing can still be waiting, **each of the eight was
-reached** — its image failed to load, or its `EntryPoint` was called and returned
-an error. There is no third possibility, and no stall that the assert would not
-have pre-empted.
+batch is retried and nothing can still be waiting, **each of the eight producers
+was reached** — its image failed to load, or its `EntryPoint` was called and
+returned an error. There is no third possibility, and no stall that the assert
+would not have pre-empted. (Nine protocols, eight producers: `VariableRuntimeDxe`
+owes two, so "reached" is said of the driver and the protocol follows from it.)
 
 - **Malformed images.** A census of all 86 PE32+ files in the volume found no
   malformed one: every arch-protocol provider is `0xaa64`, `ImageBase 0x0`,
@@ -866,11 +900,16 @@ have pre-empted.
   section is copied in. (An earlier reading of that same figure was 5× low and
   briefly made exhaustion look plausible; the number is 35 MB, not 7 MB.)
 - **"Runtime drivers fail."** Ten modules in the volume carry
-  `Subsystem = 12 (EFI_RUNTIME_DRIVER)`, and five of the eight missing providers
-  are among them (FV indices: `RuntimeDxe` 4, `CapsuleRuntimeDxe` 9,
+  `Subsystem = 12 (EFI_RUNTIME_DRIVER)`, and five of the eight missing *producers*
+  are among them, owing six of the nine protocols (FV indices: `RuntimeDxe` 4,
+  `CapsuleRuntimeDxe` 9,
   `ReportStatusCodeRouter` 10, `StatusCodeHandler` 11, `VariableRuntimeDxe` 12,
   `EmbeddedMonotonicCounter` 13, `ResetSystemRuntimeDx` 15, `RealTimeClock` 16,
-  `EnvDxe` 24, `SdccDxe` 47). `RuntimeDxe` is one of them and it runs, so this
+  `EnvDxe` 24, `SdccDxe` 47). The two counts differ because `VariableRuntimeDxe`
+  owes both variable protocols, which is the same fact the eight/nine correction
+  turns on; an earlier version of this sentence said "five of the nine missing
+  providers", carrying the protocol count into a sentence about drivers.
+  `RuntimeDxe` is one of them and it runs, so this
   was never a rule — and the a-priori order dissolves the correlation completely:
   the runtime drivers happen to sit late in `APRIORI.inc` (31–42) while
   `RuntimeDxe` happens to sit early (5). `SecurityStubDxe`, `WatchdogTimer` and
@@ -909,7 +948,7 @@ text rather than a computed count, so the two numbers on the `SEQ` and `STATS`
 lines are not counted the same way and should not be compared to each other.
 
 All at `DEBUG_ERROR`, which `PcdDebugPrintErrorLevel` `0x8007EE0F` enables. The
-line budget is deliberate: eight missing protocols print as sixteen lines, so the
+line budget is deliberate: nine missing protocols print as eighteen lines, so the
 `NOLOAD` list is capped at six and the two lines that matter are printed **last**,
 which puts them inside the console's final screenful however long the dump gets.
 
@@ -1101,7 +1140,9 @@ step is an experiment rather than another reading of the same evidence.
 **The experiment: run the eight before the Qualcomm block.** Move all eight lines
 of `APRIORI.inc` to immediately after `ArmPkg/Drivers/TimerDxe/TimerDxe.inf` —
 chosen as the anchor because it is already early and its own result is known good,
-and because four of the eight depex on the protocol it installs. No driver is
+and because four of the eight depex on the protocol it installs. (Eight *lines*
+and eight *drivers*: the nine missing protocols ride on eight producers, so
+`Variable Write` moves with `Variable` and adds no line. Step 4.95.) No driver is
 added, removed or rebuilt; the volume keeps every file at every offset it had (the
 map check below is what makes that a measurement); the only bytes that differ
 between this image and the baseline are the Apriori file's GUID array. What the
@@ -1227,6 +1268,16 @@ eight would have occupied SEQ **9–16**:
 and a prompt that reports *eight* protocols missing rather than thirteen — CPU,
 Metronome, Timer, Runtime and Variable Write were never among the missing — is the
 same signal read off the assert instead of off `P2 SEQ`.
+
+> **Corrected by Step 4.95: the "rather than thirteen" comparison is nine, not
+> eight, and `Variable Write` is on the wrong side of it.** The variant prompt
+> would report **nine** protocols missing rather than thirteen, and the names that
+> were never among the missing are CPU, Metronome, Timer and Runtime. The
+> experiment's arithmetic is untouched — nine protocols on the eight drivers of
+> the table above — but the *sentence* above names the one protocol whose
+> producer is shared with its neighbour in `mArchProtocols[]` as present when it
+> is absent, which is exactly the error Step 4.95 is about, and it is arrived at
+> here for the second time and independently.
 
 - **All eight `s`.** The order was the cause, and the culprit is inside the block
   they were moved ahead of, between `SmemDxe` (now SEQ 17) and `ScmDxeLA`. Move the
@@ -1457,6 +1508,18 @@ merely tidy.** The eight protocols the panel reported missing are
 (38) — and those eight indices are exactly the ones the join says failed. They are
 not eight indices found by guesswork; they are the eight names the panel printed,
 mapped back through the array, and landing on `L`.
+
+> **This paragraph is also why the count error survived, and Step 4.95 is where
+> that is accounted for.** Two changes have to be made to it at once and they
+> cancel in the arithmetic. The panel printed **nine** names, not eight —
+> `Variable Write` is missing along with `Variable`. But `Variable Write` is
+> installed by the same driver as `Variable`, so it maps back to the *same* index,
+> `SEQ 30`, which is already in the list. The join is therefore **right about the
+> indices and silent about the count**, and its agreement is what made an
+> eight-name reading look corroborated. A cross-check that goes through producer
+> indices cannot see a protocol that shares a producer with its neighbour; only the
+> nine-to-eight producer census in `tools/arch-protocol-census.py` can, which is
+> why the correction arrives from there and not from reading the screen again.
 
 ### Three things this settles, and one it does not
 
@@ -1869,10 +1932,21 @@ Recorded because both were written with confidence and both are now replaced:
   declines to add it. And the "69" was never a limit of anything: the ring buffer
   is `mP2AprioriGuid[128]` behind `P2BRINGUP_APRIORI_MAX`, so a 70-match run would
   print 70 characters.
-- **The eight providers' SEQ indices were 5, 6, 7, 8, 9, 31, 34, 36, 37, 38, 39,
-  42, 44** — not 4, 5, 6, 7, 8, 30, 33, 35, 36, 37, 38, 41, 43. Two of the names
+- **The thirteen arch-protocol SEQ indices were 5, 6, 8, 9, 31, 31, 34, 36, 37, 38,
+  39, 42, 44** — not 4, 5, 6, 7, 8, 30, 33, 35, 36, 37, 38, 41, 43. Two of the names
   were wrong outright: the modules are `ArmCpuDxe` and `ArmTimerDxe`, not `CpuDxe`
   and `TimerDxe`.
+  > **Corrected by Step 4.95.** This bullet said "the eight providers'" and listed
+  > **5, 6, 7, 8, 9, 31, 34, 36, 37, 38, 39, 42, 44** — thirteen values for eight
+  > providers, because it is a list of the thirteen *protocols*, and one of its
+  > entries is not a protocol's index at all: `7` is `ArmGicDxe` (a-priori 7),
+  > which installs none of the thirteen. The measured set has two entries at `31`
+  > and none at `7`, and the second `31` is `Variable Write` — the same name that
+  > is missing from the count this step corrects, missing again from this list,
+  > with a driver standing in its place. The four present protocols are at `5`
+  > (`RuntimeDxe`), `6` (`ArmCpuDxe`), `8` (`MetronomeDxe`) and `9`
+  > (`ArmTimerDxe`); `tools/arch-protocol-census.py` derives both sets from the
+  > volume and the source.
 - **Step 4.10's reorder experiment is retired, not pending.** All 27 failures are
   `L`, and reordering the Apriori array cannot change which files discovery finds
   or in what order — it changes only which discovered entries get *scheduled*. The
@@ -2357,7 +2431,12 @@ step 4.30: those are the same eight drivers' `SEQ` positions with the `ap` label
 put on them, and the two numberings differ by one because `SEQ[k] = ap(k+1)`
 under the very assumption at issue. The argument is unaffected — the eight are
 inside `22..45` either way — but the indices are not interchangeable, and this is
-the one place in the document where they were treated as if they were.)* Any
+the one place in the document where they were treated as if they were.)* The list
+is of *drivers*, and Step 4.95 makes it eight drivers owing **nine** protocols:
+`VariableRuntimeDxe` installs `Variable` and `Variable Write` at `:578` and `:396`
+of one entry point, so `ap31` appears once on this list and covers two of the
+missing. That is the whole of the correction here — the eight indices, the `L`
+positions they land on, and the argument above are all unchanged. Any
 compaction shift of up to eight entries still lands all eight inside `22..45`, so
 the check passes for any alignment in that band. It confirms the two sets
 *overlap*; it does not pin the offset. What it also cannot do is fail: all eight
@@ -7933,10 +8012,11 @@ That set is exactly the P3 gate and nothing to do with the P2 assert: **every US
 driver in the volume is in it** (`UsbfnDwc3Dxe`, `UsbBusDxe`, `UsbKbDxe`,
 `UsbMassStorageDxe`, `UsbMsdDxe`, `UsbDeviceDxe`, `UsbConfigDxe`, `UsbPwrCtrlDxe`), as
 are all four console drivers and `SimpleFbDxe`, and the charger pair
-(`QcomChargerDxeLA`, `ChargerExDxe`). The eight arch protocols the assert names are a
-different and much tighter set, all well inside the 46: `ap31` Variable, `ap34` Reset,
-`ap36` Watchdog, `ap37` Security, `ap38` Monotonic, `ap39` Real Time Clock, `ap42`
-Capsule, `ap44` Bds.
+(`QcomChargerDxeLA`, `ChargerExDxe`). The nine arch protocols the assert names are a
+different and much tighter set, all well inside the 46: `ap31` Variable and Variable
+Write, `ap34` Reset, `ap36` Watchdog Timer, `ap37` Security, `ap38` Monotonic Counter,
+`ap39` Real Time Clock, `ap42` Capsule, `ap44` Bds. (Nine protocols, eight producers —
+Step 4.95; this list said eight until then, and `Variable Write` was the one missing.)
 
 It also makes an already-recorded fact concrete. No display or console driver is among
 the 46 promoted drivers, and the panel shows the `P2` lines anyway — which is
@@ -8424,8 +8504,10 @@ second candidate:
 | 12 | `665E3FF5-46CC-11D4-9A38-0090273FC14D` | `Protocol/WatchdogTimer.h` |
 
 That is the standard architectural-protocol set plus `EFI_DRIVER_BINDING_PROTOCOL`
-— the same protocols the P2 investigation is already about, and eight of them
-are the eight providers that still fail (step 4.9). There is no PCI requirement
+— the same protocols the P2 investigation is already about, and nine of them
+(`Variable` and `Variable Write` are both in this table, at 10 and 11) are owed by
+the eight producers that still fail (step 4.9, corrected in Step 4.95). There is no
+PCI requirement
 in it, and nothing named `Pci*` anywhere in the list. No PCI host bridge is
 needed and none was added.
 
@@ -9089,7 +9171,7 @@ and `CoreIsSchedulable` sends a NULL depex down the UEFI 2.0 branch
 `EFI_NOT_FOUND` on the first entry that is not present. That table names thirteen
 protocols — Security, Cpu, Metronome, Timer, Bds, Watchdog Timer, Runtime,
 Variable, Variable Write, Capsule, Monotonic Counter, Reset, Real Time Clock — and
-the test is on **all** of them. With eight missing, no non-a-priori driver without
+the test is on **all** of them. With nine missing, no non-a-priori driver without
 a depex can run either.
 
 In the payload of record that is five drivers, and one of them is a driver whose
@@ -9137,13 +9219,19 @@ inert.** The remaining six (`RamManagerDxe`, `SmbiosDxe`, `SmBiosTableDxe`,
 `AcpiTableDxe`, `AcpiPlatform`, `SetupBrowser`) depend on nothing worse than
 `EFI_PCD_PROTOCOL_GUID`, `EFI_ACPI_TABLE_PROTOCOL_GUID` and the HII protocols,
 and `PcdDxe` is a-priori entry 2, so PCD exists before any of them is considered.
-None waits on one of the eight missing architectural protocols.
+None waits on one of the nine missing architectural protocols. (The census behind this
+sentence is keyed on the same producer map Step 4.95 corrects; its six gated drivers are
+none of them producers of a missing protocol, so the correction does not move it.)
 
-The conclusion step 4.9's eight missing protocols were about therefore changes
+The conclusion step 4.9's nine missing protocols were about therefore changes
 shape. They are **not** a dependency deadlock: every one of them has a producer
 sitting in the volume's own a-priori array — `VariableRuntimeDxe` at entry 32,
 `ResetSystemRuntimeDxe` at 35, `WatchdogTimer` at 37, `SecurityStubDxe` at 38,
-`EmbeddedMonotonicCounter` at 39, `RealTimeClock` at 40, `BdsDxe` at 45. Their
+`EmbeddedMonotonicCounter` at 39, `RealTimeClock` at 40, `CapsuleRuntimeDxe` at 43,
+`BdsDxe` at 45. That is **eight** producers for nine protocols, since
+`VariableRuntimeDxe` owes both of the variable protocols; the list named seven of
+the eight until Step 4.95, `CapsuleRuntimeDxe` having been dropped from a list whose
+whole claim is that it is complete. Their
 absence is a **load** failure, which is the failure `P2 SEQ` already points at,
 and not a second fault hiding behind it. The depex reading and the panel reading
 agree about which one this is.
@@ -9180,7 +9268,9 @@ histogram):
 ```
 
 Eight of the thirteen terms of `XhciPciEmulationDxe`'s conjunction are among the
-protocols that are not installed, and each of the eight has an a-priori producer.
+protocols that are not installed, and each of the eight *producers* has an a-priori
+entry. Eight producers, nine protocols: `Variable` and `Variable Write` come from the
+same driver, `VariableRuntimeDxe`, so they share a producer and an entry. Step 4.95.
 That is a **wait**, and it is step 4.50's own reading of this file — "the host
 stack waits rather than adding two more `L`s to a batch that is already failing 27
 of 46". What this step adds is that the wait is not an interpretation: the
@@ -9238,7 +9328,7 @@ a-priori drivers failed to load, and that reading still has not been taken.
 | guard | a GUID in `UNINSTALLED` that no header defines is a hard error and exit 1, so the tool cannot under-report by silently skipping a protocol. Verified by injecting one |
 | instrument | `tools/depex-census.py` — FFS walk via `tools/fv-inventory.py`, a-priori array read out of the image via `tools/apriori-order.py`, depex GUIDs resolved against `MdePkg`/`MdeModulePkg`/`EmbeddedPkg`/`ArmPkg`/`SiliciumPkg`/`QcomPkg` headers and `.dec` files; `Dispatcher.c` and `Dependency.c` read at the lines cited |
 | bounds | producer-to-protocol is not recoverable from a volume in general, so above the nine mapped GUIDs a driver gated on some other uninstalled protocol would read as healthy. The reverse direction is also open: a driver whose depex names only installed protocols is not proved schedulable, only not proved blocked |
-| does not close | the P2 gate. `P2 SEQ`, `P2 STATS discovered=` and the 27 `CoreLoadImage` failures are where the eight missing protocols actually live, and none of it is readable without the device |
+| does not close | the P2 gate. `P2 SEQ`, `P2 STATS discovered=` and the 27 `CoreLoadImage` failures are where the nine missing protocols actually live, and none of it is readable without the device |
 
 ## Step 4.56 — the decoder's fixture was three lines this firmware cannot print, and every character it gets wrong it now names as a doubt
 
@@ -18249,3 +18339,294 @@ and the one this step gave a `_DEP`.
   payload in `boot` is still the **4.74** set and its panel reading is **still owed** under
   先读屏，再刷下一次. Step 4.94 archives `work/out/p2-4.94` and does not touch the one on the
   device.
+
+## Step 4.95 — the protocol that was counted away, and eight producers that owe nine
+
+### What this step was
+
+A correction, and the tool that makes the correction checkable, and nothing else. No ASL
+was touched, no payload was rebuilt, and nothing was flashed: this step changes what a long
+stretch of this file *says* about one number, and it is the first step in a while whose
+whole deliverable is on the host.
+
+The number is small and it is load-bearing. `CoreAllEfiServicesAvailable ()`
+(`DxeMain/DxeProtocolNotify.c:81`) returns `EFI_NOT_FOUND` at the first entry of
+`mArchProtocols[]` (`:21`) whose `Present` is false, and
+`CoreDisplayMissingArchProtocols ()` (`:263`) then prints one line per missing entry out of
+`mMissingProtocols[]` (`:56`):
+
+```
+DEBUG ((DEBUG_ERROR, "\n%a Arch Protocol not present!!\n", MissingEntry->GuidString));
+```
+
+That line — `:274` — is the panel reading the entire P2 investigation is built on. Step 4.9
+transcribed it as **eight** names with `Variable Write` among the five present. It is
+**nine**, and `Variable Write` is one of the missing.
+
+### Why the error was possible, and why nothing caught it
+
+Two protocols, one driver, two adjacent entries of `mArchProtocols[]`:
+
+| # | protocol | installed by | where |
+|---|---|---|---|
+| 8 | `Variable` | `VariableRuntimeDxe` | `VariableDxe.c:578`, `InstallProtocolInterface` on `&mHandle` |
+| 9 | `Variable Write` | `VariableRuntimeDxe` | `VariableDxe.c:396`, inside `VariableWriteServiceInitializeDxe` |
+
+Both are reachable only from one entry point. `VariableServiceInitialize` (`:542`) is
+`VariableRuntimeDxe`'s `EntryPoint`; it installs the variable protocol at `:578` and then, in
+the `else` of `if (!PcdGetBool (PcdEmuVariableNvModeEnable))` (`:586`), calls
+`VariableWriteServiceInitializeDxe ()` at `:601`, which installs the write protocol at
+`:396`. The `if` branch registers an FTW notify event instead — and the PCD is **TRUE as
+compiled**, `AutoGen.h:189` reading `#define _PCD_VALUE_PcdEmuVariableNvModeEnable 1U`, so
+that branch is not taken, `FtwNotificationEvent` (`:417`, calling the write initialiser
+again at `:499`) never runs, and the `else` is the live path. The prior step's hypothesis —
+that a missing FTW or FVB producer was suppressing the write protocol — is therefore
+falsified twice over: the branch that would need them is dead code on this platform.
+
+So one driver owes two protocols, and the driver carries the letter **`L`** at a-priori
+entry 31 (position 30). `L` is stamped before the entry point is called, which is the
+whole reading: the driver neither installed `Variable` nor `Variable Write`. Nine.
+
+The reason this survived every cross-check is structural rather than careless. Step 4.12's
+join maps the panel's names back to `L` positions, and it is **correct about the indices and
+silent about the count**: `Variable` and `Variable Write` share an a-priori entry, so the
+join lands on `ap31` either way and confirms itself whether the list it was handed has eight
+names or nine. Every downstream figure — the eight-line `APRIORI.inc` experiment, the
+"nine missing protocols print as eighteen lines" console budget, the "rather than thirteen"
+comparison for the variant prompt — is a re-reading of that one join, so the error
+propagated without ever being re-derived. Only a census that counts **producers against
+protocols**, rather than indices against names, can see it.
+
+### The tool
+
+`tools/arch-protocol-census.py` is the deliverable. It reads the thirteen protocols out of
+`mArchProtocols[]`, the printable names out of `mMissingProtocols[]`, and the GUID literals
+out of the `.dec`/`.h` that define them; finds each protocol's installing module under the
+EDK2 tree by searching for `InstallProtocolInterface`/`InstallMultipleProtocolInterfaces`
+calls whose argument list carries the identifier; and joins that against the volume.
+
+Run with no letters it is a build-only reading, and exits 0:
+
+```
+Mu-gauguin-silicon-gzip.img: FVMAIN 123 files, Apriori file 70 entries
+  13 protocols, 13 with a promoted producer, 0 whose producer is in the volume but not
+  in the a-priori array, 0 with none in the volume at all
+
+== the thirteen architectural protocols  [this volume]
+    #  protocol           guid                                 producer                      ap  pos SEQ  verdict
+    1  Security           A46423E3-4617-49F1-B9FF-D1BFA9115839 SecurityStubDxe               37   36      undecided
+    2  CPU                26BACCB1-6F42-11D4-BCE7-0080C73C8881 ArmCpuDxe                      6    5      undecided
+    3  Metronome          26BACCB2-6F42-11D4-BCE7-0080C73C8881 MetronomeDxe                   8    7      undecided
+    4  Timer              26BACCB3-6F42-11D4-BCE7-0080C73C8881 ArmTimerDxe                    9    8      undecided
+    5  Bds                665E3FF6-46CC-11D4-9A38-0090273FC14D BdsDxe                        44   43      undecided
+    6  Watchdog Timer     665E3FF5-46CC-11D4-9A38-0090273FC14D WatchdogTimer                 36   35      undecided
+    7  Runtime            B7DFB4E1-052F-449F-87BE-9818FC91B733 RuntimeDxe                     5    4      undecided
+    8  Variable           1E5668E2-8481-11D4-BCF1-0080C73C8881 VariableRuntimeDxe            31   30      undecided
+    9  Variable Write     6441F818-6362-4E44-B570-7DBA31DD2453 VariableRuntimeDxe            31   30      undecided
+   10  Capsule            5053697E-2CBC-4819-90D9-0580DEEE5754 CapsuleRuntimeDxe             42   41      undecided
+   11  Monotonic Counter  1DA97072-BDDC-4B30-99F1-72A0B56FFF2A EmbeddedMonotonicCounter      38   37      undecided
+   12  Reset              27CFAC88-46CC-11D4-9A38-0090273FC14D ResetSystemRuntimeDxe         34   33      undecided
+   13  Real Time Clock    27CFAC87-46CC-11D4-9A38-0090273FC14D RealTimeClock                 39   38      undecided
+```
+
+`ap` and `pos` are the a-priori entry and the promoted position, and both are **0-based**:
+`ap31` is entry 32 of the table of 70, which is the numbering step 4.12 and the 4.55 region
+quote in the one-based form. `pos` is the promoted position the letter at `SEQ[k]` belongs
+to, and it is one less than `ap` everywhere here because only `DxeCore` — file index 0, type
+`0x03` — fails to match and is never promoted.
+
+### The bijection, which is the check rather than the answer
+
+Given the stored letter string — 46 characters, `s` where the driver returned
+`EFI_SUCCESS` and reached `CoreStartImage`, `L` where `CoreLoadImage` failed — the same
+table fills in:
+
+```
+     1  Security           ... SecurityStubDxe               37   36   L  absent
+     2  CPU                ... ArmCpuDxe                      6    5   s  present
+     3  Metronome          ... MetronomeDxe                   8    7   s  present
+     4  Timer              ... ArmTimerDxe                    9    8   s  present
+     5  Bds                ... BdsDxe                        44   43   L  absent
+     6  Watchdog Timer     ... WatchdogTimer                 36   35   L  absent
+     7  Runtime            ... RuntimeDxe                     5    4   s  present
+     8  Variable           ... VariableRuntimeDxe            31   30   L  absent
+     9  Variable Write     ... VariableRuntimeDxe            31   30   L  absent
+    10  Capsule            ... CapsuleRuntimeDxe             42   41   L  absent
+    11  Monotonic Counter  ... EmbeddedMonotonicCounter      38   37   L  absent
+    12  Reset              ... ResetSystemRuntimeDxe         34   33   L  absent
+    13  Real Time Clock    ... RealTimeClock                 39   38   L  absent
+
+  9 absent, 4 present
+
+  the partition agrees: the 9 protocols whose producer is `L` are the 9 absent, and the
+  4 whose producer is `s` are the 4 present - the same names on both sides, not two
+  counts that happen to match
+```
+
+That sentence is asserted rather than eyeballed. The tool compares the two **name sets** —
+built from the letters and from the panel — and reports a mismatch, name by name, if they
+differ; it does not print two counts and let a reader notice they are equal. Two counts can
+agree by cancellation and a set cannot, which is exactly the failure this step is about.
+
+With the panel's transcription passed in as well, the run exits **1** and says why:
+
+```
+  !! the transcription says 'Watchdog', which mMissingProtocols[] does not define; it is
+     an abbreviation of Watchdog Timer - the panel prints that string in full, so the
+     short form is the transcription's, not the table's
+  !! the transcription says 'Monotonic', which mMissingProtocols[] does not define; it is
+     an abbreviation of Monotonic Counter - ...
+  transcribed: 8 names; measured absent: 9
+  !! Variable Write is missing from the transcription, and its producer VariableRuntimeDxe
+     is ap31 pos 30 in `P2 SEQ`, where the letter is `L`
+```
+
+Two of the eight names are abbreviations of table strings — `Watchdog` for `Watchdog Timer`
+and `Monotonic` for `Monotonic Counter` — and they are reported as abbreviations and
+covered, not as inventions. The ninth is not an abbreviation of anything: `Variable` is a
+defined name, so a transcription that stops at it loses a protocol and the tool says so.
+`covered` deliberately applies to the two abbreviations and never to `missing`, which is
+why a name can be both recognised and wrong.
+
+### The three ways a producer can be missing, and the eight that are
+
+Producer-to-protocol is not recoverable from a volume, so the map is **measured from
+source**, and a module that matches the install pattern can be missing from the answer three
+different ways. The tool keeps them apart, because they are three findings:
+
+- **promoted** — built into the volume and present in the a-priori array. All thirteen here.
+- **in the volume but not a-priori** — a driver the dispatcher may still schedule, a depex
+  away from running. Zero here.
+- **not in the volume at all** — a module this build does not carry. Reported as a note.
+
+Eight of the thirteen protocols have a second installer somewhere in the tree — eight note
+lines naming **ten distinct modules**, `VariableSmmRuntimeDxe` appearing under both of the
+variable protocols — and every one of the ten was verified **physically absent** from the
+volume's 123 files:
+
+```
+   note: CPU is also installed by CpuDxe, CpuDxeRiscV64, not built into this volume
+   note: Metronome is also installed by Metronome, not built into this volume
+   note: Timer is also installed by CpuTimerDxeRiscV64, HpetTimerDxe, not built into this volume
+   note: Watchdog Timer is also installed by GenericWatchdogDxe, SP805WatchdogDxe, not built into this volume
+   note: Variable is also installed by VariableSmmRuntimeDxe, not built into this volume
+   note: Variable Write is also installed by VariableSmmRuntimeDxe, not built into this volume
+   note: Monotonic Counter is also installed by MonotonicCounterRuntimeDxe, not built into this volume
+   note: Real Time Clock is also installed by PcRtc, not built into this volume
+```
+
+`VariableSmmRuntimeDxe` is the one worth naming: it is the second installer of the pair this
+step is about, and had it been in the volume the nine-ness would have needed a different
+argument. It is not. The other nine are absent for the same reason — `CpuDxe`,
+`CpuDxeRiscV64`, `Metronome`, `CpuTimerDxeRiscV64`, `HpetTimerDxe`, `GenericWatchdogDxe`,
+`SP805WatchdogDxe`, `MonotonicCounterRuntimeDxe` and `PcRtc` — and the two spellings that
+look like the same module twice are not: the volume's `ArmCpuDxe`, `ArmTimerDxe` and
+`RealTimeClock` are the built `BASE_NAME`s of `CpuDxe.inf`, `TimerDxe.inf` and
+`RealTimeClockRuntimeDxe.inf`, so a match on a filename would have missed all three. The
+tool matches on the built name.
+
+### The near-miss, which the tool records rather than hides
+
+The first version of the producer search resolved identifiers through `depex-census.py`'s
+own GUID-to-name map, inverted. It answered **zero producers for all thirteen** — a clean,
+uniform, entirely plausible-looking zero, which is the dangerous shape. The map is keyed by
+whichever spelling reached a file first, and for these thirteen that is the header macro
+(`EFI_BDS_ARCH_PROTOCOL_GUID`, from `MdePkg/Include/Protocol/Bds.h`) because that header is
+walked before `MdePkg/MdePkg.dec`'s `gEfiBdsArchProtocolGuid`. Inverting it therefore looks
+up strings that appear nowhere.
+
+The tool reads the GUID literal out of the definition instead, and **exits** if it cannot
+find one, rather than returning `None`:
+
+```
+arch-protocol-census: gEfiSecurityArchProtocolGuid is defined by 0 GUIDs ...
+```
+
+That is a refusal to answer rather than a wrong answer, and the near-miss is in the tool's
+docstring because a guard that fires once is worth more recorded than re-derived. The
+docstring also states, at the import, that `depex-census.py`'s map must not be used — so the
+next reader who wants a GUID-to-name lookup finds the reason it is the wrong one before
+finding the zero.
+
+### The fifteen corrections, and one row that had been dropped
+
+Every correction is recorded in place, at the site, naming the old text — none folded in
+silently. The sites, by the section they are in:
+
+| region | what was eight and is nine |
+|---|---|
+| step 4.9's opening (~747) | the boxed heading: nine not eight, `Variable Write` missing, both install sites quoted, the two panel-name compressions named |
+| the Apriori-file argument (~806) | "all eight missing providers are in it" — eight *producers* owing nine protocols, and the ninth rides the entry that carries `Variable`, so the indices the argument rests on are unmoved; the neighbouring "five that ran and the eight that did not" is four and nine |
+| the a-priori order table (~850) | the `VariableRuntimeDxe` row now owes *Variable and Variable Write*; the other rows use the exact `mMissingProtocols[]` strings; a note records eight rows and nine failures |
+| the batch reading (~875, ~896, ~939) | each of the eight *producers* was reached, since a protocol has no image to load; five of them carry `EFI_RUNTIME_DRIVER` and owe six of the nine protocols; the console budget is eighteen lines for nine protocols, not sixteen for eight |
+| the `APRIORI.inc` experiment (~1145) | eight *lines* move for eight *producers*, because `Variable Write` moves with `Variable` |
+| the variant-prompt comparison (~1272) | the prompt would report **nine** missing rather than thirteen; the never-missing names are CPU, Metronome, Timer and Runtime |
+| the join, and why it did not catch this (~1512) | the join is right about *indices* and silent about the *count* |
+| the SEQ-decoding bullet (~1939) | "the eight providers'" was a list of thirteen *protocols* with `7` — `ArmGicDxe`, which installs none of them — standing where `Variable Write`'s second `31` belongs |
+| the SEQ-inference argument (~2435) | the list is of drivers, and eight drivers owe nine protocols; the indices are unchanged |
+| the XHCI gated set (~8019) | nine protocols, full names, all inside the 46 |
+| the driver-binding protocol table (~8509) | nine of them, owed by eight producers, both variable protocols named |
+| the 4.55 depex region (~9223, ~9273) | "none waits on one of the nine"; the producer list reads eight, not seven |
+
+The SEQ-decoding bullet is the one the sweep found rather than adjusted. It is in the step
+that first read the letter string, its list is labelled "the eight providers'" and holds
+thirteen values, and the reason is the same one this whole step is about: thirteen
+protocols were being counted as if they were eight drivers. Checked against the volume, its
+`7` is `ArmGicDxe`'s index and `ArmGicDxe` installs none of the thirteen, while the second
+`31` its list is missing is `Variable Write`'s. So the name that is absent from the count is
+absent from the list too, and a driver that owes nothing was written in its place. That is
+the same error surfacing a third time, in a list rather than a total, and it is the clearest
+argument for the census: a reader of that bullet could not have checked it, and the tool
+re-derived both sets from the volume in one run.
+
+The last row of the table is the one that had to be **added** rather than adjusted. The
+4.55 region's producer list named seven of the eight producers while claiming to be the
+complete set — `CapsuleRuntimeDxe`, a-priori entry 43, had been dropped — so a list whose
+whole argument is exhaustiveness was short by one independently of the eight/nine error.
+That is the same fault arriving by a different route, and it is why the step closes with the
+census rather than with the count: the census is what makes a list checkable, and a list is
+what the count was hiding in.
+
+`tools/apriori-index.py` changed too, by **+10 / −1**: `build()`'s context now carries the
+walk's own `files`, `offsets` and `inner` alongside the module, so a caller needing the
+volume's full roster does not read and walk it a second time. That is not tidiness —
+`fv-inventory.unpack` prints the FD and its top-level files on every call, so the census was
+printing that block **three** times where `apriori-index.py` prints it twice, and a reader
+had to be told which copies were the same volume. It prints twice now, matching the sibling
+that owns the walk.
+
+### The ladder
+
+- **Nothing was built and nothing was flashed.** `docs/08-device-session.md` is +413 / −32
+  (290 of them this section), `docs/00-plan.md` is +10 / −1, `tools/apriori-index.py` is
+  +10 / −1, and `tools/arch-protocol-census.py` is new. No `.asl`, no `.inf`, no
+  `APRIORI.inc`, and no FFS file in the volume is touched by this step.
+- The payload of record therefore does not move from 4.94:
+  `work/out/p2-4.94/Mu-gauguin-silicon-gzip.img`, **1,144,832 bytes**, sha256
+  `d621f732f4763a303e980c5af04451479c2ace31801e796993a258f226c177a5`, re-checked here and
+  identical. FVMAIN **123 files**, Apriori file **70 entries**, `FVMAIN` inner
+  **7,364,608 bytes (`0x706000`)**.
+- `tools/arch-protocol-census.py` is **639 lines**, 31,488 bytes, sha256
+  `8031247128f0ecff919c7d8498a72ba8be684a1006669524c66e9428867fce5e`, untracked until this
+  commit. `py_compile` clean on both it and `tools/apriori-index.py`.
+- Build-only mode exits **0** with all thirteen rows undecided; with
+  `--seq "ssssssssssssssssssLLLsLLLLLLLLLLLLLLLLLLLLLLLL"` and the panel transcription it
+  exits **1** and names exactly one loss, `Variable Write`. The letter string is the stored
+  one from 4.71 and is not re-derived here; `apriori-index.py`'s anchors are checked before
+  any letter is used, and `ShmBridgeDxe` at position 21 and `SecurityStubDxe` at 36 both
+  hold.
+- The anchors are the reason the 46-letter string can be read at all: `SEQ[k] = ap(k+1)`
+  fails for exactly one entry — `DxeCore`, file index 0, type `0x03` — and the two anchors
+  span the whole range, so a string read at the wrong offset would break at least one.
+- `work/uefi/Mu-Silicium/Mu_Basecore/MdeModulePkg/Core/Dxe/DxeMain/DxeProtocolNotify.c` is
+  **280 lines**, sha256 `57b350a63862250d56aeb62e64af027c6625420d411a0134cf4941ca2884cff4`,
+  unmodified: `mArchProtocols[]` at `:21`, `mMissingProtocols[]` at `:56`,
+  `CoreAllEfiServicesAvailable` at `:81`, `CoreDisplayMissingArchProtocols` at `:263` with
+  the print at `:274`.
+- `work/out/p2-variants` **still holds the 4.74 set** — `90b21643…`, `e693e1a0…`,
+  `26919861…`. **Nineteenth** step running.
+- The device is absent from this host throughout, so nothing here is a hardware reading. The
+  payload in `boot` is still the **4.74** set and its panel reading is **still owed** under
+  先读屏，再刷下一次. This step changes the interpretation of a stored reading; it does not
+  take a new one, and the eight-name transcription it corrects was itself transcribed from
+  that owed panel.
