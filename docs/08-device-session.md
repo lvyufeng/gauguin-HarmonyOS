@@ -19629,7 +19629,7 @@ should clear is unchanged and is now expressible in the instrument that owns the
   `work/out/p2-variants/Mu-gauguin-silicon-gzip.img`, 1,142,784 B,
   `90b21643e3450c326fb3d24baf64d58d4692a5d155c36b76d2e020ff04a96b59`;
   `work/out/boot-now-0923.img`, 1,142,784 B,
-  `3547fd0487d333874492e519760155b46164be8989ab3b5db743d42feefbe8ee`;
+  `3547fd0487d333874492e519760155b46164be8989ab3b5db743d42feebfe8ee`;
   and the two `P2FreeWhy` builds, `eb1601ab98fe97d25ae87106b1dedfda0356e0012a8a3e728219066cef1eb3e3`
   and `cbe5a13114fc4a0465677e480a29a76fa2836cf2ae00fb9e9838c490e0102132`. The unflashed
   XHCI host payload, `work/out/usb-host/Mu-gauguin-xhci-host-gzip.img`, 1,169,408 B,
@@ -19776,7 +19776,7 @@ forward on its own, detached from the payload it was measured against.
   `work/out/p2-variants/Mu-gauguin-silicon-gzip.img`, 1,142,784 B,
   `90b21643e3450c326fb3d24baf64d58d4692a5d155c36b76d2e020ff04a96b59`;
   `work/out/boot-now-0923.img`, 1,142,784 B,
-  `3547fd0487d333874492e519760155b46164be8989ab3b5db743d42feefbe8ee`;
+  `3547fd0487d333874492e519760155b46164be8989ab3b5db743d42feebfe8ee`;
   `work/out/usb-host/Mu-gauguin-xhci-host-gzip.img`, 1,169,408 B,
   `efc8e10d09f0f286011e1aacc638a7edd2ed5fcd86884640b28d14628f58f9f3`; and the two
   `P2FreeWhy` builds, `eb1601ab98fe97d25ae87106b1dedfda0356e0012a8a3e728219066cef1eb3e3` and
@@ -19788,6 +19788,309 @@ forward on its own, detached from the payload it was measured against.
   `PrePiMemoryAllocationLib/MemoryAllocationLib.c:30-52`; `MemoryInitPei.c:86`, `:93`, `:98`,
   `:104`; `MemoryBin.c:58-100`; `Sec.c:55`, `:64-69`, `:78`; `SiliciumPkg.dsc.inc:44-51`; and,
   in this document, Steps 4.26, 4.27, 4.30, 4.55, 4.98 and 4.99.
+- Standing rules unchanged: `userdata`, the partition table and the firmware LUN are
+  untouched; writes go to `boot` only; the control image is read before anything is
+  overwritten; and the screen is read before the next flash.
+
+## Step 4.101 — The build directory step 4.100 called gone holds the record payload's own bytes, and the walk's `t=` labels are EDK2's table and not a decode
+
+Host-side only. The device was not attached for any part of this step: `adb devices` is empty and
+no Qualcomm USB device is on the bus, so nothing here is a hardware reading, no panel was
+photographed, and the reading owed under *read the screen before the next flash* is still owed.
+
+### The build tree is on this host, and the record payload is its output byte for byte
+
+Step 4.100 closes on a premise, at `:19681-19687`: *"That tree is gone from this host —
+`Build/gauguinPkg/` does not exist — so the path cannot be re-walked"*, from which it concludes
+that a heap figure of this kind belongs on a payload rather than on **"a build directory that is
+deleted after the build"**. `Build/gauguinPkg/` does not exist **at the repository root**, which
+is where it was looked for. It is `work/uefi/Mu-Silicium/Build/gauguinPkg/`, it is populated, its
+`FV/` directory was written today at 03:52 and 04:16, and it holds the exact bytes the payload of
+record was made from:
+
+| artifact | bytes | sha256 |
+| --- | ---: | --- |
+| `work/out/p2-4.94/Mu-gauguin-silicon-gzip.img` | 1,144,832 | `d621f732f4763a303e980c5af04451479c2ace31801e796993a258f226c177a5` |
+| its gzip stream (the boot image's kernel) | 1,140,377 | `2ba4c8f0111559174c2a80692e489e107b90642af13d82dea6d25223caa0fd12` |
+| the payload decompressed | 3,145,840 | `b9a4b3a7e74e8a725200302e9e60824f0c55183668584bca340ee6e93191e8eb` |
+| `Build/gauguinPkg/DEBUG_CLANGPDB/FV/SILICIUM_UEFI.fd-bootshim` | 3,145,840 | `b9a4b3a7e74e8a725200302e9e60824f0c55183668584bca340ee6e93191e8eb` |
+| `Build/.../FV/SILICIUM_UEFI.fd` | 3,145,728 | `3a444eedef8bbb8293ecd2e7e54dec469fae0c6a57dae11e17e396c9f3aa0471` |
+| `Build/.../FV/SILICIUM_UEFI.fd-bootshim.gz` | 1,052,809 | `2efe71cf6e6e756ec9b376af3ea2ac091ed92461d517da8e348b0bca2c591b54` |
+| `Build/.../FV/FVMAIN.Fv` | 7,364,608 | `7e1d4b8445af4c18c2b29905ef0b528efd7661f9ef815aba11825dca415a9727` |
+| the payload's inner volume | 7,364,608 | `7e1d4b8445af4c18c2b29905ef0b528efd7661f9ef815aba11825dca415a9727` |
+
+The last two rows are one volume and the third and fourth are the same 3,145,840 bytes: the
+payload's gzip stream decompresses to `SILICIUM_UEFI.fd-bootshim` **byte for byte**, and the
+FVMAIN inside that FD is `FVMAIN.Fv` byte for byte. So the payload of record is reproducible from
+the tree that is on disk now, and every host-side figure in this document that was measured on
+that payload can be re-measured on the tree's own artifacts.
+
+What is *not* identical is the container, and the distinction matters: the record's gzip stream is
+1,140,377 B where the tree's `fd-bootshim.gz` is 1,052,809 B, and their digests differ, while the
+bytes underneath them are the same. A different gzip invocation over the same input, or a different
+wrapper around it — either way the difference is in the wrapper and not the payload. Reading the two
+`.gz` files as two different payloads would be reading the container.
+
+**And the map agrees on all 123 files.** `tools/fv-inventory.py` carries `compare_map` for exactly
+this purpose and it had not been run against a map for this volume. It now has:
+
+```
+matches FVMAIN.Fv.txt: 123 offsets and GUIDs, zero mismatches
+```
+
+with the map's `EFI_FV_TOTAL_SIZE = 0x706000` equal to the walk's own volume length and its
+`EFI_FV_TAKEN_SIZE = 0x705750` equal to the end of the volume's last file. So the file order every
+host-side table in this document is built on — the walk's order, the `ap`↔physical join, the
+DRIVER-only index — is GenFv's own order, witnessed by a file that this project did not produce.
+(The docstring above `compare_map` still says the volume contains **122** files; it has held 123
+since the depex census in step 4.55 and the sentence is corrected in this commit.)
+
+### The `t=` labels on `P2 WALK` are upstream EDK2's table, and two of them are not what the names suggest
+
+`P2 WALK` prints one line per entry of `mDxeFileTypes` (`Dispatcher.c:697-703`) and the counters
+are sized for eight of them (`:125-126`). That array is stock EDK2's, to the letter and in the same
+order: `tianocore/edk2` master carries the identical five entries, beginning at the same comment,
+in `MdeModulePkg/Core/Dxe/Dispatcher/Dispatcher.c`. Nothing in `uefi/patches/mu-basecore-local.patch`
+touches it. Which means the `t=` on the panel is an index into a table that is only in the source,
+and the reading of it cannot be guessed from the names:
+
+| `t=` | `mDxeFileTypes[t]` | files in FVMAIN | panel reading expected |
+| ---: | --- | ---: | --- |
+| 0 | `EFI_FV_FILETYPE_DRIVER` (0x07) | 80 | `seen=80 iter=81` |
+| 1 | `EFI_FV_FILETYPE_COMBINED_SMM_DXE` (0x0C) | 0 | `seen=0 iter=1` |
+| 2 | `EFI_FV_FILETYPE_COMBINED_PEIM_DRIVER` (0x08) | 0 | `seen=0 iter=1` |
+| 3 | `EFI_FV_FILETYPE_DXE_CORE` (0x05) | 1 | `seen=1 iter=2` |
+| 4 | `EFI_FV_FILETYPE_FIRMWARE_VOLUME_IMAGE` (0x0B) | 0 | `seen=0 iter=1` |
+
+Three consequences, and the third is the one that had been standing in for a mechanism:
+
+- **`t=1` is `COMBINED_SMM_DXE` and `t=3` is `DXE_CORE`.** Anything that reads `t=` as an ordinal
+  through the file types a reader expects to see gets three of the five lines wrong.
+- **`EFI_FV_FILETYPE_APPLICATION` (0x09) and `EFI_FV_FILETYPE_FREEFORM` (0x02) are in no slot**, so
+  the walk never asks about them. FVMAIN holds 5 type-0x09 files — `MassStorage`,
+  `BootManagerMenuApp`, `MsBootPolicy`, `UFPLoader`, `ufpdevicefw` — and 37 type-0x02 files
+  including the Apriori file itself. The walk's reach on this volume is therefore **81 files: the
+  80 `DRIVER` plus the one `DXE_CORE`.** `P2 WALK t=0 seen=` and `P2 STATS discovered=` are both
+  capped there, so `seen=80` is the ceiling and not a statement that the walk asked about everything.
+- **The one host-side explanation the arithmetic allowed is measured false.** If some of the 70
+  Apriori GUIDs named files of a type the walk never enumerates, the 23 absent entries would need
+  no other mechanism and the `t=0` ceiling would be the answer. Measured over the payload of record:
+  all 70 array entries are type 0x07 except `ap0`, which is the `DXE_CORE` (0x05) and is excluded
+  from `mDiscoveredList` by construction rather than by filter. **Zero of the 70 are unreachable by
+  file type.**
+
+The expected counts in the table above are host-side and falsifiable. `mP2WalkIter[Index]` is
+incremented on every `GetNextFile` call including the one that ends the loop (`:1961-1968`), and
+the print skips only `Iter == 0` (`:2447-2450`), so all five lines print and each type's `iter` is
+its `seen` plus one. `t=0 seen=80 iter=81` and `t=3 seen=1 iter=2` are what a payload carrying this
+volume must read; **either of them low, or `t=1`/`t=2`/`t=4` non-zero, means the volume on the
+device is not the volume in the record.** That is a different fault with a different fix, and it is
+cheaper to rule out than anything else on the panel.
+
+### The dedup that could skip a whole volume cannot fire on this platform
+
+`FvIsBeingProcessed` (`:1341-1438`) returns `NULL` when the volume being marked advertises an
+`FvNameGuid` already in `mFvHandleList` (`:1411-1421`), and the caller `continue`s on `NULL`
+(`:1914-1921`), skipping that volume whole with one `DEBUG_ERROR` (`:1418`) as its only trace. A
+skipped volume contributes no matches at all, so it cannot be what removed 23 of 70 after 46 had
+already matched — but it was the live lead into this step and it is worth closing rather than
+carrying. `FvNameGuidIsFound` is set only when `ExtHeaderOffset != 0` (`:1373`, `:1401-1403`), and
+this FD has two volumes:
+
+| volume | `FileSystemGuid` | `ExtHeaderOffset` | `FvName` |
+| --- | --- | ---: | --- |
+| `FVMAIN_COMPACT` (the FD's own) | `8C8CE578-8A3D-4F1C-9935-896185C32DD3` | `0` | — none, so the `KNOWN_HANDLE` inserted at `:1424` keeps `AllocateZeroPool`'s all-zero GUID |
+| `FVMAIN` (inside the type-0x0B file) | — | `0x60`, size `0x14` | `CD8D4C84-20AD-4073-8A28-3400FAE05941` |
+
+The only non-zero name in the FD is `FVMAIN`'s own, and it is the platform's `FvNameGuid` from
+`tools/make_uefi_platform.py:402` — one volume carries it, so the `CompareGuid` at `:1417` has
+nothing to collide with. **The dedup is live code on a live path and it cannot fire here.** The
+Mu-specific hook beside it, `FvFoundInHobFv2` (`:1564-1587`), compares two GUIDs — the FV-image
+file's own `FileName` and its parent volume's `FvName` — against the HOB FV2 list, so it decides per
+FV image and cannot drop a volume's driver population either. Both are recorded as measured
+negatives.
+
+One further lead from the same region, checked and closed the same way: `:1915` was read as
+`return` in this session's first pass, which would have made a single collision abandon every
+remaining FV in the drain and would have produced exactly the "everything after a boundary" shape
+the 23 have. It is **`continue`** (`:1920`), the same as upstream, and the drain-abandonment
+mechanism does not exist. Nothing in this document was written from the misreading; it is recorded
+because the shape it produced was a good enough fit to have been carried forward.
+
+### `P2 SEQ`'s alphabet is four characters, and `L` is not one of `P2WhyLetter`'s
+
+The SEQ string has been described in this document as one character per promoted entry, which is
+right, and its letters have been discussed as though they came from `P2WhyLetter`. They do not:
+`P2WhyLetter` (`:554-593`) has no `L` in its alphabet at all, and the two lines are written by two
+different mechanisms, `P2 SEQ` from the *phase* and `P2 WHY` from the *status* (`:2327-2331`).
+
+| character | written at | condition | means |
+| --- | --- | --- | --- |
+| `?` | `:2117` | on promotion, in the promotion loop | promoted; nothing recorded since |
+| `L` | `:1111`, `P2Record (…, 'L', …)` → `:630` | **inside `if (EFI_ERROR (Status))`** after `CoreLoadImage` (`:1081-1093`) | the load failed |
+| `S` | `:1156`, `P2Record (…, 'S', …)` | `CoreStartImage` returned an error (`:1153-1156`) | loaded, then failed to start |
+| `s` | `:1158`, `P2MarkSeq (…, 's', EFI_SUCCESS)` | `CoreStartImage` succeeded | loaded and started |
+
+So the recorded string — 19 `s`, 27 `L`, 0 `S`, 0 `?` — says exactly three things, and each is
+stronger than "27 failed": **19 of the 46 promoted drivers loaded and started; 27 never got past
+`CoreLoadImage`; and no driver that loaded failed to start.** The 27 are load failures, which is
+what the `:1111` letter can only mean, and the zero `S` is a reading too — the start path is
+clean, so every remaining question about the 27 is a question about `CoreLoadImage`.
+
+Two further properties of the line, both host-side:
+
+- **Its length is `mP2Apriori`.** `SeqLen = mP2Apriori` (`:2333`) and `mP2Apriori` is incremented
+  only in the promotion loop's match branch (`:2120`), so the string's length *is* the promotion
+  count. "A 46-character SEQ" and "46 promotions" are one measurement and not two, and the SEQ can
+  never be longer than the count — which matters, because the length has been cited as
+  corroboration of the count.
+- **A `?` would have truncated `P2 WHY`.** `mP2ApriWhy` is a zero-initialised global written only
+  by `P2MarkSeq`, and `mP2WhyLine` is printed with `%a`, so a promoted entry that was never
+  dispatched would leave a NUL in the middle of the WHY line and the print would stop dead there.
+  Zero `?` in SEQ is therefore also the statement that the WHY line was not truncated — the two
+  lines are safe to read as a pair *because* nothing was still scheduled when the digest ran.
+
+What none of this settles is *which* entry each position is. That is one field:
+
+- **`P2 APRI matched=%d..%d` is what decides the 23, and it decides them exactly.** With 46
+  matches, `matched=1..46` says the last match is array index 46 and the first is index 1; 46
+  matches inside indices 1 through 46 is all of them, which leaves `ap0` and `ap47..ap69` as the
+  only possible unhit set. Any other pair — `matched=1..45`, or a first index above 1 — refutes
+  it and says the absent set is interleaved. **This field has never been read**, and the panel is
+  the only place it exists.
+- `P2 APRI miss=` names the first unhit index above 0; `miss=47` is the same statement from the
+  other side. Both lines are guesses as predictions and measurements when read.
+
+### The 70-entry array against the volume's file order
+
+The `ap` index is the order the Apriori file names its entries, which is neither the volume's order
+nor alphabetical. The join exists in this document twice already — the 46-plus-prefix table at
+`:2231-2232`, which carries the SEQ letter in a fourth column, and the compact `ap47:58 ap48:57 …`
+line at `:3073` — but neither is complete: the first stops at the array's tail and the second gives
+only the 23. The table below is all 70, in array order, with the slot convention both of them use,
+1-based over the dispatcher-visible files with `DxeCore` as slot 1 — so it joins to `:8128` and to
+`:2231-2232` without arithmetic, and every slot in it agrees with the two.
+
+| ap | driver | slot | ap | driver | slot | ap | driver | slot |
+| ---: | --- | ---: | ---: | --- | ---: | ---: | --- | ---: |
+| 0 | `DxeCore` (0x05) | 1 | 24 | `DiskIoDxe` | 35 | 47 | `AdcDxe` | 58 |
+| 1 | `PcdDxe` | 2 | 25 | `PartitionDxe` | 36 | 48 | `UsbPwrCtrlDxe` | 57 |
+| 2 | `EnvDxe` | 24 | 26 | `EnglishDxe` | 38 | 49 | `QcomChargerDxeLA` | 56 |
+| 3 | `ReportStatusCodeRouterRuntimeDxe` | 10 | 27 | `SdccDxe` | 47 | 50 | `ChargerExDxe` | 55 |
+| 4 | `StatusCodeHandlerRuntimeDxe` | 11 | 28 | `UFSDxe` | 48 | 51 | `UsbfnDwc3Dxe` | 62 |
+| 5 | `RuntimeDxe` | 4 | 29 | `Fat` | 37 | 52 | `UsbBusDxe` | 63 |
+| 6 | `ArmCpuDxe` | 3 | 30 | `TzDxe` | 7 | 53 | `UsbKbDxe` | 64 |
+| 7 | `ArmGicDxe` | 25 | 31 | `VariableRuntimeDxe` | 12 | 54 | `UsbMassStorageDxe` | 65 |
+| 8 | `MetronomeDxe` | 17 | 32 | `DALTLMM` | 49 | 55 | `UsbMsdDxe` | 66 |
+| 9 | `ArmTimerDxe` | 26 | 33 | `SPMI` | 46 | 56 | `UsbDeviceDxe` | 67 |
+| 10 | `SmemDxe` | 28 | 34 | `ResetSystemRuntimeDxe` | 15 | 57 | `UsbConfigDxe` | 68 |
+| 11 | `DALSys` | 39 | 35 | `PmicDxe` | 54 | 58 | `ButtonsDxe` | 53 |
+| 12 | `HWIODxeDriver` | 43 | 36 | `WatchdogTimer` | 8 | 59 | `TsensDxe` | 59 |
+| 13 | `ChipInfo` | 27 | 37 | `SecurityStubDxe` | 5 | 60 | `SimpleFbDxe` | 51 |
+| 14 | `PlatformInfoDxeDriver` | 52 | 38 | `EmbeddedMonotonicCounter` | 13 | 61 | `LimitsDxe` | 60 |
+| 15 | `HALIOMMU` | 42 | 39 | `RealTimeClock` | 16 | 62 | `HashDxe` | 69 |
+| 16 | `ULogDxe` | 29 | 40 | `PrintDxe` | 18 | 63 | `CipherDxe` | 70 |
+| 17 | `CmdDbDxe` | 31 | 41 | `DevicePathDxe` | 19 | 64 | `RngDxe` | 72 |
+| 18 | `NpaDxe` | 30 | 42 | `CapsuleRuntimeDxe` | 9 | 65 | `DDRInfoDxe` | 61 |
+| 19 | `RpmhDxe` | 33 | 43 | `HiiDatabase` | 23 | 66 | `SimpleTextInOutSerial` | 14 |
+| 20 | `PdcDxe` | 34 | 44 | `BdsDxe` | 73 | 67 | `ConPlatformDxe` | 20 |
+| 21 | `ClockDxe` | 40 | 45 | `GpiDxe` | 44 | 68 | `ConSplitterDxe` | 21 |
+| 22 | `ShmBridgeDxe` | 74 | 46 | `I2C` | 45 | 69 | `GraphicsConsoleDxe` | 22 |
+| 23 | `ScmDxe` | 6 | | | | | | |
+
+Checked against `:8128`: the tail's slots are `14, 20, 21, 22, 51, 53, 55…70, 72`, and the table
+reads exactly that set. Three things fall out of the join that a list without it cannot show:
+
+- **The array's order is the platform's list order and nothing else.** `ap2` sits at slot 24 and
+  `ap3` at slot 10; `ap6` at 3 and `ap5` at 4; the storage stack runs `ap24..ap29` → `35, 36, 38,
+  47, 48, 37`. Any reading that treats the `ap` index as a position in the volume is reading the
+  list's order as the volume's.
+- **The array does not name 11 of the 80 drivers:** slots 32 `PwrUtilsDxe`, 41 `VcsDxe`,
+  50 `FeatureEnablerDxe`, 71 `MacDxe`, and 75–81 `RamManagerDxe`, `SmbiosDxe`, `SmBiosTableDxe`,
+  `AcpiTableDxe`, `AcpiPlatform`, `BootGraphicsResourceTableDxe`, `SetupBrowser`. Four of those
+  eleven carry no depex, which kills the other half of the depex story along with the first:
+  "no depex ⇒ not named" is false in both directions — `ap60` and `ap66` are named *and*
+  depex-free, and those four are depex-free and not named.
+- **The seven tail slots are the ACPI and SMBIOS producers.** `AcpiTableDxe`, `AcpiPlatform`,
+  `SmbiosDxe`, `SmBiosTableDxe` and `BootGraphicsResourceTableDxe` are not a-priori members, so
+  their depexes are evaluated rather than skipped and they dispatch on the ordinary dependency
+  pass. For P3 that is the shape to expect: **ACPI table publication is not on the Apriori path at
+  all**, and its arrival is a function of the ordinary pass reaching the end of the volume — which
+  is the same pass the 27 load failures are starving.
+
+### The depex census re-measured, and one boundary claim retracted
+
+Step 4.55's census (`:9218-9230`) was re-measured on the payload of record and on `p2-freewhy-g`
+independently, and both payloads give the same answer, which is step 4.55's:
+
+```
+dispatcher-visible: 81   with depex: 27   without: 54
+section sizes: 22 x18, 40 x7, 76 x1, 94 x1
+bodies:        18 x18, 36 x7, 72 x1, 90 x1
+```
+
+`dispatcher-visible` is `0x07 ∪ 0x05`; over the 80 `DRIVER` files alone it is 27 with a depex and
+53 without, which is step 4.55's "27 of the 80 … 53 do not" and its size histogram to the byte. The
+`ap`-side split is step 4.55's too: **21 of the 27 depex-bearing files are named by the Apriori
+array** (so their depex is read and never evaluated) and the other 6 are not.
+
+What is retracted here is a claim that was **never written into this document**, from this session's
+first pass: *"`ap1..ap46` all carry a `DXE_DEPEX` section of 18, 36, 72 or 90 bytes; **every**
+`ap47..ap69` file has depex length 0."* Measured at each file's own FFS offset, it is false in both
+directions:
+
+| group | n | with `DXE_DEPEX` | body lengths | without |
+| --- | ---: | ---: | --- | ---: |
+| `ap0..ap46` | 47 | 19 | 12 × 18 B, 6 × 36 B, 1 × 90 B (`ap44 BdsDxe`) | 28 |
+| `ap47..ap69` | 23 | 2 | 2 × 18 B (`ap60 SimpleFbDxe`, `ap66 SimpleTextInOutSerial`) | 21 |
+
+Nineteen inside the 46 and two outside it, and the 72-byte length does not occur among them at all
+(it belongs to one of the eleven drivers the array does not name). So "no depex ⇒ unhit" and "depex
+⇒ hit" are both dead, and the depex was never a proxy for the boundary.
+
+**The method is the part worth keeping.** The first attempt located each file with
+`inner.find(uuid.UUID(guid).bytes_le)`. Because the Apriori RAW section *is* a list of those same
+GUIDs, `find` matched inside that array for every entry whose GUID it contains and returned a
+section stream belonging to a different file — and the result was the internally contradictory
+"`ap0..ap46` depex histogram `{0: 47}`", no file with a depex at all, printed beside section types
+that the same files plainly do have. It is the third instance in this project of a reader that is
+wrong in a way that still yields well-formed output, after `_walk_from`'s 8-byte padding and
+`sections`' align4 step, and the rule that catches all three is the same: **a section list is
+evidence only if the offset it was read from is named.** Every figure above was read at `off`
+reported by `fv-inventory.py`'s roster, which is the same offset `compare_map` has now checked
+against GenFv's map for all 123 files.
+
+### Nothing was built and nothing was flashed
+
+- One file changes besides this document: `tools/fv-inventory.py`'s `compare_map` docstring says
+  the volume contains 122 files and it contains 123. Three digest typos are corrected with them —
+  steps 4.99 and 4.100 and this one each cited `boot-now-0923.img` as
+  `3547fd04…d42feefbe8ee`, and the file's digest is `3547fd04…d42feebfe8ee` (`sha256sum` on
+  `work/out/boot-now-0923.img`, 1,142,784 B, re-read now). No `.c`, no `.inf`, no `.asl`, no
+  `APRIORI.inc`, no FFS file, no payload, no partition. Every figure here is host-side arithmetic
+  over files already on disk, plus source that was read and not edited.
+- **No build, no staging, no flash, and no write to any partition.** The device is not attached to
+  this host, so nothing here is a hardware reading and no panel was photographed. The panel reading
+  owed under *read the screen before the next flash* is still owed, on the payload in `boot`,
+  `90b21643…`, whose rung is **7260**.
+- The build tree was opened read-only. Nothing in `work/uefi/Mu-Silicium/Build/` was rebuilt,
+  moved, renamed or deleted; `FVMAIN.Fv`, `SILICIUM_UEFI.fd` and both `fd-bootshim` artifacts are
+  unchanged and their digests are the ones in the table above.
+- Sizes and digests re-checked rather than recalled: the payload of record,
+  `work/out/p2-4.94/Mu-gauguin-silicon-gzip.img`, 1,144,832 B,
+  `d621f732f4763a303e980c5af04451479c2ace31801e796993a258f226c177a5`, whose decompressed bytes are
+  `b9a4b3a7e74e8a725200302e9e60824f0c55183668584bca340ee6e93191e8eb` at 3,145,840 B; the four
+  build artifacts above; the two `boot` readbacks `90b21643e3450c326fb3d24baf64d58d4692a5d155c36b76d2e020ff04a96b59`
+  and `3547fd0487d333874492e519760155b46164be8989ab3b5db743d42feebfe8ee`; and the unflashed
+  `work/out/usb-host/Mu-gauguin-xhci-host-gzip.img`, 1,169,408 B,
+  `efc8e10d09f0f286011e1aacc638a7edd2ed5fcd86884640b28d14628f58f9f3`.
+- Cited, re-read rather than remembered: `Dispatcher.c:125-126`, `:554-593`, `:697-703`, `:630`,
+  `:1081-1093`, `:1111`, `:1153-1158`, `:1341-1438`, `:1373`, `:1401-1403`, `:1411-1421`, `:1424`,
+  `:1508-1549`, `:1564-1587`, `:1914-1921`, `:1946-1968`, `:1972-1996`, `:2047`, `:2053`,
+  `:2104-2120`, `:2117`, `:2333`, `:2327-2331`, `:2447-2460`; `tools/make_uefi_platform.py:402`;
+  `tools/fv-inventory.py`'s `compare_map`/`sections`/`fv_files`; `tianocore/edk2` master's copy of
+  the same `Dispatcher.c` for the file-type array; and, in this document, Steps 4.55, 4.100 and the
+  `ap`↔physical tables at `:2231-2232`, `:3073` and `:8128`.
 - Standing rules unchanged: `userdata`, the partition table and the firmware LUN are
   untouched; writes go to `boot` only; the control image is read before anything is
   overwritten; and the screen is read before the next flash.

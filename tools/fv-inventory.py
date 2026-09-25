@@ -370,7 +370,7 @@ def compare_map(files, offsets, map_path, fv_len=None):
     so it is the build's record of what it put where - an independent opinion
     about the same bytes, and the only one available that was not produced by
     this reader. Agreeing with it on every offset and every GUID is what makes
-    "the volume contains 122 files" a measurement rather than a claim this tool
+    "the volume contains 123 files" a measurement rather than a claim this tool
     makes about itself. Disagreement is worth more than agreement: the walk here
     has already been wrong twice in ways that still produced a plausible-looking
     list (see `_walk_from` and `fv_files`), and both times the map would have
