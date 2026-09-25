@@ -11701,3 +11701,235 @@ changed, and no device storage was written.**
 What it was not is progress on the device. `p2-variants` is still the payload in `boot`,
 its panel reading is still owed, and the rule for the next session is unchanged: **先读屏，
 再刷下一次**.
+
+## Step 4.68 — the accessor the driver binds once, and the two ends of the Type-C chain
+
+Step 4.66 closed by naming the half of its own correction it had not done: `UCS0` gained
+the five family accessors, and `CCVL` was left standing on three devices. This step
+measured the reference, finished the removal, and then followed the five accessors
+outward in both directions - which turned up the thing this table is actually missing at
+the root of the Type-C path.
+
+### The correction needed a count, not a search
+
+`CCVL` was kept in Step 4.66 because the driver really does ask for that name:
+`qcusbcucsi7280.sys` carries the string `QUCSAeiBCCVL`, and a name a driver looks up is a
+name the namespace owes. That reasoning was right and the conclusion was wrong, because
+it does not say *how many* devices owe it. The count does:
+
+| name | lisa | this table, before | this table, after |
+|---|---|---|---|
+| `CCVL` | **1** — inside `UCS0` (line 24238 of lisa's 26,135) | 3 — `UCS0`, `URS0.USB0`, `URS0.UFN0` | 1 — inside `UCS0` |
+| `PHYC` | **3** — `URS0.USB0`, `URS0.UFN0`, `USB1` | 2 — `URS0.USB0`, `URS0.UFN0` | 2, unchanged |
+
+The same two counts hold in a52sxq, which is the third table that carries all five
+accessors on `UCS0`: `CCVL` once, `PHYC` three times. The SC7280 CRD reads `CCVL` once and
+`PHYC` twice, and the difference is not a disagreement - the CRD has no `URS0` at all, so
+its two `PHYC` sit on `USB0` and `USB1` directly.
+
+`CCVL` occurs exactly once in lisa's whole table and that once is on `UCS0` - the device
+the driver binds, `ACPI\QCOM0AA4`, which calls its accessors on itself. The other two
+occurrences here named the same `\_SB.CCST` from devices nothing reaches: bitra's `URS0`
+children each carried a copy, and Step 4.66 added the family set without taking them out.
+
+`PHYC` is the control case, and it is why the rule is not "delete the duplicates". lisa
+binds it three times, twice on children of `URS0` - the two this table has - and once on
+a `USB1` this table does not have. A pass that removed names appearing more than once
+would have taken `PHYC` out of both nodes that are correct. **The test is which device
+the family binds a name on, not how often it appears**, and for these five the family
+binds them on `UCS0`. The same discipline already governs `HSFL` and `PINA`, which stay
+in this file while definition-only; see the `USB0` comment.
+
+### What the five accessors are, at both ends
+
+`UCS0`'s five methods are one line each and return `\_SB.MUXC`, `\_SB.CCST`,
+`\_SB.DPPN`, `\_SB.HPDS` and `\_SB.HIRQ`. Nothing in this table ever writes them - they
+are constants here, and the comment on the node says so. In the SC7280 CRD they are not
+constants: `IC11`'s interrupt handlers `Q21` and `Q22` compute them out of the PMIC's
+`HPL0`/`HPH0` registers and then notify:
+
+```asl
+\_SB.MUXC = ((Local0 & 0xC0) >> 0x06)
+\_SB.CCST = ((Local0 & 0x30) >> 0x04)
+\_SB.HPDS = ((Local0 & 0x02) >> One)
+\_SB.HIRQ = (Local0 & One)
+\_SB.DPPN = 0x0A
+Notify (\_SB.UCS0, 0xA0) // Device-Specific
+```
+
+So the chain is: a PMIC register pair, read over a serial engine; five namespace values
+written from it; five accessors on `UCS0`; and `qcusbcucsi7280.sys` reading them. **This
+table has the middle and neither end.** The other end is a device this table also lacks:
+
+```asl
+Device (UBTC)                       // crd07280, and the same shape in four other tables
+{
+    Name (_HID, EisaId ("USBC000"))
+    Name (_CID, EisaId ("PNP0CA0"))
+    Name (_DDN, "USB Type-C")
+    Name (_UID, Zero)
+    Name (UBCB, 0xA0000000)         // MMIO window, 0x2000 long
+    Name (_DEP, Package (0x03) { \_SB.IC11, \_SB.GIO0, \_SB.UCS0 })
+    Method (_DSM, 4, Serialized) { ... ToUUID ("6f8398c2-7ca4-11e4-ad36-631042b5008f") ... }
+    Device (CR01) { Name (_ADR, Zero)  Name (_PLD, ...)  Name (_UPC, ...) }
+}
+```
+
+`USBC000` with `_CID PNP0CA0` is the standard ACPI UCSI device, and the `_DSM` UUID
+`6f8398c2-7ca4-11e4-ad36-631042b5008f` is the same string in every table checked -
+Lahaina, venus, renoir and the CRD alike - which is what makes this a specification
+device rather than a vendor one, and specifications have in-box drivers where vendors do
+not. `IC11`'s `Q20` handler is the matching other half, `\_SB.UBTC.QUCM ()` followed
+by `Notify (\_SB.UBTC, 0x80)`. Five tables in the corpus define the device outright, all
+of them SM8250/SM8350 generation - Lahaina MTP, Cedros IDP, venus, renoir, lemonade - and
+the three tables of this generation that reference it (crd07280, lisa, a52sxq) carry it
+as an `External`, which is the corpus telling us its definition lives in an SSDT we do
+not have.
+
+**This is the first node the project has found that needs no vendor driver at all.**
+Every other node written so far is bound by something in the 7280 set or does nothing;
+this one is bound by Windows. That changes its value rather than its difficulty.
+
+### The root the three open items share
+
+The two ends converge on one missing node, and the corpus ids say which:
+
+| node | `_HID` | claimed by | in our table |
+|---|---|---|---|
+| `UCS0` | `QCOM0AA4` | `qcusbcucsi7280/qcusbcucsi7280.inf` | yes, Step 4.66 |
+| `UBTC` / `UCSI` | `USBC000` | Windows in-box UCSI | no |
+| `ABD` | `QCOM0427` | `qcabd/qcabd.inf` | no |
+| `IC11` | `QCOM0A10` | `qci2c7280/qci2c7280.inf` | no |
+
+`ABD` is the device PEP0's `Field (\_SB.ABD.ROP1, BufferAcc, ...)` binds, and it is a
+`GenericSerialBus` opregion host with no `_CRS` at all in the CRD - 11 corpus tables
+carry it, always under the same `QCOM0427`, and the family byte is `04` in every one of
+them including Lahaina's, which is the cleanest illustration in this file of the family
+byte being the block's id space and not "which SoC this is". `IC11` is the other end:
+`_STR "QUP_1_SE_2"`, MMIO `0xA88000` + `0x4000`, IRQ `0x183`, and an id in **family 0A** -
+and `QCOM0A10` is in exactly **two of the 66 tables, lisa and a52sxq**, the same pair
+that settled `URS0` on `QCOM0A8B` and `UCS0` on `QCOM0AA4`.
+
+So PEP0's field, `UBTC`'s `_DEP`, and the I2C addresses `PML0` needs all wait on the same
+node, and that node's id is not a guess. What is not established is which serial engine
+on gauguin, and the device tree is where that has to come from - it has two QUP wrappers
+and five I2C engines:
+
+| node | wrapper | address | state |
+|---|---|---|---|
+| `i2c@880000` | `geniqup@8c0000` (QUPV3_0) | `0x880000` + `0x4000` | `okay`, 400 kHz, GIC SPI `0x259` |
+| `i2c@980000` | `geniqup@9c0000` (QUPV3_1) | `0x980000` + `0x4000` | `disabled` |
+| `i2c@984000` | `geniqup@9c0000` | `0x984000` + `0x4000` | - |
+| `i2c@988000` | `geniqup@9c0000` | `0x988000` + `0x4000` | - |
+| `i2c@990000` | `geniqup@9c0000` | `0x990000` + `0x4000` | - |
+
+`IC11`'s own name, `QUP_1_SE_2`, says it is the third engine of the second wrapper, which
+is the kind of arithmetic that is easy to do and was not done here: the CRD is SC7280,
+its wrappers are not at gauguin's addresses, and the `_UID` the CRD gives `IC11` (`0x0B`)
+does not follow from the `_STR` in any way this step worked out. **Which engine the PMIC
+hangs on is the next step's first question and not this one's answer.**
+
+### Read back from the artifact
+
+This is the first step since 4.65 that changes AML rather than a comment, so the numbers
+move and should:
+
+| | before Step 4.68 | after |
+|---|---|---|
+| `tools/acpi/gauguin.asl` md5 | `94d92126…` | `058938aa10a827ea2db81d7646a52478` |
+| `DSDT.aml` | 2,369 bytes, `c4e46e438eef1062…` | **2,345 bytes**, `692f728c…d456d387` |
+| `DSDT.aml`, read back out of the payload | - | 2,345 bytes, checksum valid |
+| `${P2DIR}` payload sha256 | `bdeedd9d…4e554580` | `f8e58ef31fa5d7bd30f40bc39cd936e93e5862b1491893e74b80b597f127867b` |
+| inner `FVMAIN.Fv` | `04e1cabd…31f94727` | `4b0f786c…83cbb5ea` - and this row is not what it looks like |
+
+The DSDT is 24 bytes smaller and the arithmetic is exact: two `Method (CCVL, 0,
+NotSerialized) { Return (CCST) }` at 12 bytes each. Three ASL copies are byte-identical
+to each other at `058938aa…`, the `DSDT.aml` the build produced disassembles to one
+`CCVL` and two `PHYC`, and the table read back out of the payload is 2,345 bytes with a
+valid checksum - `fv-inventory.py --acpi` reports the DSDT beside a 61-byte SSDT, and
+only FACP and FACS fail, which is expected of exactly those two before `AcpiTableDxe`
+runs. `probe-fingerprint.py --expect P2FreeWhy` returns rc=0 with all ten instruments,
+and all three payload variants match GenFv's map on 123 offsets and GUIDs with zero
+mismatches.
+
+The ASL md5 moved twice and the DSDT moved once, which is itself the check. The removal
+took the source from `94d92126…` to `67df8f3c…` and the table from 2,369 bytes to 2,345.
+A second round of edits after that - `UCS0`'s comment, which now names `IC11`, `UBTC` and
+the measurements behind them - took the source to `058938aa…` and moved the table by
+nothing: same 2,345 bytes, same `692f728c…` hash, rebuilt and re-hashed to confirm it.
+Comments do not reach AML, and this step has both directions of that on record.
+
+### The volume hash is not a day-independent fingerprint
+
+The `FVMAIN.Fv` row above contradicts the rule the last two steps were reading into it,
+and this step is where that surfaced. The volume hash moved with the removal, from
+`04e1cabd…` to `b4e642ff…`, and then it moved **again** - to `4b0f786c…` - when the only
+further change was a comment that cannot reach AML. Diffing the two inner volumes byte
+for byte says why: they differ in **nine bytes**, and those nine are a date.
+
+```
+09/24/2026   ->   09/25/2026
+```
+
+They sit in the BIOS Information structure of `SmBiosTableDxe` (the FFS file at
+`0x536b50`, GUID `50A15B6F-E3A9-4192-9640-369CB367C4DE`), in a UCS-2 block that reads
+`Silicium`, version `3.9`, the date, a GUID, `Xiaomi`, `Redmi Note`. The field is
+`__DATE__`-shaped, it changes when that module is compiled on a new day, and a rebuild
+with no source change at all reproduces `4b0f786c…` exactly. So the volume fingerprint is
+stable within a day and only within a day.
+
+That does not retroactively weaken Steps 4.66 and 4.67, but it does scope them: their
+agreement on `04e1cabd…` was a same-day check and it held for that reason. It was a real
+check all the same - the DSDT did not move in either of them, and that is the number that
+can be carried across days. **For a step that changes AML, the fingerprint to cite is the
+DSDT's size and hash, and the volume hash is only good until midnight.** The 72-byte
+`FVMAIN_COMPACT` growth recorded above is the 9-byte date through an LZMA stream, not the
+24-byte removal, and should not be read as either.
+
+### Honest limitations
+
+- **Nothing was fixed on the device.** Both ends of the Type-C chain are still absent;
+  this step removed two methods and named what is missing. `UCS0`'s five accessors still
+  return five constants, and now return them from one device instead of three.
+- **`ABD` was read, not understood.** It is `QCOM0427`, `qcabd.inf` claims it, 11 tables
+  carry it, it declares a `GenericSerialBus` region and no `_CRS`, and the `_REG` handler
+  watches region space `0x09`. Whether it is an I2C controller, a channel of one, or a
+  firmware-provided bus stub was not established, and PEP0's `Field` on `ABD.ROP1` is the
+  only place in the corpus this step could see it used.
+- **`UBTC`'s five-table attestation is not this generation's.** Lahaina, Cedros, venus,
+  renoir and lemonade are all SM8250/SM8350; the tables that match gauguin's generation
+  reference `\_SB.UCSI` without defining it. The definition is in an SSDT the corpus does
+  not contain, so what is known is the device's *shape*, five times over and identically,
+  and not one byte of a family-0A `UBTC`.
+- **`UBTC`'s resources are the CRD's.** `0xA0000000` + `0x2000` is SC7280's window. On
+  gauguin it is some other address, and it is not in the device tree, because the UCSI
+  mailbox is a firmware-provided region rather than a description the kernel needs.
+- **The engine `IC11` names is not resolved.** Five I2C engines exist on this board, one
+  of them `okay`, and which one carries the PMIC was not determined. The id `QCOM0A10` is
+  attested by the right two tables; that is a different question from the address.
+- **The TSENS coincidence was left unused.** `tsens0` and `tsens1` sit at `0xc263000` and
+  `0xc265000` in `sc7280.dtsi`, `sm6350.dtsi`, `sm8250.dtsi` and gauguin's own tree
+  alike, and gauguin's two controllers declare `#qcom,sensors = <0x10>` each - 32 slots,
+  which is exactly the number of zones lisa's `THTZ` dispatches on. That reading does not
+  survive Kailua: an SC7180 reference with sensors to spare ships a `THTZ` that returns
+  `0xFFFF` and dispatches on nothing. `THTZ`'s case count is the table generator's
+  choice, and no zone-to-sensor mapping was adopted here on the strength of a coincidence
+  that a shipped table falsifies.
+- **Why `SmBiosTableDxe` recompiled was not traced.** The date moved from `09/24/2026` to
+  `09/25/2026` between two builds whose ACPI input was byte-identical, and the build that
+  produced the *older* date ran at 07:59 on 09/25 - so that module had been serving an
+  object compiled the previous day rather than one from that morning. Which regenerated
+  file's timestamp finally forced it was not followed, and it only matters to anyone
+  trying to reproduce a volume hash across days, which the section above now says not to
+  do.
+
+### What this step was, and what it was not
+
+It was one correction and one census. The correction is in the firmware: `CCVL` is bound
+on one device, as the family binds it, and `PHYC` was left alone because the measurement
+said to leave it alone. The census names the node at the root of the Type-C path -
+`QCOM0A10`, `qci2c7280.inf`, family 0A, in lisa and a52sxq and nowhere else in 66 tables -
+and separates what is attested from what has to be read off gauguin's own device tree.
+
+What it was not is progress on the device. `p2-variants` is still the payload in `boot`,
+its panel reading is still owed, and the rule is unchanged: **先读屏，再刷下一次**.

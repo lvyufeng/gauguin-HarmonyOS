@@ -295,6 +295,33 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
          * namespace is AML that something on the board side is expected to
          * keep current. lisa's node has no `_STA` and neither does this one,
          * so the node is present whenever the table is.
+         *
+         * "Something on the board side" is `IC11` in the SC7280 CRD, and it is
+         * worth naming because it is why the five are constants here rather
+         * than a defect in this node. IC11's interrupt handlers Q21 and Q22
+         * read the PMIC's HPL0/HPH0 and write all five of these `_SB` values
+         * out of them, then `Notify (\_SB.UCS0, 0xA0)`. This table has no
+         * IC11, so nothing writes the five and the node answers five
+         * constants, which is what the header above says. The id for that
+         * missing engine is not a guess - `QCOM0A10`, claimed by
+         * qci2c7280.inf, carried by exactly two of the 66 corpus tables, lisa
+         * and a52sxq, the same pair that settled URS0's and this node's own
+         * ids. Which engine it is on this board is still open, and gauguin's
+         * tree has five I2C serial engines across two geniqup wrappers to
+         * choose from.
+         *
+         * The far end is missing as well, and it is the end that matters more
+         * than this one: this table has no `USBC000` device. In the CRD and
+         * four other corpus tables that is `UBTC`, `_HID EisaId("USBC000")`
+         * with `_CID PNP0CA0`, an MMIO mailbox, a child connector, and a `_DSM`
+         * under the UUID `6f8398c2-7ca4-11e4-ad36-631042b5008f` - the same
+         * string in every table that carries it. That is the ACPI UCSI device,
+         * it is bound by Windows rather than by anything in the 7280 driver
+         * set, and its `_DEP` names this node: `Package (0x03) { \_SB.IC11,
+         * \_SB.GIO0, \_SB.UCS0 }`. So PEP0's field on `\_SB.ABD.ROP1`, the
+         * `_DEP` this node cannot yet write, and the I2C addresses PML0 would
+         * need all wait on one node, and docs/08's Step 4.68 has the
+         * measurements for each of the three.
          */
         Device (UCS0)
         {
@@ -450,11 +477,6 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
                     Return (0x0F)
                 }
 
-                Method (CCVL, 0, NotSerialized)
-                {
-                    Return (CCST) /* \_SB_.CCST */
-                }
-
                 // `DPM0` and `HSEN` stood here and are gone. Both were bitra's -
                 // lisa, a52sxq and the 7280 CRD have neither, and the CRD has no
                 // URS0 at all - both were definition-only in this table, and the
@@ -462,20 +484,31 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
                 // only occurrences of `HSEN` in 770 extracted files are inside
                 // the Adreno shader compiler's own symbol,
                 // _ZNK4llvm18QGPUTargetLowering10LowerMULHSENS_..., and `DPM0`
-                // has none at all. CCVL is kept for the opposite reason: the
-                // UCSI driver does ask for it, as the string QUCSAeiBCCVL in
-                // qcusbcucsi7280.sys, and asks for it by that name.
+                // has none at all.
                 //
-                // CCVL's home is not here, though, and that is the next thing
-                // this table owes. In the family-0A shape - lisa, a52sxq and the
-                // CRD agree on all five - MUXV, CCVL, DPVL, HPDM and HPDI all
-                // hang off UCS0, and UFN0 has no CCVL at all. UFN0 carries one
-                // here (and this USB0 carries another), because both were copied
-                // from bitra. Step 4.66 added UCS0 with all five on it, so the
-                // outstanding half of the correction is now the removal: this
-                // CCVL and MUXV/CCVL/DPVL/HPDM/HPDI on UCS0 are the same five
-                // names in two places, and only the UCS0 set is where the family
-                // puts them.
+                // `CCVL` went the same way in Step 4.68 and is the one of the
+                // three that took a measurement rather than a search. The UCSI
+                // driver really does ask for that name - the string
+                // QUCSAeiBCCVL in qcusbcucsi7280.sys - so the earlier reading
+                // kept it, on the reasoning that a name the driver looks up is a
+                // name the namespace owes. What settles it is that the driver
+                // asks for it on one device and this table answered on three: in
+                // lisa the string `CCVL` occurs exactly once in the whole table,
+                // inside `UCS0`, where it stood here on UCS0, on this USB0 and on
+                // UFN0. Two of the three resolved to the same `\_SB.CCST` and
+                // were copies nothing could reach - bitra's URS0 children each
+                // carried one, and Step 4.66 added the family-0A set on UCS0
+                // without taking them out. What the driver binds is UCS0, it is
+                // `ACPI\QCOM0AA4`, and it calls its accessors on itself.
+                //
+                // `PHYC` sits below in this same device and stays, which is why
+                // the rule is not "delete the duplicates". lisa binds `PHYC`
+                // three times - on this USB0, on UFN0, and on a `USB1` this table
+                // does not have - and a pass that removed names appearing more
+                // than once would have taken it out of the two nodes that are
+                // right. The test is which device the family binds a name on, not
+                // how often it appears, and for these five the family binds them
+                // on UCS0.
                 //
                 // Two sentences stood here until Step 4.66 and both were wrong.
                 // One said UCS0 "declares `_DEP` on PEP0, which this table also
@@ -632,10 +665,10 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
                         0x000000A3,
                     }
                 })
-                Method (CCVL, 0, NotSerialized)
-                {
-                    Return (CCST) /* \_SB_.CCST */
-                }
+                // `CCVL` stood here and is gone - see USB0's comment above for
+                // the measurement. lisa's UFN0 has no `CCVL` either, and the one
+                // this device carried was a third copy of a name the family binds
+                // once, on UCS0.
 
                 Method (_DSM, 4, Serialized)  // _DSM: Device-Specific Method
                 {
