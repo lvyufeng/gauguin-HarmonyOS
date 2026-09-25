@@ -13442,3 +13442,181 @@ could be written from the board with the corpus used only for the id and the sha
 That is the same split 4.71 and 4.73 arrived at from opposite directions, and it is
 the first time a *provable* collision - not a preference, not a board-wins rule -
 settled which of two sources to take.
+
+---
+
+## Step 4.75 — the bridge the thermal framework reads through, and an id byte no SoC can supply
+
+### What this step was
+
+`ABD` is the second of the two nodes `PEP0`'s own text names. Its `_DEP` is
+`Package (One) { \_SB.IPCC }`, which Step 4.74 wrote, and its single `Field` is
+`Field (\_SB.ABD.ROP1, ...)`, which is what this step writes. So the step is the
+other half of a pair: after it, both of `PEP0`'s outward references resolve to a node
+that exists in this table, and what is left of `PEP0` is the parts that are about
+`PEP0` itself - `AGR0`, the four `?PRF` methods, the six subsystem `_STA` tests, and a
+`_SUB` that has no branch for this board.
+
+The node is small and the decision inside it is not, and the decision is about the id
+rather than the shape. `ABD` is the clearest case in this file yet of something that
+has already been true three times over - the id family belongs to the driver set and
+not to the silicon - because here the alternative reading is not merely unsupported
+but impossible: there is no SoC property to read the byte off.
+
+### The id byte is authored, and this is the block that proves it
+
+Twenty-one corpus tables carry an `ABD`. They split four ways:
+
+| id | tables |
+|---|---|
+| `QCOM0427` | 12 |
+| `QCOM0527` | 5 |
+| `QCOM1427` | 1 (surya) |
+| `QCOM0242` | 1 (caymanslm) |
+
+The split does not follow the platform. **venus and vili are both SM8350 and both
+write `0527`; Lahaina is SM8350 and writes `0427`.** So the byte is not a property of
+the SoC generation, not of the platform, and not of the board - it is whatever the
+driver package for that machine was written against, and the only way to know which
+one is to look at a driver.
+
+`qcabd.inf` answers it and answers nothing else:
+
+```
+Class=System                       ClassGuid={4d36e97d-e325-11ce-bfc1-08002be10318}
+DriverVer = 06/29/2022,1.0.3521.0000     KmdfLibraryVersion = 1.33
+PnPLockdown=1                      StartType = 3   ; SERVICE_DEMAND_START
+%ABD.DeviceDesc%=ABD_Device, ACPI\QCOM0427
+ABD.DeviceDesc="Qualcomm(R) ACPI Bridge Device"
+```
+
+One `ACPI\` id, and it is `QCOM0427`. So `0427` is taken, on the same rule every node
+here since Step 4.63 has been built on - a shipped `.inf` names the id outright - and
+for the first time that rule is not one rule among several but the only one
+available. It also happens to be the corpus's majority, 12 of 21, and that agreement
+is recorded as a coincidence and not used as a reason.
+
+### The `_DEP` is withheld, and Waipio is the exception that proves the rule
+
+Nineteen of the 21 tables write `_DEP = Package (One) { \_SB.PEP0 }`. This table has
+no `PEP0`, so the `_DEP` is not written. The corpus makes that more than a
+convenience: **Waipio is the only table in the whole corpus with no `PEP0` anywhere,
+and its `ABD` is the only one of the 21 with no `_DEP`.** The correlation between the
+dependency and the referent is total - every table that has a `PEP0` declares the
+dependency, and the one table that does not, does not. So withholding it here is not
+this file's usual "an entry naming an absent node is a lie"; it is what the corpus
+does in exactly this situation.
+
+The two other exceptions are the two this file has met before. vili adds an `_STA`
+returning `0x0F`, and Waipio replaces the `_SUB` `Alias` with a method as well as
+dropping the `_DEP`. `_STA` is written because both tables that carry one return
+`0x0F` and the nineteen that omit it are present by ACPI default, so the method costs
+one line and removes an ambiguity about whether the omission was deliberate. No
+`_CRS` is written because **none of the 21 has one** - the region is the resource, and
+the `OperationRegion` below it is what a `_CRS` would otherwise describe.
+
+### A sentence this file has been repeating, and where it was wrong
+
+The SMMU comment in `tools/acpi/gauguin.asl`, and the plan's Step 4.72 and 4.73
+passages, all say some form of **"a one-entry `_DEP` is a shape no table has."** That
+was true of the tables read when it was written and it is false in general, and this
+step is the one that measured it: `ABD`'s `_DEP` is one entry in 19 of 21 tables, and
+`PRTC`'s is one entry naming `\_SB.PMAP`, written as a *string* path rather than a
+namespace reference - a shape that is one entry and also not a reference at all.
+
+The rule lands in the same place, which is why it went unnoticed for two steps: the
+`ABD` `_DEP` is withheld, the `MMU0`/`MMU1` `_DEP`s are withheld, and every one of
+those decisions stands. What was wrong is the reason. Size is not what makes an entry
+un-writable - **what makes it un-writable is that it names a node the table has not
+got**, and `\_SB.PEP0` is exactly one step further out than `\_SB.ABD` was before this
+step. The correction is recorded in the `ABD` comment; the SMMU comment still carries
+the old wording and is owed an edit, and it is listed here rather than fixed in
+passing because a comment that was wrong in one place is worth reading before it is
+rewritten.
+
+### The region, and the channel map
+
+`ROP1` is `OperationRegion (ROP1, GenericSerialBus, Zero, 0x0100)`, byte-for-byte the
+same declaration in all 21 tables, and it is what the rest of the family reads its
+zero-configuration data out of. The corpus's `Field` declarations give it a channel
+map worth recording even though this table declares no field on it yet:
+
+| channel | client | access | size |
+|---|---|---|---|
+| `0x0001` | `PEP0` | `AttribRawBytes (0x15)` | 168 |
+| `0x0002` | `PRTC` | `AttribRawBytes (0x18)` | 192 |
+| `0x0003` | `PMGK` | `AttribRawBytes (0x30)` | - |
+| `0x0004` | `PMGK` | `AttribRawBytes (0x40)` | - |
+
+`PRTC` is `ACPI000E`, the standard Time and Alarm Device, which Windows drives
+in-box - so this table's `ABD` is also what the RTC is waiting on, and channel
+`0x0002` is where the wait ends. Channel `0x0004` is on Kailua and Waipio only.
+
+**Kailua is the one table that writes `0x1A` for `PEP0`'s channel** where the other
+twenty write `0x01`. Nothing in this step explains that and it is recorded as a
+reading. The two are not adjacent, not a power of two apart, and not related by any
+transformation the other twenty channels show; a single dissenting table out of 21 is
+not enough to decide whether it is an erratum in that table, a property of that
+SoC, or a genuine second channel, and guessing would put a wrong number in a region
+whose contents are written by the device and read by the OS.
+
+What `AVBL` is for is worth stating because it bounds the node's value: its readers in
+the family are the **cameras**, `TSC1` and `NFCD`. The cameras are one of the two
+things this port cannot drive at all. So `ABD` is written here for `PEP0` - as the
+thing its `Field` resolves to - and not for any of `ABD`'s own three clients, one of
+which is unreachable by design and the other two of which are not in this table.
+
+### What was verified
+
+- `iasl`: 5,364 bytes, **242 opcodes**, **340 named objects**, 0 Errors, 24 Warnings,
+  42 Remarks, 107 Optimizations. Against 4.74's 5,280 / 238 / 332, the delta is the
+  node: four opcodes and eight named objects, the `OperationRegion`, the `Name`, the
+  two `Method`s, the `Alias` and the `_HID`.
+- The devices went 40 to 41 (28 `Device` plus 13 `ThermalZone`), and the file's own
+  md5 is `f9888887692b1f4f65796c1a873c8fa6`, identical in the source, the generated
+  `uefi/` copy and the installed `work/uefi/Mu-Silicium/` copy - the three-copy check
+  the generator chain needs, since a skipped `make_uefi_platform.py` installs the
+  previous table silently.
+- The DSDT read back out of the built FD at FVMAIN offset `0x54d4c8` is 5,364 bytes
+  and hashes `efb48f9f…f6b74a`, the same as the compile. Same offset for a fifth step
+  running, because the table grows inside its own FFS file.
+- **`SSDT`, `APIC`, `FACP`, `FACS` and `GTDT` are content-identical to 4.74's, a
+  seventh consecutive step** - `APIC` `93bafa3b9318910e` at 724 bytes, `GTDT`
+  `723f7568abd1aa7e` at 156, `SSDT` `b388c764d05d5f96` at 61, `FACP`
+  `f8fa4839f1cbac2a` at 276, `FACS` `8a2f3c6d08a63700` at 64. `FACP` and `FACS` both
+  report their checksums as invalid and that is the documented expected state before
+  `AcpiTableDxe` runs - it writes the DSDT and FACS addresses into `FACP` and
+  recomputes it, and `FACS` has no checksum field at all.
+- `FVMAIN.Fv` is still `0x704000` (`7,356,416`), sha
+  `d9f1e68de9be2dd773cddfd7106487ba876fd36b4b841ba137db452f6076261c`, and
+  `FVMAIN_COMPACT` is unchanged at 1,089,206 used - Step 4.73a's block-rounding
+  correction still holding rather than re-asserted.
+- The build printed `0048 Images Verified` before the benign
+  `ValueError: DTB image must not be empty.` from `mkbootimg.py`, which is the known
+  rc=1 at the end of every build here.
+- The three payloads are `b9948a03…` (silicon/gzip), `40f0a769…` (stock/gzip) and
+  `0792c2e1…` (stock/none). All three match GenFv's map at **123 offsets and GUIDs,
+  zero mismatches**; all three return rc=0 from
+  `probe-fingerprint.py --expect P2FreeWhy`; and `fv-inventory.py --acpi` on one of
+  them reports six tables with the DSDT at `0x0054d4c8`, 5,364 bytes, checksum valid.
+  That last check had to be run against a *4.75* payload, which is why the payloads
+  were rebuilt before it: the image left in `work/out/p2-variants` was still the 4.74
+  build, and reading that back would have proved nothing about this one - the
+  same trap Step 4.74 recorded, met again one step later in the same place.
+- The census, re-run with the fixed `ThermalZone` alternation:
+  **`QCOM0427` claimed by `inf-7280/qcabd.inf`, bound to `ABD`**, 41 `_HID`/`_CID`
+  declarations and 27 distinct, **25 claimed**, with the same two unclaimed as in
+  every step since 4.70: `QCOM0A8B` (UFS) and `QCOM24A5`. The zone labels still read
+  `TZ0`-`TZ13` and not `IPCC`.
+- The device is absent from this host - `adb devices` and `fastboot devices` are both
+  empty - so nothing here is a hardware reading. The payload resident in `boot` is
+  still the **4.74** set and its panel reading is **still owed** under 先读屏，再刷下一次.
+- The `_DEP` correction above is three comment blocks in the same file, so the step
+  closes on the check Step 4.67 established for exactly this: after the edits the
+  three copies were regenerated and re-synced, `iasl` re-run, and the AML is
+  **`efb48f9f…f6b74a` again, byte for byte** - 5,364 bytes, 242 opcodes, 340 named
+  objects. Same output, different source, which is what makes the edit comment-only
+  rather than an assertion that it is. It also means the payload hashes above still
+  describe this source, and rebuilding them would produce different bytes for the
+  usual reason (`__DATE__`/`__TIME__` in `Sec.efi`) without describing different
+  firmware.

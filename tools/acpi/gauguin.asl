@@ -880,9 +880,14 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
          * defines; the reference tables leave it out and are present by default.
          *
          * Deliberately not added here, with the reason each time. PMAP exists in
-         * 19 tables and the 7280 set claims QCOM0A2C, but its _DEP names
-         * \_SB.ABD and \_SB.SCM0 and neither node is in this file, so it would
-         * be a dangling dependency. PMBM (QCOM0A2A) and PMGK (QCOM0A8E) are in
+         * 19 tables and the 7280 set claims QCOM0A2C, but its _DEP is a
+         * three-entry package naming \_SB.PMIC, \_SB.ABD and \_SB.SCM0, and two
+         * of the three were absent from this file, so it would have been a
+         * dangling dependency. Step 4.75 wrote ABD, so one entry is left:
+         * \_SB.SCM0, which is a device *name* and not only an id, and whose id
+         * in the 0A family the corpus does not carry - though qcscm.inf claims
+         * ACPI\QCOM04DD and no other id, so SCM0 is reachable the way ABD was,
+         * by taking the driver's spelling rather than a corpus index. PMBM (QCOM0A2A) and PMGK (QCOM0A8E) are in
          * the corpus and are NOT claimed by the 7280 set, so adding them would
          * put two devices in Device Manager that nothing binds. PML0
          * (QCOM0AD3) is claimed, but it is an I2C-attached PMIC - lisa's _CRS
@@ -1710,7 +1715,12 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
         // writes no engine _DEP at all, for the same reason the IC nodes above
         // do not: every family shape here needs PEP0, which is absent, and
         // GIO0, the one reference this table could resolve, is not written
-        // alone because a one-entry _DEP is a shape no table in the family has.
+        // alone because the resulting entry would be the only one there and
+        // the family's every engine _DEP has two or three. (Not for the size:
+        // Step 4.75 measured one-entry _DEPs in the corpus - ABD's in 19 of 21
+        // tables. An entry is un-writable when its referent is missing, and
+        // GIO0's is not, so this one is a preference about ordering and is
+        // recorded as one.)
         // The consequence is worth stating rather than hiding - qci2c7280.inf
         // and qcgpi7280.inf are both in the Windows driver set, so once those
         // two bind, nothing in this table orders the GPI DMA ahead of the
@@ -1882,10 +1892,16 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
         // flip first.
         //
         // Three things every corpus SMMU carries are deliberately not here. The
-        // _DEP is {PEP0} in all 40 nodes, PEP0 is absent, and a one-entry _DEP
-        // is a shape no table has - the rule the QUP engines and the QGP nodes
-        // above already follow, and the one thing that changes for all of them
-        // on the day PEP0 lands. _STA is absent from 19 of the 20 MMU0s and
+        // _DEP is {PEP0} in all 40 nodes, PEP0 is absent, and the entry names a
+        // node this table has not got, so it cannot be written - the rule the
+        // QUP engines and the QGP nodes above already follow, and the one thing
+        // that changes for all of them on the day PEP0 lands. (This used to add
+        // "and a one-entry _DEP is a shape no table has", which was true of the
+        // tables read when it was written and is false: Step 4.75 measured ABD's
+        // _DEP at one entry in 19 of 21 tables and PRTC's at one entry naming
+        // \_SB.PMAP as a string. The conclusion is unchanged and the reason was
+        // wrong - size is not what makes an entry un-writable, the missing
+        // referent is. See the ABD node below for the reading.) _STA is absent from 19 of the 20 MMU0s and
         // from 9 of the 20 MMU1s; where it is present it is a board's decision -
         // nine MMU1s return 0x0F, which says what leaving the method out says,
         // and three nodes return Zero, alioth's MMU1 and vili's MMU0 and MMU1,
@@ -2301,6 +2317,134 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
             }
         }
 
+        // ABD - the ACPI Bridge Device: the second of the two nodes PEP0's own
+        // text names. PEP0's _DEP names IPCC and its single Field names this
+        // device's region, so the two are read together and are placed
+        // together; after this step neither reference is missing from this
+        // table.
+        //
+        // What it is comes from the driver's own description rather than from
+        // the three letters: qcabd.inf calls itself the INF file for "the
+        // Driver Frameworks ABD Driver" and gives ABD.DeviceDesc as
+        // "Qualcomm(R) ACPI Bridge Device". It installs qcabd.sys as a KMDF
+        // 1.33 kernel service, SERVICE_DEMAND_START, class System, and claims
+        // exactly one hardware id - ACPI\QCOM0427, the only claim of any ABD id
+        // among the 112 .inf files in this set.
+        //
+        // The id's family byte is authored and not silicon, and this is the
+        // second time a whole block has turned out that way. The same node is
+        // QCOM0427 in ten tables (lisa and a52sxq among them), QCOM0527 in
+        // eight, QCOM1427 in surya and QCOM0242 in caymanslm, where even the
+        // index moves; and the corpus splits inside one SoC, because venus and
+        // vili are SM8350 and write 0527 while Lahaina is SM8350 and writes
+        // 0427. Step 4.73 met the same thing from the other end, when a52q -
+        // Bitra like gauguin - wrote family 08 for its thermal zones and no
+        // driver in this set claimed any of those ids. So gauguin takes
+        // QCOM0427 because a shipped driver claims it and for no other reason,
+        // and the byte differing from the one PEP0 will carry (0A, as lisa's
+        // does) is not a problem to be resolved: lisa's table holds QCOM0A17
+        // and QCOM0427 at once, so the mixed pair is attested in the closest
+        // sibling rather than invented here.
+        //
+        // The shape is the corpus's and it is 19 nodes of 21 identical:
+        // Name (_UID, Zero), Alias (\_SB.PSUB, _SUB), an
+        // OperationRegion (ROP1, GenericSerialBus, Zero, 0x0100) whose line is
+        // byte-for-byte the same in all 21 tables, Name (AVBL, Zero), and a
+        // _REG that sets AVBL when Arg0 is 0x09 - the GenericSerialBus address
+        // space id, so the method is this device recording whether the OS has
+        // opened its region. Two tables differ: vili adds Method (_STA)
+        // returning 0x0F, and Waipio replaces the Alias with a _SUB method
+        // returning \_SB.PSUB, drops the _DEP, and adds the same _STA.
+        //
+        // The _DEP is withheld, on the rule that has governed since the SMMUs:
+        // PEP0 is not in this table, and a _DEP entry is a namespace path the
+        // OS resolves when it loads the device - an entry that does not
+        // resolve is not a hint, it is a failure. 19 of the 21 tables write
+        // exactly Name (_DEP, Package (One) { \_SB.PEP0 }), and the exception
+        // is the one that matters: Waipio is the only table in the corpus with
+        // no PEP0 anywhere in it, and its ABD carries no _DEP either. That is
+        // this table's situation, so what is written here is the form a
+        // shipped table writes when the dependency is absent.
+        //
+        //   A correction, because the comment above the SMMUs gives that rule
+        //   a justification that is not true. It says "a one-entry _DEP is a
+        //   shape no table has". ABD's is one entry in 19 tables, and PRTC's is
+        //   one entry naming \_SB.PMAP. The shape is common; what makes an
+        //   entry un-writable is that it names a node this table has not got.
+        //   The rule lands in the same place either way and the reason does
+        //   not, and a reason that is wrong is worse than a short one.
+        //
+        // _STA is written, returning 0x0F, because the two corpus tables that
+        // carry one both return 0x0F while the nineteen that omit it are
+        // present by ACPI's default - so the two forms describe the same
+        // device, and this file's convention on the devices it defines is to
+        // say it outright.
+        //
+        // ROP1 is not private to PEP0, which is the part worth knowing before
+        // the clients arrive. The address in each client's Connection is a
+        // channel, and the corpus is consistent about which device owns which:
+        //
+        //   0x0001  PEP0   AttribRawBytes (0x15)  FLD0, 168 bits
+        //   0x0002  PRTC   AttribRawBytes (0x18)  FLD0, 192 bits
+        //   0x0003  PMGK   AttribRawBytes (0x30)
+        //   0x0004  PMGK   AttribRawBytes (0x40)  (Kailua and Waipio only)
+        //
+        // PRTC is the one that matters most, and it is a device Windows already
+        // has a driver for: its _HID is ACPI000E, the standard Time and Alarm
+        // Device, and its _GRT and _SRT read and write the real time over
+        // channel 0x0002. None of the three clients is in this table yet -
+        // PRTC's _DEP names PMAP as well as this node, PMGK is QCOM0A8E and no
+        // .inf in this set claims it, and PEP0 is the remaining large node - so
+        // what this step unblocks is the reference and not the client.
+        //
+        // The one table that differs on PEP0's channel is Kailua, which writes
+        // AttribRawBytes (0x1A) - 26 bytes - against the same 168-bit field the
+        // other 20 write as 0x15, 21 bytes. 0x15 is the count that matches the
+        // field exactly and Kailua's field is 168 bits too, so its 26 is a
+        // fetch that reads past what the field exposes. Recorded rather than
+        // resolved, because PEP0 is not written yet; when it is, 0x15 is this
+        // board's count, on the rule that the field's length is the only number
+        // of the two with a reason behind it.
+        //
+        // AVBL is read by nothing in this table, and could not be: in the
+        // corpus its readers are the cameras (CAMS, CAMF, CAMI, CAMT, CAMU),
+        // TSC1, NFCD and - in venus alone - PCI0 and PCI1, each as
+        // If (\_SB.ABD.AVBL) inside a block keyed on PGID. Step 4.70 recorded
+        // that the cameras are one of the two things this port cannot drive.
+        // The name and the method are written anyway, because all 21 tables
+        // carry them and because _REG is the OS's own handshake: leaving it out
+        // would be this table deciding it knows better than the driver about
+        // how its region gets opened.
+        //
+        // No _CRS, which is the corpus's answer and not an omission - none of
+        // the 21 ABD nodes has one. The numbers 0x0001, 0x0002 and 0x0003 in
+        // the clients' Connections are channels, and the resource source in
+        // each is "\\_SB.ABD" itself: this device is the bus and not a device
+        // on one, which is why the table has no window to give it and why the
+        // driver that binds it is one whose entire description is "ACPI Bridge
+        // Device".
+        Device (ABD)
+        {
+            Method (_STA, 0, NotSerialized)  // _STA: Status
+            {
+                Return (0x0F)
+            }
+
+            Name (_HID, "QCOM0427")  // _HID: Hardware ID
+            Alias (^PSUB, _SUB)  // _SUB: Subsystem ID
+            Name (_UID, Zero)  // _UID: Unique ID
+
+            OperationRegion (ROP1, GenericSerialBus, Zero, 0x0100)
+            Name (AVBL, Zero)
+            Method (_REG, 2, NotSerialized)  // _REG: Region Availability
+            {
+                If ((Arg0 == 0x09))
+                {
+                    AVBL = Arg1
+                }
+            }
+        }
+
         // IPCC - the inter-processor communication controller, which is the one
         // device PEP0's own _DEP names and therefore the first link of the chain
         // every remaining _DEP in the family begins with. Unlike the last four
@@ -2437,9 +2581,11 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
         // that names a device this table does not have is worse than no _TZD.
         // _DEP is the one every corpus zone carries and the one every omitted
         // node here is waiting on: {PEP0} alone on all but the PMIC group, and
-        // a one-entry _DEP is a shape no table has - the same rule the QUP
+        // the referent is a node this table has not got - the same rule the QUP
         // engines, the QGP nodes and the two SMMUs already follow, and the same
-        // thing that changes for all of them on the day PEP0 lands.
+        // thing that changes for all of them on the day PEP0 lands. (This used
+        // to read "and a one-entry _DEP is a shape no table has", which Step
+        // 4.75 falsified - see the ABD node above.)
         //
         // Four groups are deliberately not here yet, and each is its own
         // measurement: the PMIC group 0AC8/0AC9/0ACB, which is the only one
