@@ -323,7 +323,16 @@ attach instead of a capability blob on the controller that owns it. Step 4.91 wr
 of its own — it is the one step here whose subject is the evidence rather than the firmware,
 and it moved the counts that justify Step 4.90 into the repository as
 `tools/acpi-usb-pair-census.py`, which is where they can be asked again; seven of them
-changed when it did, which is the argument for the tool rather than the number. 2–4 are not
+changed when it did, which is the argument for the tool rather than the number. Step 4.92
+writes `ADC1` (`QCOM0A11`, the one id `qcadc7280.inf` claims, binding the service `qcADC`) as
+the last device of `_SB` — the node that waits on nothing this table has not already got,
+because both of its `_DEP`s and the one resource provider its `_CRS` names are in it, and the
+first node here whose twelve bytes of vendor data had to be answered by the corpus rather than
+by the board, since no firmware partition on this device carries a DSDT and the driver reads
+its own `ADC1.bin`; the tool that answers for them is `tools/acpi-adc-blob-census.py`, and its
+20 tables say the first of the two moving bytes travels with the pin pair and the second with
+the `_HID`, which is why `0x34` is written — `0x35` being what one byte's difference would
+give. 2–4 are not
 started, and none of them can
 be assessed until P2 hands off to BDS.**
 

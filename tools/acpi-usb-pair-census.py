@@ -408,7 +408,8 @@ def main():
         print("THE COUNTS BELOW EXCLUDE THE FILE BEING WRITTEN.")
         print()
     report(census(keep, cache),
-           f"corpus less our own table ({len(keep)} tables)", args.list)
+           ("corpus including our own table" if args.keep_self
+            else "corpus less our own table") + f" ({len(keep)} tables)", args.list)
     if drop_t:
         print()
         report(census(keep + drop_t, cache),

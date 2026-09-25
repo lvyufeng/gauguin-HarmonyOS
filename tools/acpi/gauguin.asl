@@ -4742,5 +4742,182 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
                 }
             })
         }
+
+        // ADC1 is the analog-to-digital converter block, and it is the first
+        // node here written because the shipped driver set would otherwise have
+        // nothing to claim rather than because the corpus has one. qcadc7280.inf
+        // claims exactly one hardware id, ACPI\QCOM0A11, under the service
+        // qcADC - "Qualcomm(R) Analog-to-Digital Converter Device" - and no
+        // other id in the 112 .inf files names an ADC: of the nine _HIDs the
+        // corpus's ADC declarations carry, not one appears in any of them.
+        //
+        // It is a node that waits on nothing. Its two dependencies and its one
+        // resource provider are all in this table already - \_SB.SPMI,
+        // \_SB.PMIC, and the "\\_SB.PM01" GPIO controller its _CRS names - so
+        // it can be written before PEP0 arrives rather than after. It is also
+        // the node this file's own thermal comment has been waiting for: four
+        // groups of zones are deliberately absent there, and one of them is the
+        // ADC group 0A5F/0A61/0A63, "which _DEPs two devices this table has not
+        // got" - PEP0 and this one. That group is still not writable, and what
+        // changes here is that only one of its two referents is missing.
+        //
+        // One instance, not three, and that is a fact about the id rather than
+        // about the board. gauguin's device tree has three adc@3100 blocks -
+        // pm6150l's and pm7250b's, both qcom,spmi-adc5, at SPMI slots 4 and 2,
+        // and pmk8350's, qcom,spmi-adc7, at slot 6 - but a DSDT device is the
+        // unit a driver binds and not a block on the die. The corpus declares
+        // QCOM0A11 in two tables and in both it is the only ADC; the four
+        // tables that write ADC2 and ADC3 use QCOM0512 or QCOM2511 for all
+        // three instances, the two that write two use QCOM0812 or QCOM1412. The
+        // driver package says the same thing in its own terms: it ships one
+        // resource file, ADC1.bin, registered once, at HKR,0\Default_Resources.
+        //
+        // The twelve bytes of VUSR and VBTM cannot be read off this board, and
+        // the reason belongs next to them. Nothing on the device states them:
+        // all 107 partitions this device's own image set carries were scanned
+        // for the DSDT signature and four hold the four letters without holding
+        // a table - a kernel string in boot and in recovery, "DT/ACPI
+        // DSDT/board file", an alphabetical run inside one of super's system
+        // images, and two coincidences inside modem's code and its compressed
+        // blobs - while every partition that could carry firmware does not
+        // mention the word at all: abl, uefisecapp, xbl, tz, imagefv, toolsfv,
+        // catefv, catecontentfv, vm-linux, qupfw, core_nhlos, dtbo, devcfg. So
+        // there is no stock table to copy and no panel to read.
+        // And the driver does not take them from ACPI first: it carries its own
+        // per-board file and points at it, Resources_Dir = 13 with
+        // Path = %13%\ADC1.bin. What is written here is therefore the corpus's,
+        // and the corpus is what has to answer for it.
+        //
+        // What the corpus does with those bytes is measurable, and
+        // tools/acpi-adc-blob-census.py is what measures it. 20 of the 65 tables
+        // declare an ADC, 35 declarations in all, and the same seven bytes -
+        // 8E 13 00 01 00 C1 02 - open all 70 twelve-byte buffers; bytes 7 and 8
+        // are the two that move, and which of them travels with what is what the
+        // variation answers rather than what this file assumes.
+        //
+        // Byte 7 travels with the pin pair, not with the instance's ordinal.
+        // 0x00 goes with pins 0x0020/0x0028, 0x02 with 0x0130/0x0138 and 0x04
+        // with 0x01D0/0x01D8 - and the two-ADC tables are what proves the
+        // reading, because they have no middle pin pair and no middle value:
+        // their second instance carries 0x04 where the three-ADC tables' second
+        // carries 0x02. The value written here is 0x00 with the pair
+        // 0x0020/0x0028, which is the first instance on all 18 tables that write
+        // that pair. gauguin's three blocks sit at slots 2, 4 and 6 and no table
+        // writes any of those, which is a second reason not to read the byte as
+        // a slot.
+        //
+        // Byte 8 travels with the _HID and with nothing else in the 20 tables.
+        // It is 0x31 in all 33 VUSR buffers, and in VBTM it is 0x34 on the nine
+        // tables whose id is QCOM0221, QCOM0911, QCOM1A11 or QCOM0A11 against
+        // 0x35 on the nine whose id is QCOM0512, QCOM0812, QCOM1412 or
+        // QCOM2511. The split falls out by id and not by SoC, which matters
+        // here: this board's own sibling table is bitra's, family 04, and it
+        // declares no ADC at all. Kailua's two tables are the only others and
+        // they write 0x90 and 0x91 on a different pin pair.
+        //
+        // So 0x34 is written, and it is not a coin flip between two numbers: it
+        // is what both tables carrying this id write, and it is the one value
+        // among the corpus's that this board's own tree also gives one of its
+        // three blocks - 0x34 is pmk8350's adc-tm@3400 interrupt, where 0x35 is
+        // the adc-tm@3500 of pm6150l's and pm7250b's, and 0x31, which all 33
+        // VUSR buffers carry, is the adc@3100 interrupt of all three. That
+        // correspondence is recorded and not leaned on: what either byte means
+        // is not established here, the driver reads its own ADC1.bin, and this
+        // blob is the platform's hint. 0x35 is what would be written instead if
+        // the node were ever found to describe one of the PM6150-family blocks,
+        // and the difference is one byte.
+        //
+        // The declared length does not close and is not repaired. Each buffer is
+        // twelve bytes and opens 8E 13, so it states its own length as 0x13, 19;
+        // each is then concatenated with the ten-byte NAM, "\\_SB.SPMI", to
+        // build the object the driver is handed - 22 bytes against a declared
+        // 19. All 35 declarations do that arithmetic the same way, 34 of them
+        // through the four concatenations copied here and caymanslm through six,
+        // with a third blob (FGRR) in the middle. A repair no table makes would
+        // be this file's invention, so the four are copied and the arithmetic is
+        // recorded as open.
+        //
+        // The two GPIO lines are the corpus's as well: 17 of the 20 write the
+        // same pair, 0x0020 and 0x0028 on \_SB.PM01 with vendor data 0x02, and
+        // the eighteenth is caymanslm, which adds a third at 0x0168. Kailua's
+        // pair is 0x009F/0x00A0. The vendor data byte is repeated unchanged and
+        // not interpreted, which is BTNS's rule for a blob that does not move
+        // when the hardware does: 0x02 is one byte of a descriptor whose fields
+        // nothing in this repository decodes.
+        //
+        // _STA returning 0x0F is this file's convention, recorded at ABD: it is
+        // ACPI's own default, and saying it outright is what this file does on
+        // the devices it defines. The corpus's two QCOM0A11 tables omit the
+        // method and vili, the one ADC that writes one, returns 0x0F as well.
+        // _UID is Zero, as on all 20 first instances, and there is no _ADR on
+        // any of the 35 declarations - the device is id-addressed throughout the
+        // corpus.
+        //
+        // The _SUB alias is the corpus's \_SB.PSUB in all 35 declarations, which
+        // is the same object this file spells ^PSUB on the 23 devices that hang
+        // off _SB directly, this one among them; PMAP's comment has the rule.
+        //
+        // Where it goes is the corpus's answer too: the block is the last device
+        // declared in all 20 tables, and in 10 of them the last declaration of
+        // any kind. It is written last here, after BTNS.
+        Device (ADC1)
+        {
+            Name (_DEP, Package (0x02)  // _DEP: Dependencies
+            {
+                \_SB.SPMI,
+                \_SB.PMIC
+            })
+            Name (_HID, "QCOM0A11")  // _HID: Hardware ID
+            Name (_UID, Zero)  // _UID: Unique ID
+            Method (_STA, 0, NotSerialized)  // _STA: Status
+            {
+                Return (0x0F)
+            }
+
+            Alias (^PSUB, _SUB)  // _SUB: Subsystem ID
+            Method (_CRS, 0, NotSerialized)  // _CRS: Current Resource Settings
+            {
+                Name (INTB, ResourceTemplate ()
+                {
+                    GpioInt (Edge, ActiveHigh, ExclusiveAndWake, PullUp, 0x0000,
+                        "\\_SB.PM01", 0x00, ResourceConsumer, ,
+                        RawDataBuffer (0x01)  // Vendor Data
+                        {
+                            0x02
+                        })
+                        {   // Pin list
+                            0x0020
+                        }
+                    GpioInt (Edge, ActiveHigh, ExclusiveAndWake, PullUp, 0x0000,
+                        "\\_SB.PM01", 0x00, ResourceConsumer, ,
+                        RawDataBuffer (0x01)  // Vendor Data
+                        {
+                            0x02
+                        })
+                        {   // Pin list
+                            0x0028
+                        }
+                })
+                Name (NAM, Buffer (0x0A)
+                {
+                    "\\_SB.SPMI"
+                })
+                Name (VUSR, Buffer (0x0C)
+                {
+                    /* 0000 */  0x8E, 0x13, 0x00, 0x01, 0x00, 0xC1, 0x02, 0x00,
+                    /* 0008 */  0x31, 0x01, 0x00, 0x00
+                })
+                Name (VBTM, Buffer (0x0C)
+                {
+                    /* 0000 */  0x8E, 0x13, 0x00, 0x01, 0x00, 0xC1, 0x02, 0x00,
+                    /* 0008 */  0x34, 0x01, 0x00, 0x00
+                })
+                Concatenate (VUSR, NAM, Local1)
+                Concatenate (VBTM, NAM, Local2)
+                Concatenate (Local1, Local2, Local3)
+                Concatenate (Local3, INTB, Local0)
+                Return (Local0)
+            }
+        }
     }
 }

@@ -17609,3 +17609,208 @@ in all 40 `URS0` instances with no exceptions at all, where 4.90 could only say
   is **still owed** under 先读屏，再刷下一次. Step 4.91 archives
   `work/out/p2-4.91` as a copy of 4.90's payloads and does not touch the one on
   the device.
+
+## Step 4.92 — the twelve bytes the corpus has to answer for, and a byte that travels with the pin pair
+
+### What this step was
+
+Wrote `ADC1` — the analog-to-digital converter block, `_HID` `QCOM0A11` — as the last
+device of `Scope (_SB)`, after `BTNS`, and wrote the tool that decides the twelve bytes in
+the middle of it. It is the first node here whose body is not a transcription of something
+the board states: the block is on this board three times over, the id is in the shipped
+driver set exactly once, and the vendor data its `_CRS` hands over is on neither — no
+partition of this device's image set carries an ACPI table at all, and the driver does not
+read ACPI first. So the bytes are the corpus's, and the step is mostly about which part of
+the corpus, and about being able to ask again.
+
+The two halves are separable and worth separating. What the *node* is — one `_DEP`, one
+`_HID`, one `_UID`, a `_STA` that states ACPI's own default, a `_SUB` alias, two `GpioInt`
+lines and four `Concatenate`s — is a form this file has already written twenty times. What
+the *bytes* are is not a form, and `tools/acpi-adc-blob-census.py` is what turns them from
+a claim into a reading.
+
+### Why the id is `QCOM0A11`, and why one instance
+
+`qcadc7280.inf` claims exactly one hardware id, `ACPI\QCOM0A11`, under the service `qcADC`
+— "Qualcomm(R) Analog-to-Digital Converter Device" — and it is the only id in the 112
+`.inf` files of the 7280 set that names an ADC. That was checked the other way round as
+well: the nine `_HIDs` the corpus's 35 ADC declarations carry (`QCOM0221`, `QCOM0512`,
+`QCOM0812`, `QCOM0911`, `QCOM0A11`, `QCOM0C11`, `QCOM1412`, `QCOM1A11`, `QCOM2511`) were
+each grepped across all 112 files, and only `QCOM0A11` matches anything. Eight of the nine
+match nothing at all, so this is not a choice between candidates.
+
+One instance rather than three, and that is a fact about the id rather than about the
+board. gauguin's device tree does carry three `adc@3100` blocks — a `qcom,spmi-adc5` pair
+at SPMI slave ids 4 and 2 (pm6150l's and pm7250b's, each with an `adc-tm@3500` beside it)
+and a `qcom,spmi-adc7` one at slave 6 (pmk8350's, with `adc-tm@3400`) — but a DSDT device
+is the unit a driver binds, and the corpus never splits one id across instances of the
+same block. The corpus declares `QCOM0A11` in two tables and in both it is the only ADC;
+the four tables that write `ADC2` and `ADC3` use `QCOM0512` or `QCOM2511` for all three
+instances; the two that write two use `QCOM0812` or `QCOM1412`. The driver package says
+the same thing in its own terms: it ships one resource file, `ADC1.bin`, registered once,
+at `HKR,0\Default_Resources`.
+
+### The twelve bytes, and how the reading is made
+
+The first reading of these bytes was wrong in a way worth keeping, and it is why the tool
+exists as a file rather than as a paragraph here. iasl writes a twelve-byte `Name` as
+`Name (VUSR, Buffer (0x0C)` and closes the *outer* parenthesis only after the buffer's
+closing brace, so a pattern that expects `Buffer (0x0C))` matches **nothing** — not a few
+rows fewer, none. The tool's docstring carries that sentence and the regex that replaces
+it.
+
+Its unit is the ADC **declaration**, and the blobs are read by byte rather than by field
+name, because bytes 0-6 are the same seven in every one of them and bytes 7 and 8 are the
+two that move. What those two travel with is the question, and the corpus answers it:
+
+```
+                                   not counting this table   counting it
+tables declaring an ADC                     20 of 65            21 of 66
+ADC declarations                            35 (20/9/6)         36 (21/9/6)
+twelve-byte blobs                           70, 9 distinct      72, 9 distinct
+bytes 0-6                                   8E 13 00 01 00 C1 02  (all 70)
+byte 7                        0x00 40, 0x02 12, 0x04 18      0x00 42, 0x02 12, 0x04 18
+byte 8, all instances         0x31 33, 0x34 9, 0x35 24, 0x90 2, 0x91 2
+NAM                           "\\_SB.SPMI" 35            36
+_SUB alias                    \_SB.PSUB 35               35 + ours
+the block is the last device  20 of 20                   21 of 21
+```
+
+**Byte 7 travels with the pin pair, not with the instance's ordinal.** All 20 `ADC1`s
+carry 0x00 and 17 of them write pins 0x0020/0x0028 on `\_SB.PM01` (caymanslm adds a third
+at 0x0168; Kailua's two write 0x009F/0x00A0). The second and third instances carry 0x02
+with 0x0130/0x0138 and 0x04 with 0x01D0/0x01D8. What proves the pairing is not the
+three-instance tables but the two-instance ones: a52q and miatoll (`QCOM0812`) and surya
+(`QCOM1412`) have no middle pin pair and no middle value — their second instance carries
+0x04 where mh2's, cepheus's, nabu's, pipa's, vayu's and alioth's second carries 0x02. A
+reading of byte 7 as "the instance's ordinal" survives the six three-ADC tables and dies
+on these three.
+
+**Byte 8 travels with the `_HID`.** It is 0x31 in all 33 `VUSR` buffers, and in `VBTM` it
+splits by id with no exceptions: 0x34 on the nine `ADC1`s whose id is `QCOM0221`,
+`QCOM0911`, `QCOM1A11` or `QCOM0A11` (caymanslm; renoir and Cedros_IDP; lemonade, venus,
+vili and Lahaina_MTP; lisa and a52sxq) against 0x35 on the nine whose id is `QCOM0512`,
+`QCOM0812`, `QCOM1412` or `QCOM2511` (mh2, cepheus, nabu, pipa and vayu; a52q and miatoll;
+surya; alioth). Kailua's two are the only others and they write 0x91 on a different pin
+pair. The split falls out by id and not by SoC, which matters here: this board's own
+sibling table is bitra's, family 04, and it declares no ADC at all.
+
+So 0x34 is written, and it is not a coin flip between two numbers — it is what both tables
+carrying this id write. The one corroboration the board itself offers is recorded beside it
+and not leaned on: 0x34 is pmk8350's `adc-tm@3400` interrupt in gauguin's own device tree,
+0x35 is the `adc-tm@3500` of the pm6150l and pm7250b blocks, and 0x31, the byte all 33
+`VUSR` buffers carry, is the `adc@3100` interrupt of all three. What either byte *means* is
+not established here, the driver reads its own `ADC1.bin`, and this blob is the platform's
+hint. 0x35 is what would be written instead if the node were ever found to describe one of
+the PM6150-family blocks, and the difference is one byte.
+
+### What the corpus does not close
+
+Each buffer is twelve bytes and opens `8E 13`, so it declares its own length as 0x13, 19.
+Each is then concatenated with the ten-byte `NAM`, `"\_SB.SPMI"`, to build the object the
+driver is handed — 22 bytes against a declared 19. All 35 declarations do that arithmetic
+the same way, 34 of them through the four concatenations copied here and caymanslm through
+six, with a third blob (`FGRR`) in the middle. A repair that no table makes would be this
+file's invention, so the four are copied and the arithmetic is recorded as open rather than
+corrected.
+
+The two `GpioInt` lines are the corpus's as well: 17 of the 20 write 0x0020 and 0x0028 on
+`\_SB.PM01` with vendor data 0x02, and the eighteenth is caymanslm with its third line.
+Kailua's pair is 0x009F/0x00A0. The vendor data byte is repeated unchanged and not
+interpreted, which is `BTNS`'s rule for a blob that does not move when the hardware does.
+
+### What the node waits on, and where it goes
+
+Nothing. Its two `_DEP`s and its one resource provider are all in this table already —
+`\_SB.SPMI`, `\_SB.PMIC`, and the `"\\_SB.PM01"` GPIO controller its `_CRS` names — so it
+is the first node since `PMAP` that could be written without waiting for `PEP0`. It is also
+the node this file's own thermal comment has been waiting for: four groups of zones are
+deliberately absent there and one of them is the ADC group `0A5F`/`0A61`/`0A63`, "which
+`_DEP`s two devices this table has not got". That group is still not writable — it `_DEP`s
+`PEP0` as well — and what changes is that only one of its two referents is now missing.
+
+Placement is the corpus's answer and not a preference: the block is the last device
+declared in 20 of the 20 tables, and in 10 of them the last declaration of any kind. So it
+is written last here, after `BTNS`, at depth 2 under `Scope (_SB)`. The rest of the form is
+this file's own convention where it has one: `_STA` returning 0x0F, which is ACPI's default
+and which the two `QCOM0A11` tables omit while vili, the one ADC that writes one, returns
+0x0F as well; `_UID` `Zero`, as on all 20 first instances; and no `_ADR` anywhere, because
+the device is id-addressed in all 35 declarations. `_SUB` is `\_SB.PSUB` in all 35, spelled
+here as `Alias (^PSUB, _SUB)` where the corpus spells the full path — the same object, and
+`PMAP`'s comment has the rule.
+
+### The ladder
+
+- `tools/acpi/gauguin.asl` is **4,923 lines**, 276,056 bytes, md5
+  `acb008dc3385bcc28ddabaa0478e43ed` (from 4,746 lines and 265,746 bytes at
+  `734b99faf6ffe7cfec7041bf504410bb` — +177 lines, +10,310 bytes, of which 117 lines are
+  the node's comment and 59 the node), and all three copies are the same file:
+  `tools/acpi/`, `uefi/Silicium-ACPI/Platforms/Xiaomi/gauguin/` and
+  `work/uefi/Mu-Silicium/Silicium-ACPI/Platforms/Xiaomi/gauguin/`.
+- The compiled table is 6,891 bytes, length `0x1aeb`, checksum `0x92`, sha256
+  `8d0a821fec2b570bf91e70d2457280c98fb0547b755370b9dbebd786fdcd7717` (from 6,641 bytes,
+  `0x19f1`, `0x4f`, `f260db3a…d28f5560`), with **273 opcodes and 435 named objects** (from
+  267 and 424) and 0 errors, the same 24 warnings as every step since 4.82, **64 remarks**
+  (from 59) and **132 optimizations** (from 129).
+- The previous table was re-derived rather than remembered: `git show
+  HEAD:tools/acpi/gauguin.asl` compiled to 6,641 bytes / `0x19f1` / `0x4f` / `f260db3a…`
+  — the identity the 4.91 entry states, reproduced exactly, which is what makes the delta
+  above a measurement rather than a subtraction. Comparing the two AMLs, the first
+  differing byte is at `0x4`, the length field, and every id at or before `BTNS` keeps its
+  offset (`QCOM24A5` 93, `QCOM0A2B` 420, `QCOM0A2D` 785, `QCOM0AA4` 6275, `ACPI0011`
+  6416); `QCOM0A11` is new at 6671.
+- `FVMAIN.Fv` is **7,360,512 bytes (`0x705000`)**, sha256
+  `fdaa9e7ecfb177a62db739254e3b6155395c38393045c82959a2770db6b34679`, with
+  `EFI_FV_TAKEN_SIZE = 0x704208` (from `0x704110`) and 3,576 bytes free, and
+  `FVMAIN_COMPACT`'s taken size is `0x10b178` (from `0x10b0e8`).
+- The `AcpiTables` file grows less than the table inside it, which is worth one line
+  because it is why the DSDT's address does not move. The file at `0x54d468` goes
+  `0x1f42` → `0x203a`: the `DSDT` section goes `0x19f5` → `0x1aef`, the full 250 bytes,
+  and 2 bytes of inter-section padding close up behind it (`0x54d4c4 + 0x19f5` pads 3 bytes
+  to the next four-byte boundary, `0x54d4c4 + 0x1aef` pads 1). Everything after the file
+  moves by that same 248 bytes, and the volume's tail moves `0x704110` → `0x704208`.
+- Read back out of the built payload: six tables, `SSDT` at `0x0054d484`, `DSDT` **6,891
+  bytes at `0x0054d4c8`** — **the same offset for a twenty-second step** — checksum valid
+  and sha256 equal to the direct compile's, `APIC` (724) and `GTDT` (156) valid, `FACP`
+  (276) and `FACS` (64) not, as expected before `AcpiTableDxe` runs and only those two.
+- The three payloads are `01568bf2cc45f1d90549a07a6d8a915bf36c5d730fabcdf92a062c692f68d124`
+  (silicon/gzip, 1,144,832 bytes), `570db2080b9d1e67900671d8ef3ec836a4771f1ac56fc373a165fe37d25f3b60`
+  (stock/gzip, 1,150,976 bytes) and
+  `1d424e8709343fbd39232016c827897808b19722788488e3ec7443ef4a7bab7b`
+  (stock/none, 3,248,128 bytes), all three matching GenFv's map at 123 offsets and GUIDs
+  with zero mismatches and passing the checks ABL makes before it hands control over.
+  Archived in `work/out/p2-4.92`.
+- **The comment was corrected after the first build, and nothing downstream moved.** The
+  node's first comment said "every firmware partition that could hold a table was searched
+  for the DSDT signature" and named thirteen; a scan of the whole image set is a better
+  measurement and was run: **107 `part-*.img` files** in the backup, of which four contain
+  the four letters `DSDT` and none contains a table — a kernel string in `boot` and in
+  `recovery` (`"DT/ACPI DSDT/board file"`), an alphabetical run inside one of `super`'s
+  system images, and two coincidences inside `modem`'s code and its compressed blobs. The
+  thirteen partitions that could carry firmware do not mention the word at all. The comment
+  now says that. Recompiling gave the same `8d0a821f…`; rebuilding gave the same
+  `fdaa9e7e…` FVMAIN; re-deriving the payloads gave the same three hashes. The step's
+  artifacts are therefore the ones listed above rather than a second set.
+- The order vote moves for the first time since 4.89: **10,964 of a 10,964 ceiling, 0
+  broken relations of 627 pairs and 567 relations** (from 10,356 of 10,356, 532 relations,
+  with the corpus's own copy of this table excluded as a voter), with the same **72
+  unavoidable dissent votes in 60 pairs**, carried by the same four boards and no pair
+  naming `ADC1` — which is what a step that adds a node the corpus orders identically on
+  every side is supposed to leave behind.
+- The census is **53 `_HID`/`_CID` declarations, 39 distinct** (from 52 and 38), with
+  `QCOM0A11 1x claimed by qcadc7280.inf` at `ADC1 (line 4865)`, and the unclaimed set
+  unchanged at `QCOM0A8B` (`URS0`) and `QCOM24A5` (`UFS0`) — the two that every step since
+  4.70 reports, and the first of which is the `URS\`-prefixed binding `--bind` cannot see.
+- Devices **43 → 44** and methods **101 → 103** in the compiled table, with the thirteen
+  thermal zones unchanged; the USB pair census does not move in either framing.
+- `work/out/p2-variants` **still holds the 4.74 set** — `90b21643…`, `e693e1a0…`,
+  `26919861…`. **Sixteenth** step running.
+- The FVMAIN size in the last three ladders was carried rather than measured, and this
+  step measured it. `p2-4.88`'s payload dumps 7,356,416 bytes (`0x704000`) and `p2-4.89`'s
+  and `p2-4.90`'s dump 7,360,512 (`0x705000`), so the volume grew at Step 4.89 and the
+  entries for 4.89, 4.90 and 4.91 that said "`0x704000`, unchanged" were restating 4.88's
+  number. Nothing depended on it; the number in this entry is this step's own reading.
+- The device is absent from this host throughout, so nothing here is a hardware reading.
+  The payload in `boot` is still the **4.74** set and its panel reading is **still owed**
+  under 先读屏，再刷下一次. Step 4.92 archives `work/out/p2-4.92` and does not touch the
+  one on the device.
