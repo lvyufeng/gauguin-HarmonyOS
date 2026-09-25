@@ -2316,8 +2316,20 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
         // and that is the one confirmation of the rule already inside the file.
         //
         // The body follows the six tables whose id this is. _STA returning 0x0F is
-        // in the 06 and 1A forms - 9 of the 19 - and absent from the two older
-        // ones, which write _HID alone in all 7. The alias is narrower: four of
+        // this file's convention on every device it writes, so it is here for the
+        // file's reason and not the corpus's - which is as well, because the
+        // corpus's answer does not support the derivation this paragraph used to
+        // make. Measured: 11 of the 19 carry it and 8 do not, and the split is
+        // not "the newest against the two older" but the 06, 14, 1A and 25 forms
+        // carrying it against the 02, 04 and 05 forms. Of the eight, seven write
+        // _HID alone; the eighth is caymanslm's 02 form, which adds a PILX method
+        // returning a one-element package and an ACPO method besides. The old
+        // sentence said "9 of the 19 ... absent from the two older ones ... in all
+        // 7"; it was wrong on the count and on the oldest board, and Step 4.81
+        // measured it again while deriving RPEN's body, where the same split comes
+        // out differently again - 12 of 21, and 14 disagrees with itself. The
+        // correction is recorded rather than quietly made. The alias is narrower:
+        // four of
         // the six 06 tables omit it - a52sxq, lisa, renoir and Cedros' IDP - and
         // the two that carry Alias (\_SB.PSUB, _SUB) are Kailua's MTP and QRD
         // board files, one SoC's two files agreeing with each other and with the
@@ -2345,11 +2357,116 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
         // (3 of 3) precede it, and MMU0, MMU1 and SCM0 (19 of 19 each), IPCC
         // (10 of 10), QGP0 (17) and QGP1 (19) follow it. Every one of those nine
         // is satisfied by the slot below, and no later slot is: between QGP1 and
-        // MMU0 the two QGP relations break instead. Three further relations are
-        // unsatisfiable in any slot, because this file placed USB0, SPMI and GIO0
-        // earlier than the corpus's order has them while the corpus puts all three
-        // after PILC, each in 19 of 19. They are recorded here rather than
-        // repaired: this step is a node, and a reordering is its own measurement.
+        // MMU0 the two QGP relations break instead. Six further relations are
+        // unsatisfiable in any slot, because this file placed UCS0, URS0, USB0,
+        // UFN0, SPMI and GIO0 earlier than the corpus's order has them while the
+        // corpus puts all six after PILC - SPMI, URS0, USB0, UFN0 and GIO0 in 19
+        // of 19 each, UCS0 in 10 of 10, it being absent from nine of the tables.
+        // This said "three" and named USB0, SPMI and GIO0 until Step 4.81 measured
+        // it again while deriving RPEN's slot and found the same six there; the
+        // correction is recorded rather than quietly made. They are recorded here
+        // rather than repaired: this step is a node, and a reordering is its own
+        // measurement.
+        // RPEN is the Reset Power Error Notifier - qcrpen.inf's own description
+        // string for it - the device Windows listens to for resets and power
+        // errors rather than reaches hardware through. Its service is QCRPEN, its
+        // binary qcrpen.sys, it is a KMDF driver, its class is System, it asks for
+        // no address and no interrupt, its ACL admits only the built-in Admins and
+        // Local System (D:P(A;;GA;;;BA)(A;;GA;;;SY)), it sets PnpLockDown, and it
+        // declares WDTFSOCDeviceCategory - the SoC device category the Windows
+        // Driver Test Framework finds these devices by.
+        //
+        // Its id is the other half of PILC's, and the shape of the pairing is
+        // worth writing down because it is not what "two co-issued ids" usually
+        // means. The corpus declares this node under seven ids - QCOM06E1 seven
+        // times, QCOM0533 five, QCOM1AE1 four, QCOM04E0 two, and QCOM026D,
+        // QCOM14E0 and QCOM25E1 once each - and they are the same seven
+        // generations PILC's are. In five of the seven the two are consecutive:
+        // the 06, 1A and 25 generations are E0 and E1, and the 14 and 04
+        // generations are DF and E0. In the other two they are not: the 05
+        // generation is PILC 051B beside RPEN 0533, and caymanslm's 02 generation
+        // is PILC 023B beside RPEN 026D. So the two nodes are issued together
+        // without being numbered together, and this id could not be derived from
+        // PILC's by counting one up.
+        //
+        // What decides it is what decided PILC's: the driver set. qcrpen.inf
+        // carries one line of hardware id - %RPEN.DeviceDesc%=RPEN_Device,
+        // ACPI\QCOM06E1 - and no inf in the 112 names any of the other six, so
+        // the 06 generation is the one that binds. The generation is this table's,
+        // as PILC's comment records at length; this node is that rule's first
+        // confirmation from outside, because it is a second node that had to come
+        // out the same way on its own.
+        //
+        // The body is the second shortest in the file - one member longer than PILC's,
+        // because it carries the alias PILC does not - and it is PILC's mirror image.
+        // Where PILC's 06 tables mostly omit the alias, all twenty-one RPENs carry
+        // it: twenty as Alias (\_SB.PSUB, _SUB), and one - Waipio - as the
+        // Method (_SUB) { Return (\_SB.PSUB) } form that the PEP0 comment already
+        // records as Waipio's habit, the same file twice. And where PILC has no
+        // _CRS, no _UID and no _DEP, neither has RPEN, in any of the twenty-one.
+        // The alias is therefore the pair's one difference, and the role reading
+        // fits it: PILC brings subsystems up and stands outside them, RPEN reports
+        // on them and stands inside. That is a reading and not a measurement - the
+        // corpus never says so - but it is the reading that makes both bodies
+        // consistent rather than arbitrary, and it is why this file writes the
+        // alias here and does not write it there.
+        //
+        // _STA returning 0x0F is this file's convention on every device it writes,
+        // so it is here for the file's reason and not the corpus's. The corpus's
+        // own answer, measured, is 12 of the twenty-one - every 06 table, every 1A
+        // table, and alioth - against 9 that write _HID and the alias alone: the
+        // 05, 04, 02 and 14 forms. Note the 14: surya's PILC carries a _STA and
+        // surya's RPEN does not, so within one table of one generation the two
+        // nodes disagree. The id is a property of the table, as the last step
+        // measured; _STA is not, and nothing here should be written as if it were.
+        //
+        // _DEP needs a sentence even though there is none, because RPEN is the
+        // first node in this file whose absence another node's dependency list
+        // names. GLNK's _DEP is Package (0x02){ \_SB.IPCC, \_SB.RPEN } in 12 of its
+        // twenty-one tables and Package (One){ \_SB.RPEN } in the other nine, so on
+        // all twenty-one reference boards GLNK cannot start until RPEN is there -
+        // and this file's GLNK, when it is written, will be waiting on the node
+        // below. Nothing in this group depends on RPEN directly: the group's own
+        // _DEP entries name IPC0 (TFTP), PEP0, GLNK and IPC0 (PDSR), IPCC and QDIG
+        // (SSVC), and none of those five is in this table. GLNK is not in this
+        // group and is claimed, which is why the dependency is recorded.
+        //
+        // Position, and it is the strongest relation in this file's corpus
+        // evidence so far: RPEN is immediately before PILC in 19 of the 19 tables
+        // that have a PILC. The predecessor is board-specific and useless - SPI4
+        // three times, IC14 three, UR19, SP12 and UR15 twice each, then nine
+        // singletons - which is the shape of a run's head when whatever precedes
+        // it is the last member of the previous block. The two tables with no PILC
+        // are the two that put something else after RPEN (vili names IPC0, Waipio
+        // names TFTP), so RPEN leads the run's remainder rather than being pinned
+        // to PILC. The run itself - RPEN, PILC, CDI, SCSS, ADSP, SLM1, ADCM, AUDD
+        // - is never split in any of the 19: measured as a question about the
+        // members a table actually has, no table ever interposes a node between
+        // two of them, though the adjacencies vary because SCSS is missing from
+        // nine of the 19.
+        //
+        // So the slot is fixed by the node after it, which is already here.
+        // Fifteen relations agree with it. Before: UFS0, DEV0, ABD, PMIC and PM01
+        // (21 of 21 each), PMAP and PRTC (20), UARD (13), PML0 (11) and IC10 (9).
+        // After: PILC (19 of 19), QGP1 and SCM0 (21), QGP0 (19) and IPCC (12).
+        // Six relations no slot can satisfy, and they are the same six PILC's
+        // comment now records: UCS0 (10 of 10), URS0, USB0, UFN0 and GIO0 (20
+        // each) and SPMI (21) all sit after RPEN in the corpus and all sit before
+        // it in this file, because this file wrote the early block in an order of
+        // its own in which ABD - unanimous before RPEN - keeps company with
+        // devices the corpus puts after. They are recorded and not repaired, as
+        // there: a reordering is its own measurement.
+        Device (RPEN)
+        {
+            Method (_STA, 0, NotSerialized)  // _STA: Status
+            {
+                Return (0x0F)
+            }
+
+            Name (_HID, "QCOM06E1")  // _HID: Hardware ID
+            Alias (^PSUB, _SUB)  // _SUB: Subsystem ID
+        }
+
         Device (PILC)
         {
             Name (_HID, "QCOM06E0")  // _HID: Hardware ID

@@ -14617,6 +14617,27 @@ form's three. Across the nineteen tables `_STA` returning `0x0F` is in the 06 an
 still: it appears in the 1A form's three tables and in two of the 06 form's six, and nowhere
 else.
 
+> **Corrected in Step 4.81.** Both sentences in that paragraph are wrong, and they were
+> caught by re-measuring the corpus while deriving `RPEN`'s body — the adjacent node, which
+> is the natural place for a claim about this one to be tested.
+>
+> `_STA` is in **11 of the nineteen, not 9**, and **8** omit it rather than 7. The split is
+> not newest-against-oldest either: it is the **06, 14, 1A and 25** forms carrying it against
+> the **02, 04 and 05** forms — surya's 14 form has it, which the old sentence's "the two
+> older ones" cannot describe. Of the eight that omit it, seven write `_HID` alone and
+> caymanslm's 02 form is not one of them: it carries a `PILX` method returning a one-element
+> `PILP` package and an `ACPO` method besides, so "which write `_HID` alone" was wrong about
+> the oldest board too.
+>
+> The alias is **6 of 19, not 5**: the 1A form's three, two of the 06 form's six — *and
+> alioth's 25 form*, which "and nowhere else" excluded. The narrower claim the paragraph goes
+> on to make survives, because it is about the six 06 tables and not about all nineteen.
+>
+> Neither error changed the node: `_STA 0x0F` is this file's convention on every device it
+> writes, so it did not need a corpus justification, and the `_SUB` omission was argued from
+> the six 06 tables, which the correction leaves intact. What changed is the record. Both the
+> node comment and this section now carry the corrected numbers.
+
 That makes `PILC` the first device in this table without a `_SUB`, and the reason is the
 node's role rather than a preference. The loader does not sit *inside* a subsystem — it
 brings subsystems up — and the corpus's own phone tables say so by carrying the alias on
@@ -14672,6 +14693,15 @@ each was written. A node insertion cannot repair a pre-existing ordering diverge
 becoming a reordering, and a reordering is its own measurement — the three are noted in the
 node's own comment and left alone.
 
+> **Corrected in Step 4.81: it is six, not three.** Re-measuring the same relation while
+> deriving `RPEN`'s slot — which sits immediately before `PILC` and therefore sees the same
+> set — turned up three more at the same strength: **`UCS0`** (after `PILC` in 10 of 10),
+> **`URS0`** (19 of 19) and **`UFN0`** (19 of 19). All six are placed earlier in this file
+> than the corpus's order has them, for the same reason: this file's early block is an order
+> of its own in which `ABD` — unanimous *before* `PILC` and `RPEN` — keeps company with
+> devices the corpus puts after. The node comment now names all six, and so does `RPEN`'s.
+> The conclusion does not move: they are recorded and not repaired.
+
 ### The ladder
 
 - `tools/acpi/gauguin.asl` — 3,554 lines (was 3,458), md5
@@ -14713,3 +14743,287 @@ node's own comment and left alone.
   The payload in `boot` is still the **4.74** set and its panel reading is **still owed**
   under 先读屏，再刷下一次. Step 4.80 changes the payload in `work/out/p2-4.80` and not the
   one on the device.
+
+---
+
+## Step 4.81 — the node another node's dependency list names, and two claims of 4.80 measured again
+
+### What this step was
+
+One node: `RPEN`, the **Reset Power Error Notifier** — the device Windows listens to for
+resets and power errors rather than reaches hardware through. It goes immediately before
+`PILC`, which is where the corpus puts it in 19 of the 19 tables that have a `PILC`, and it
+is the second-shortest body in the file — one member longer than `PILC`'s, because it carries
+the alias `PILC` does not.
+
+It is also the first node written here whose *absence* another node's dependency list names.
+`GLNK`'s `_DEP` is `Package (0x02){ \_SB.IPCC, \_SB.RPEN }` in 12 of its 21 tables and
+`Package (One){ \_SB.RPEN }` in the other nine, so on every reference board `GLNK` cannot
+start until `RPEN` exists. This file has no `GLNK` yet, but the dependency is now satisfiable
+when it is written rather than dangling.
+
+The second thing this step did was re-measure two claims the previous step had made about
+`PILC` and got wrong. Both are corrected in the node comment, in the 4.80 section above, and
+below.
+
+The device was absent from this host for the whole step, as it has been since 4.77.
+`adb devices` is empty. Nothing here is a hardware reading, and the payload in `boot` is
+still the 4.74 set.
+
+### The id is the other half of `PILC`'s, and the halves are not always consecutive
+
+The corpus declares `RPEN` in **21** tables — two more than `PILC`'s 19 — under the same
+seven generations:
+
+| id | tables | which |
+|---|---|---|
+| `QCOM06E1` | 7 | a52sxq, lisa, renoir, Cedros IDP, Kailua MTP, Kailua QRD, **Waipio** |
+| `QCOM0533` | 5 | mh2, cepheus, nabu, pipa, vayu |
+| `QCOM1AE1` | 4 | lemonade, venus, vili, Lahaina MTP |
+| `QCOM04E0` | 2 | miatoll, a52q |
+| `QCOM026D` | 1 | caymanslm |
+| `QCOM14E0` | 1 | surya |
+| `QCOM25E1` | 1 | alioth |
+
+The two extra tables are **vili and Waipio** — exactly the two that carry `RPEN` and no
+`PILC`, which is the first evidence for what the position section below finds: `RPEN` leads
+the run and `PILC` is its second member.
+
+That the two nodes are co-issued is clear from the ids. That they are *numbered* together is
+only true in five of the seven generations:
+
+| generation | `PILC` | `RPEN` | consecutive? |
+|---|---|---|---|
+| `06` | `QCOM06E0` | `QCOM06E1` | yes |
+| `1A` | `QCOM1AE0` | `QCOM1AE1` | yes |
+| `25` | `QCOM25E0` | `QCOM25E1` | yes |
+| `14` | `QCOM14DF` | `QCOM14E0` | yes |
+| `04` | `QCOM04DF` | `QCOM04E0` | yes |
+| `05` | `QCOM051B` | `QCOM0533` | **no** |
+| `02` | `QCOM023B` | `QCOM026D` | **no** |
+
+So the id here could not have been derived from `PILC`'s by counting one up, and the pairing
+is looser than `06E0`/`06E1` makes it look. What decides it is what decided `PILC`'s: the
+driver set. `qcrpen.inf` carries one line of hardware id,
+`%RPEN.DeviceDesc%=RPEN_Device, ACPI\QCOM06E1`, and a scan of all 112 infs finds `QCOM06E1`
+in that package and nowhere else — no inf names `0533`, `1AE1`, `04E0`, `026D`, `14E0` or
+`25E1`. This is the rule from 4.80 confirmed from outside: the generation is the table's, and
+a second node of the group, derived on its own, came out in the same generation.
+
+### The hardware, from the board
+
+`qcrpen.inf` describes the node completely, and none of it is an address:
+
+- `Class = System`, `DriverVer 06/29/2022, 1.0.3521.0000`, `PnpLockDown = 1`
+- service `QCRPEN` from `qcrpen.sys`, `KmdfService = QCRPEN, RPEN_wdfsect`, KMDF 1.33
+- `[RPENACL]` gives it a security descriptor — `D:P(A;;GA;;;BA)(A;;GA;;;SY)` — the built-in
+  Administrators and Local System and nobody else
+- `AddProperty = WDTFSOCDeviceCategory`, the SoC device category the Windows Driver Test
+  Framework finds these devices by
+- description string: `Qualcomm(R) Reset Power Error Notifier Device`
+
+A notifier has no `_CRS` because it has nothing of its own to claim, but the state it
+notifies about is real and named in this board's tree, reached over the SPMI bus the file
+already describes:
+
+```
+nvram@7100          qcom,spmi-sdam           (USID 6, the PMK8350)
+  reboot-reason@48  reg <0x48 0x01>, bits <0x01 0x07>, phandle 0xc3
+reboot-mode         compatible "nvmem-reboot-mode", nvmem-cells <0xc3>
+pon@1300            qcom,pmk8350-pon, reg <0x1300 0x800>, names "hlos", "pbs"
+```
+
+The `reboot-reason@48` cell is the one the top-level `reboot-mode` node names, so this
+board's reset reason is a byte in a PMIC SDAM on the bus `SPMI` already describes, and the
+PMK8350's PON block — the block that records *why* the SoC restarted — is at an address the
+board states. The notifier reads that path; it owns none of it.
+
+### The body: the mirror image, and the alias that decides the pair
+
+```asl
+Device (RPEN)
+{
+    Method (_STA, 0, NotSerialized)  // _STA: Status
+    {
+        Return (0x0F)
+    }
+
+    Name (_HID, "QCOM06E1")  // _HID: Hardware ID
+    Alias (^PSUB, _SUB)  // _SUB: Subsystem ID
+}
+```
+
+`_STA` comes first here because that is this file's spelling on every device it writes, not
+because the corpus puts it there; the corpus's own order for this node is `_HID`, `_SUB`,
+`_STA`.
+
+The body is `PILC`'s mirror image in the one place the two differ. Across the 21 tables:
+
+- **All 21 carry `_SUB`** — 20 as `Alias (\_SB.PSUB, _SUB)` and one, **Waipio**, as
+  `Method (_SUB) { Return (\_SB.PSUB) }`. That is the same Waipio variant 4.78 found on
+  `PEP0` (`Name (_GCP, 0x04)` instead of a method, `_STA` added): the same file showing the
+  same habit twice.
+- **No table carries `_CRS`, `_UID` or `_DEP`** — unanimous, so nothing is carried from a
+  minority form.
+
+So the alias is the pair's only structural difference: `PILC`'s 06 tables mostly omit it
+(four of six), and every `RPEN` has it. The role reading fits — the loader brings subsystems
+up and stands outside them, the notifier reports on them and stands inside — and the corpus
+supports the reading without stating it, because the other nodes in the run that report
+rather than drive (`TFTP`, `PDSR`, `SSVC`) all carry the alias too. It is a reading and it is
+written as one; what is measured is that the pair disagrees and on which side each lands.
+
+`_STA` needs no corpus argument because the file's convention covers it, but the corpus's
+answer is worth recording since 4.80 got it wrong for `PILC`: **12 of the 21 carry it** —
+every `06` table (seven, including Waipio's method form), every `1A` table (four) and
+alioth — against **9 that write `_HID` and the alias alone**: the `05` (five), `04` (two),
+`02` (one) and `14` (one) forms. And the `14` row is the interesting one: **surya's `PILC`
+carries a `_STA` and surya's `RPEN` does not**, so within a single table of a single
+generation the two nodes of the pair disagree. The id is a property of the table, as 4.80
+measured; `_STA` is not.
+
+### The corpus's `_DEP` graph, and the first node something else waits on
+
+Reading `_DEP` across the corpus for this group — and the reading has to accept `Name (_DEP,
+…)` as well as `Method (_DEP, …)`, which the first pass did not — gives the whole dependency
+graph of the seven plus the nodes around them:
+
+| node | `_DEP` | tables |
+|---|---|---|
+| `GLNK` | `\_SB.IPCC, \_SB.RPEN` | 12 of 21 |
+| `GLNK` | `\_SB.RPEN` | 9 of 21 |
+| `IPC0` | `\_SB.GLNK` | 21 of 21 |
+| `TFTP` | `\_SB.IPC0` | 21 of 21 |
+| `PDSR` | `\_SB.PEP0, \_SB.GLNK, \_SB.IPC0` | 19 of 19 |
+| `SSVC` | `\_SB.IPC0, \_SB.QDIG` | 19 of 19 |
+| `PMIC` | `\_SB.SPMI` | 21 of 21 |
+| `PM01` | `\_SB.PMIC` | 21 of 21 |
+| `RPEN`, `PILC`, `QCDB`, `SOCP` | *(none)* | — |
+
+`RPEN` has no `_DEP` of its own and is named by exactly one: `GLNK`'s. That makes `RPEN` the
+first node in this file whose absence would have been visible from another node's
+declaration — a dangling dependency of the kind the `PMAP` note in the file's preamble warns
+about. Nothing else in the group waits on it: the group's own dependencies run through
+`IPC0`, `PEP0`, `GLNK` and `QDIG`, none of which is in this table.
+
+### Position: the run's head, and the six relations no slot can satisfy
+
+The relation that fixes the slot is the strongest in this file's corpus evidence so far:
+**`RPEN` is immediately before `PILC` in 19 of the 19 tables that carry a `PILC`.** The
+predecessor is board-specific and useless — `SPI4` three times, `IC14` three, `UR19`, `SP12`
+and `UR15` twice each, then nine singletons — which is the shape of a run's head when
+whatever precedes it is the last member of the previous block.
+
+The two exceptions are the two tables with no `PILC` — vili, which puts `IPC0` after `RPEN`,
+and Waipio, which puts `TFTP` — so `RPEN` leads the run's remainder rather than being pinned
+to `PILC`. That kills any worry that the adjacency is an artefact of the id pair.
+
+The run itself —
+
+```
+RPEN  PILC  CDI  SCSS  ADSP  SLM1  ADCM  AUDD
+```
+
+— is never split in any of the 19 `PILC` tables. Measured as a question about the members a
+table actually has, no table ever interposes a node between two of them; the *adjacencies*
+vary only because `SCSS` is absent from nine of the 19, which is why `CDI`→`SCSS`→`ADSP`
+appears ten times and `CDI`→`ADSP` nine.
+
+Fifteen unanimous relations agree with the slot:
+
+| before `RPEN` | tables | | after `RPEN` | tables |
+|---|---|---|---|---|
+| `UFS0` | 21 of 21 | | `PILC` | 19 of 19 |
+| `DEV0` | 21 of 21 | | `QGP1` | 21 of 21 |
+| `ABD` | 21 of 21 | | `SCM0` | 21 of 21 |
+| `PMIC` | 21 of 21 | | `QGP0` | 19 of 19 |
+| `PM01` | 21 of 21 | | `IPCC` | 12 of 12 |
+| `PMAP` | 20 of 20 | | | |
+| `PRTC` | 20 of 20 | | | |
+| `UARD` | 13 of 13 | | | |
+| `PML0` | 11 of 11 | | | |
+| `IC10` | 9 of 9 | | | |
+
+Six relations no slot in this file can satisfy, and they are the same six the previous step's
+comment records after 4.81's correction: `UCS0` (after `RPEN` in 10 of 10), `URS0`, `USB0`,
+`UFN0` and `GIO0` (20 of 20 each) and `SPMI` (21 of 21). All six sit before the slot in this
+file, because the file's early block is an order of its own in which `ABD` — unanimous
+*before* the run — keeps company with devices the corpus puts after. They are recorded and
+not repaired in either node's comment.
+
+### Two claims of Step 4.80, measured again
+
+Deriving this node meant re-reading the corpus over the same nodes and tables `PILC`'s
+derivation used, and two of 4.80's stated findings did not survive it:
+
+1. **`_STA` on `PILC`.** 4.80 wrote "in the 06 and 1A forms (9 of the 19) and absent from the
+   two older ones, which write `_HID` alone in all 7". Measured: **11 of 19 carry it and 8
+   omit it**, the split is the 06, 14, 1A and 25 forms against the 02, 04 and 05 forms, and
+   caymanslm's 02 form is not an `_HID`-alone table at all — it carries a `PILX` method and
+   an `ACPO` method. Separately, the alias count was given as five ("the 1A form's three and
+   two of the 06 form's six, and nowhere else") where alioth's 25 form makes it **six**.
+2. **The unsatisfiable relations around `PILC`.** 4.80 wrote "three further relations …
+   `USB0`, `SPMI` and `GIO0`". Measured: **six** — the other three are `UCS0` (10 of 10),
+   `URS0` (19 of 19) and `UFN0` (19 of 19).
+
+Neither changed a node. `_STA` is this file's convention and needed no corpus argument; the
+`_SUB` omission rests on the six 06 tables alone and survives; the position was fixed by the
+relations that *are* satisfied and by the `RPEN`→`PILC` adjacency, which the correction does
+not touch. Both the `PILC` node comment, the 4.80 section above, and this section now carry
+the corrected numbers, and the corrections are marked as corrections rather than folded in
+silently — the same way 4.80 handled the 4.79 wording it rewrote.
+
+The general lesson is the one 4.80's own doc draws about a different measurement: a claim of
+the form "N of M" is cheap to state and expensive to trust, and the cheap way to test it is
+to derive the adjacent node, which re-walks the same corpus for its own reasons.
+
+### The ladder
+
+- `tools/acpi/gauguin.asl` — 3,670 lines (was 3,554), md5
+  `2f6b28d1857b73ae75553ab50d5d6106` on **all three copies** (`tools/acpi/`, the tracked
+  `uefi/Silicium-ACPI/`, and the synced `work/uefi/Mu-Silicium/` tree). Generator first,
+  `sync-uefi-platform.sh` second; skipping either installs the previous table.
+- `iasl` — **0 errors**, 24 warnings, 55 remarks, 118 optimizations. AML **6,121 bytes**
+  (was 6,080), sha256
+  `78645724dead62053a50eae838d47da597d82bb1d2907d8ec5448506271bb408`, 264 opcodes (was 263),
+  388 named objects (was 384, `+4` = the device's own name, `_STA`, `_HID`, `_SUB`),
+  checksum byte `0x88`, length field `0x17e9`. Warnings and remarks are unchanged from 4.80,
+  so the delta is exactly one node.
+- Disassembly round-trip: `iasl -d` on the compiled AML shows `Device (RPEN)` at line 1034
+  with `_STA 0x0F`, `_HID "QCOM06E1"` and `Alias (PSUB, _SUB)`, immediately followed by
+  `Device (PILC)`. A byte scan of the AML finds `RPEN`, `PILC`, `QCOM06E1` and `QCOM06E0` at
+  fixed offsets — AML strings are length-prefixed **ASCII**, not UTF-16, which is why a
+  plain `grep` on a `.dsl` or a disassembly round-trip is the way to read them back (the
+  `.inf` files *are* UTF-16; the two are easy to confuse).
+- `build_uefi.py` — Success; `FVMAIN.Fv` 7,356,416 bytes (`0x704000`, unchanged),
+  sha256 `5f30de5174b1cbdc384c1da0c96c41eaf1b3f815ffe116f253917e83515cd731`, and
+  `EFI_FV_TAKEN_SIZE = 0x703f08`, up `0x30` from 4.80's `0x703ed8` for 41 new bytes of AML
+  after FFS packing. `FVMAIN_COMPACT`'s taken size is `0x10b000` (was `0x10afd0`), also
+  `+0x30`, of `0x300000` — **2,052,096 bytes free**.
+- `tools/fv-inventory.py --acpi` on the built payload: six tables, `SSDT` at `0x0054d484`,
+  **`DSDT` 6,121 bytes at `0x0054d4c8` — the same offset for an eleventh step** — with a
+  valid checksum; only `FACP` and `FACS` do not, which is expected before `AcpiTableDxe`
+  runs and is the same pair every previous step.
+- `--dump-fvmain` extraction: the payload's DSDT is **byte-identical** to the direct
+  `iasl` compile (`cmp` clean, both sha256 `78645724…`), and the extracted volume's sha256
+  matches `FVMAIN.Fv`'s.
+- The three payloads are `95e65229…` (silicon/gzip), `e7473050…` (stock/gzip) and
+  `fb7873c9…` (stock/none), all three the same byte lengths as 4.78's through 4.80's because
+  the container is a fixed-size volume, all three matching GenFv's map at **123 offsets and
+  GUIDs, zero mismatches**, all three passing the checks ABL makes before it hands control
+  over. They are archived in `work/out/p2-4.81`.
+- `work/out/p2-variants` **still holds the 4.74 set** — `90b21643…`, `e693e1a0…`,
+  `26919861…`. Seventh step running.
+- Device count **33 → 34** `Device (` declarations (plus 13 `ThermalZone (`, so 46 → 47 named
+  ACPI objects). The census: **47 `_HID`/`_CID` declarations, 33 distinct, 31 claimed** —
+  up one in each column, `QCOM06E1` being the new declaration and a claimed id. The same two
+  remain unclaimed as every step since 4.70: `QCOM0A8B` (`URS0`) and `QCOM24A5` (`UFS0`).
+- `build_uefi.py` again ended with the `mkbootimg` `ValueError: DTB image must not be empty`
+  traceback on Mu-Silicium's *own* image, after `PROGRESS - Success` and after the volume was
+  written. That image is not used here; the payload of record is built by
+  `tools/build-p2-payloads.sh` from the volume and the shim. The footer is the same one 4.78
+  through 4.80 ended with.
+- The device is absent from this host throughout, so nothing here is a hardware reading. The
+  payload in `boot` is still the **4.74** set and its panel reading is **still owed** under
+  先读屏，再刷下一次. Step 4.81 changes the payload in `work/out/p2-4.81` and not the one on
+  the device.
