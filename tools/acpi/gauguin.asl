@@ -1896,6 +1896,185 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
         // are GIO0's own methods and RP1 on caymanslm, gating on the
         // functional-fixed-hardware region handler's arrival. Nothing on gauguin
         // reads it, so it is written and never read, which is inert.
+        //
+        // BAM1 - the crypto BAM, and the first node here whose _CRS a table and
+        // the board state identically. Its id is the platform-prefix form every
+        // node in this file already carries: QCOM0A0B at SPMI, QCOM0A0C at GIO0,
+        // QCOM0A0D at IPC0, QCOM0A09 at both MMUs, QCOM0A10 at the three QUP
+        // wrappers, QCOM0A16 at UARD, QCOM0A2B/2C/2D at PMIC, PMAP and PM01.
+        // The prefix 0A is this platform's and the suffix is the device. Not
+        // every id in a table carries it - the subsystem services (QCOM06E0 at
+        // PILC, 06E1 at RPEN, 06DC at TFTP, 06C2 at IPCC), the storage
+        // controllers (QCOM24A5 at UFS0, 24BF and 2466 at SDC1 and SDC2) and
+        // SCM0 and TREE (QCOM04DD, 04DE) are the same in every table, which is
+        // why those four steps had to determine their ids by other means. The
+        // platform-device nodes do carry it, and they carry the same suffix
+        // across tables of the same platform: this file writes PMIC, PMAP, PM01
+        // and PML0 as QCOM0A2B, 0A2C, 0A2D and 0AD3, and lisa writes exactly
+        // that; miatoll writes 082E, 082F, 0830 and 08B4, caymanslm 0266, 0268
+        // and 0269 with no PML0 at all.
+        //
+        // The BAM suffix is 0A wherever the prefix is 0A, so lisa and a52sxq
+        // both write QCOM0A0A and miatoll writes QCOM080A. Every BAM in a table
+        // carries that table's one id, never a second - the whole class shares
+        // it and _UID says which instance: One here, 0x05 on BAM5, 0x06 and 0x07
+        // on BAM6 and BAM7, 0x0D to 0x10 on BAMD through BAMG (BAM3 on the
+        // Silicon Blackbolt table being QCOM6012, 0x03). The _UID is the number
+        // in the name, in hex, in every one of the 109 BAM nodes in the corpus
+        // without exception.
+        //
+        // Twenty-one of the 67 tables declare BAM1, under nine ids - QCOM0213,
+        // 050A, 080A, 090A, 0A0A, 0C0A, 140A, 1A0A, 250A - and BAM1 and BAM5
+        // carry the same one of the nine as each other in all 21. BAME and BAMF
+        // carry it too wherever they appear, and the three 0C tables carry
+        // neither. The
+        // split is by platform and not by the generations this file groups by
+        // elsewhere: QCOM050A covers mh2, cepheus, nabu, pipa and vayu, and
+        // QCOM1A0A covers lemonade, venus, vili and Lahaina MTP. Exactly one of
+        // the nine is claimed by any .inf in the shipped set - QCOM0A0A, by
+        // qckmbam7280/qckmbam7280.inf: "Qualcomm(R)
+        // Bam Bus Device", class System, ClassGuid the same {4d36e97d-...} the
+        // rest of the family uses, DriverVer 06/29/2022 1.0.3521.0000, service
+        // qcbam at SERVICE_KERNEL_DRIVER/SERVICE_DEMAND_START, KMDF 1.33, the
+        // SoC category GUID 46 of the 112 files carry, and one hardware id and no
+        // other. QCOM0213, 050A, 080A, 090A, 0C0A, 140A, 1A0A and 250A are
+        // claimed by nothing in the set. That is SCM0's shape again - one id of
+        // six there, one of nine here - and like SCM0's it is why the id needed no
+        // argument. Two arguments in fact reach the same id and neither is
+        // evidence for the other: this file's prefix is 0A, and in the two
+        // corpus tables that share it the BAM suffix is 0A; and QCOM0A0A is the
+        // one BAM id a shipped driver binds. What would have made it an argument
+        // is absent - no table in the corpus is this board's family, bitra
+        // declares no BAM at all, and the two nearest platforms are miatoll at
+        // QCOM080A and caymanslm at QCOM0213. So the id is chosen by the driver
+        // set with the prefix agreeing, which is what selection by the id space
+        // has meant at every step that used it.
+        //
+        // The _CRS needed one, and it is the one place in this file where there
+        // is nothing to resolve. The corpus writes base 0x01DC4000 and GSI 0x130
+        // in 21 of 21 tables and length 0x24000 in 18 of them; gauguin's own
+        // device tree has dma-controller@1dc4000 with reg 0x1dc4000 length
+        // 0x24000 and interrupts <0 0x110 4>, and 0x110 + 32 = 0x130. Same
+        // address, same length, same GSI - not the corpus over the board's
+        // objection, and not the board over the corpus's, which is how every
+        // other _CRS here has been decided. The length is the generation's and
+        // this is the generation: 0x24000 in the eighteen older tables, 0x28000
+        // in the three 0C ones and 0x28000 on sc7280, and 0x24000 in the tree. The
+        // tree also names the client and it
+        // is the only node that references this BAM: crypto@1dfa000 takes
+        // dmas = <&cryptobam 4>, <&cryptobam 5>. It is marked
+        // qcom,controlled-remotely with qcom,ee = <0>, qcom,num-ees = <4> and
+        // num-channels = <0x10>, so the secure world owns it and this node
+        // enumerates it rather than managing it.
+        //
+        // Which of the four BAMs the family-0A tables declare this board has is
+        // the decision this step actually makes, and the decision is to write one
+        // of them. BAM5 is the other half of the pair - BAM1's successor in 21 of
+        // 21 and BAM5's predecessor in 21 of 21 - and its address is the one that
+        // moves with the generation: 0x03A84000 in 0A, and 0x17184000, 0x62E84000,
+        // 0x62D84000, 0x03304000 and 0x06C04000 elsewhere. Its 0x03A84000 is not
+        // an unattributed number: sc7280 declares slimbam at exactly that base
+        // with GIC_SPI 164, and 164 + 32 = 196 = 0xC4, which is the GSI the
+        // corpus writes for BAM5 in 21 of 21 tables. In lisa it sits immediately
+        // below the ADSP, whose child SLM1 is the SLIMbus at 0x03AC0000 - the
+        // same 0x03AC0000 sc7280's slim-ngd occupies, and the consumer slimbam's
+        // dmas = <&slimbam 3>, <&slimbam 4> names. The shipped set carries the
+        // driver for that SLIMbus, qcslimbus7280.inf binding ADSP\QCOM0A0F, an id
+        // the ADSP creates rather than one ACPI writes.
+        //
+        // None of it is here. 0x03A84000 has no node in the board's tree, and
+        // neither does 0x03AC0000; this board's ADSP is at 0x3000000, where
+        // sc7280's is at 0x3700000 and its SLIMbus at 0x03AC0000; neither
+        // sm6350.dtsi nor sm7225.dtsi declares a BAM beyond cryptobam, and
+        // neither has a SLIMbus node at all; and the corpus's two Bitra tables,
+        // Realme's bitra and Xiaomi's gauguin, declare no BAM of any kind.
+        // Writing BAM5 would reserve
+        // 0x32000 of address space and GSI 0xC4 on the strength of another die's
+        // layout, which is the ground SP1 and SP12 were withheld on. The node is
+        // owed and it waits on the ADSP, which is also owed.
+        //
+        // BAME and BAMF are the other two the QCOM0A0A tables carry, at
+        // 0x06064000 / 0x15000 / GSI 0xC7 and 0x0A704000 / 0x17000 / GSI 0xA4.
+        // Neither address exists here either: 0x06064000 and 0x0A704000 appear
+        // nowhere in the board tree, in sm6350.dtsi, in sm7225.dtsi or in any of
+        // the reference trees, and no corpus table gives either an interrupt line
+        // this board could check against a second source. They are not part of
+        // the pair, and the 0C
+        // generation does not carry them at all - Waipio and both Kailua declare
+        // BAM1 and BAM5 and stop.
+        //
+        // Position. The pair is placed as a pair because BAM5's relations are
+        // BAM1's, so this is one slot and it is scored once. Against the nodes in
+        // this table those relations are sixteen at 21 votes each - after UFS0,
+        // DEV0, ABD, PMIC and PM01, and before SPMI, RPEN, TFTP, IPC0, GLNK,
+        // QGP1, SCM0 and CPU0 through CPU3, all of them 21 of 21 in both
+        // directions - and a seventeenth at 20, PRTC, which precedes BAM1 in the
+        // 20 of the 21 tables that carry a PRTC, vili having none. The set is 356
+        // votes. Scored over the slots it admits the maximum is 335,
+        // and the vote alone does not make that slot unique: every slot after
+        // PRTC and before RPEN ties, because the nodes the corpus puts between
+        // PRTC and BAM1 - PMBM, BCL1, PMGK and PEP0, in that order in 21 of 21 -
+        // are absent here. What separates the tie is adjacency rather than
+        // counting: BAM1's immediate predecessor in the corpus is PEP0 in 16
+        // tables, WLDS in 4 and PMGK in 1, never PRTC, so the relation the corpus
+        // states is "immediately after that absent run", and the nearest preceding
+        // node this table actually has is PRTC in 20 of 21 and PM01 in vili. So
+        // the pair goes immediately after PRTC - declaration 13 counting from
+        // zero, the numbering the corpus indices above use - which is where it was
+        // written.
+        //
+        // Sixteen of the seventeen relations are satisfied at that slot and the
+        // seventeenth is SPMI's, and this file's order is why: SPMI is written at
+        // declaration 6 and ABD, PMIC and PM01 follow it at 7, 8 and 10, so
+        // "after PM01" and "before SPMI" cannot both hold. The corpus puts SPMI
+        // at declaration 59 of 140 in lisa and 56 of 143 in a52sxq, counting
+        // unique declarations from zero - after SCM0, TLOG and TREE. So this node
+        // costs 21 votes against SPMI and nothing
+        // else. That is recorded as a debt rather than a property, and it is the
+        // same placement the 128-relation accounting at TFTP charges twelve times:
+        // moving SPMI to its corpus slot would repair those twelve and this one
+        // together, and it is the first thing a later step that reorders this file
+        // should do. The two measurements now agree about where the fault is.
+        //
+        // The body is the shape all twenty-one agree on without exception: _HID in
+        // 21, _UID One in 21, _CCA Zero in 21, _CRS in 21, and in the resource
+        // template exactly one Memory32Fixed and one Interrupt in 21 of 21, with
+        // no GpioIo, no second interrupt and no other resource anywhere in the
+        // class. _SUB is the local form of the alias the corpus writes as
+        // \_SB.PSUB in 20, with Waipio using a method in the 21st - Waipio
+        // departing at the same member here as at GLNK, IPC0 and TFTP. _STA is in
+        // exactly two tables, vili and Waipio, returning 0x0F in both, the same
+        // pair that adds it at the four nodes above. And there is no _DEP in any
+        // of the 21: this node has no dependency at all, which is unusual for a
+        // node this file has added lately - TFTP names IPC0, IPC0 names GLNK,
+        // GLNK names IPCC and RPEN - and it is measured rather than assumed, the
+        // way ABD's withheld dependency was.
+        //
+        // What it hands forward: BAM5, which waits on the ADSP and its SLIMbus;
+        // and the SPMI reorder, which two independent measurements now point at.
+        Device (BAM1)
+        {
+            Name (_HID, "QCOM0A0A")  // _HID: Hardware ID
+            Alias (^PSUB, _SUB)
+            Name (_UID, One)  // _UID: Unique ID
+            Name (_CCA, Zero)  // _CCA: Cache Coherency Attribute
+            Method (_CRS, 0, NotSerialized)  // _CRS: Current Resource Settings
+            {
+                Name (RBUF, ResourceTemplate ()
+                {
+                    Memory32Fixed (ReadWrite,
+                        0x01DC4000,         // Address Base
+                        0x00024000,         // Address Length
+                        )
+                    Interrupt (ResourceConsumer, Level, ActiveHigh, Exclusive, ,, )
+                    {
+                        0x00000130,
+                    }
+                })
+                Return (RBUF) /* \_SB_.BAM1._CRS.RBUF */
+            }
+        }
+
         Device (GIO0)
         {
             Method (_STA, 0, NotSerialized)  // _STA: Status

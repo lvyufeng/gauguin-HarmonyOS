@@ -15717,3 +15717,230 @@ Immediate-before census across the 21: `SPSS` 13, `SBTD` 4, `CDSP` 2, `BAMF` 1,
   reading. The payload in `boot` is still the **4.74** set and its panel reading is
   **still owed** under 先读屏，再刷下一次. Step 4.84 changes the payload in
   `work/out/p2-4.84` and not the one on the device.
+
+## Step 4.85 — the first `_CRS` a table and the board state identically, and the pair only half of which can be written
+
+### What this step was
+
+Wrote **one** node, `BAM1` — the crypto BAM — at `_HID` `QCOM0A0A`, claimed by
+`qckmbam7280.inf` as "Qualcomm(R) Bam Bus Device". It goes between `PRTC` and
+`GIO0`.
+
+The pair `BAM1`/`BAM5` was the candidate, and the step's result is that they come
+apart. `BAM1` is the first node in this file whose `_CRS` the corpus and the board
+state **identically** — same base, same length, same GSI — which is the first time
+a resource block here has needed no adjudication between two sources. `BAM5` is the
+opposite: it has a fully determined number in the corpus, and no board, no kernel
+tree and no sibling table on this host corroborates any of it. So the pair is
+written one half at a time and the other half is recorded as owed.
+
+### The id, and the two arguments that agree about it
+
+Every `.inf` in the shipped set that claims a BAM id claims exactly one:
+`QCOM0A0A`. The other eight the corpus attests — `QCOM0213`, `050A`, `080A`,
+`090A`, `0C0A`, `140A`, `1A0A`, `250A` — are claimed by nothing. That alone would
+settle it, the way it settled `SCM0` at one id of six, but this time the corpus
+agrees independently and the agreement is a different fact:
+
+- **A corpus table's platform-device ids carry that platform's prefix.** This
+  file's are all `QCOM0A…` — `0A2B` `PMIC`, `0A2C` `PMAP`, `0A2D` `PM01`, `0AD3`
+  `PML0`, `0A0B` `SPMI`, `0A0C` `GIO0`, `0A0D` `IPC0`, `0A09` both MMUs, `0A10`
+  the three QUP wrappers, `0A16` `UARD`, `0A84` `GLNK`, `0A88` both `QGP`s. lisa
+  writes the four PMIC nodes identically; miatoll writes `082E`/`082F`/`0830`/`08B4`;
+  caymanslm writes `0266`/`0268`/`0269` and has no `PML0`.
+- **The BAM suffix is `0A` wherever the prefix is `0A`.** lisa and a52sxq, the only
+  two corpus tables sharing this prefix, both write `QCOM0A0A`. miatoll writes
+  `QCOM080A`.
+
+What is *not* an argument is descent: no table in the corpus is this board's
+family, `bitra` declares no BAM at all, and the two nearest platforms take
+`QCOM080A` and `QCOM0213`. The id is chosen by the driver set, with the prefix
+agreeing — the same shape as every step that selected by the id space.
+
+The class rule is total and visible in **109** BAM nodes across the 67 tables:
+every BAM in a table carries that table's one id and never a second, and `_UID` is
+the number in the node's own name in hex — `One` for `BAM1`, `0x03` for `BAM3`,
+`0x05` through `0x10` for `BAM5`, `BAM6`, `BAM7` and `BAMD` to `BAMG`. There is no
+exception in the corpus.
+
+### The `_CRS`, and why this one needed no adjudication
+
+Twenty-one tables declare `BAM1` and all 21 write base `0x01DC4000` and GSI
+`0x130`; 18 write length `0x24000` and the three `0C` tables write `0x28000`. This
+board's own device tree declares the same block:
+
+```
+dma-controller@1dc4000 {
+    compatible = "qcom,bam-v1.7.4", "qcom,bam-v1.7.0";
+    reg = <0x00 0x1dc4000 0x00 0x24000>;
+    interrupts = <0x00 0x110 0x04>;
+    qcom,ee = <0x00>;  qcom,controlled-remotely;
+    num-channels = <0x10>;  qcom,num-ees = <0x04>;
+```
+
+`0x110` is `GIC_SPI 272`, and `272 + 32 = 304 = 0x130`. Base, length and GSI agree
+with the corpus in all three fields, so this is neither the corpus over the board's
+objection nor the board over the corpus's — which is the first time this file has
+been able to say that. The length agrees *and* is the generation's: `0x24000` is
+the 18 older tables' value, `0x28000` is the three `0C` tables' **and sc7280's**.
+
+The tree also names the client, and there is exactly one: `crypto@1dfa000` takes
+`dmas = <&cryptobam 4>, <&cryptobam 5>`. `0x1DFA000` appears in no corpus table, so
+the node enumerates a block whose consumer the corpus does not model. It is marked
+`qcom,controlled-remotely` with `qcom,ee = <0>` and `qcom,num-ees = <4>`, so the
+secure world owns it and this node reports it rather than managing it.
+
+### `BAM5`, and why half the pair is owed
+
+`BAM5` is `BAM1`'s successor in 21 of 21 tables and its base moves with the
+platform: `0x03A84000` in the ten tables sharing this prefix, then `0x17184000`,
+`0x62E84000`, `0x62D84000`, `0x03304000` and `0x06C04000`. Its GSI is `0xC4` in 21
+of 21. Those numbers are not arbitrary:
+
+- `sc7280` declares `slimbam: dma-controller@3a84000` with `reg = <0 0x03a84000 0
+  0x20000>` and `interrupts = <GIC_SPI 164 …>`; `164 + 32 = 196 = 0xC4`. Same base,
+  same GSI as the corpus writes for `BAM5`.
+- In lisa, `BAM5` sits immediately below the ADSP, and the ADSP's own child `SLM1`
+  is the SLIMbus at `0x03AC0000` — the address `sc7280`'s `slim-ngd@3ac0000`
+  occupies, and the consumer `slimbam`'s `dmas = <&slimbam 3>, <&slimbam 4>` names.
+- The shipped set carries that SLIMbus's driver: `qcslimbus7280.inf` binds
+  `ADSP\QCOM0A0F`, a child id the ADSP creates rather than one ACPI writes.
+
+None of it exists here. `0x03A84000` and `0x03AC0000` have no node in the board
+tree; this board's ADSP is at `0x3000000` where sc7280's is at `0x3700000`; neither
+`sm6350.dtsi` nor `sm7225.dtsi` declares a BAM beyond `cryptobam`, and neither has
+a SLIMbus node at all. Writing `BAM5` would reserve `0x32000` of address space and
+GSI `0xC4` on the strength of another die's layout — the same ground on which `SP1`
+and `SP12` were withheld. So `BAM5` waits on the ADSP, which is also owed.
+
+`BAME` and `BAMF`, the other two the `QCOM0A0A` tables carry, are in the same
+position and for the same reason: `0x06064000`/`0x15000`/GSI `0xC7` and
+`0x0A704000`/`0x17000`/GSI `0xA4`, neither address present anywhere on this host.
+The three `0C` tables carry neither node at all.
+
+### The position: the vote does not decide this one, and saying so is the result
+
+The pair's relations are one set, because `BAM5`'s are `BAM1`'s. Against the nodes
+in this table, sixteen relations are unanimous at 21 votes each:
+
+| direction | nodes |
+|---|---|
+| before | `UFS0`, `DEV0`, `ABD`, `PMIC`, `PM01` |
+| after | `SPMI`, `RPEN`, `TFTP`, `IPC0`, `GLNK`, `QGP1`, `SCM0`, `CPU0`–`CPU3` |
+
+and a seventeenth at 20: `PRTC`, which precedes `BAM1` in the 20 of the 21 tables
+that carry a `PRTC` — vili has none. The set is **356** votes. Scored over every
+insertion slot the maximum is **335**, and **six** slots reach it: every one from
+just after `PRTC` to just before `RPEN`. The vote ties.
+
+That is the difference from 4.84, where the vote produced a unique maximum over the
+same file. The reason it ties here is that the four nodes the corpus puts between
+`PRTC` and `BAM1` — `PMBM`, `BCL1`, `PMGK` and `PEP0`, in that order in 21 of 21 —
+are absent from this table. What decides instead is adjacency: `BAM1`'s immediate
+predecessor in the corpus is `PEP0` in 16 tables, `WLDS` in 4 and `PMGK` in 1 —
+never `PRTC` — so the relation the corpus states is "immediately after that absent
+run", and the nearest preceding node this table actually has is `PRTC` in 20 and
+`PM01` in vili. The pair therefore goes immediately after `PRTC`, as declaration 13
+counting from zero.
+
+Sixteen of the seventeen relations hold at that slot. The one that does not is
+`SPMI`'s, and this file's order is the reason: `SPMI` is declaration 6, and `ABD`,
+`PMIC` and `PM01` follow it at 7, 8 and 10, so "after `PM01`" and "before `SPMI`"
+cannot both hold. The corpus puts `SPMI` at declaration 59 of 140 in lisa and 56 of
+143 in a52sxq — after `SCM0`, `TLOG` and `TREE`. So this node costs exactly 21
+votes and nothing else.
+
+That is the same fault the 128-relation accounting at 4.84 charged twelve times.
+Two independent measurements now point at the same four nodes being in the wrong
+place, and the repair is one reorder — `SPMI` to its corpus slot — which would fix
+all thirteen relations at once. It is named here as the first thing a later step
+that reorders this file should do, and it is not done in this step.
+
+### The body
+
+```asl
+Device (BAM1)
+{
+    Name (_HID, "QCOM0A0A")  // _HID: Hardware ID
+    Alias (^PSUB, _SUB)
+    Name (_UID, One)  // _UID: Unique ID
+    Name (_CCA, Zero)  // _CCA: Cache Coherency Attribute
+    Method (_CRS, 0, NotSerialized)  // _CRS: Current Resource Settings
+    {
+        Name (RBUF, ResourceTemplate ()
+        {
+            Memory32Fixed (ReadWrite,
+                0x01DC4000,         // Address Base
+                0x00024000,         // Address Length
+                )
+            Interrupt (ResourceConsumer, Level, ActiveHigh, Exclusive, ,, )
+            {
+                0x00000130,
+            }
+        })
+        Return (RBUF) /* \_SB_.BAM1._CRS.RBUF */
+    }
+}
+```
+
+The class is uniform to a degree no other node here has been. Across the 21 tables:
+`_HID` in 21, `_UID` in 21, `_CCA` `Zero` in 21, `_CRS` in 21, and the resource
+template is exactly one `Memory32Fixed` plus one `Interrupt (ResourceConsumer,
+Level, ActiveHigh, Exclusive, ,, )` in **21 of 21** — no `GpioIo`, no second
+interrupt, no other resource anywhere in the class. `_SUB` is the alias in 20 and a
+method in the 21st, Waipio, departing at the same member as it does at `IPC0`,
+`GLNK` and `TFTP`. `_STA` is in exactly two tables — vili and Waipio — returning
+`0x0F` in both, the same pair that adds it at those four nodes.
+
+And there is no `_DEP` in any of the 21. This node has no dependency at all, which
+is unusual for this file lately — `TFTP` names `IPC0`, `IPC0` names `GLNK`, `GLNK`
+names `IPCC` and `RPEN`, `PMAP` names `PMIC`, `ABD` and `SCM0` — so the absence was
+measured across all 21 rather than assumed from a sample, the way `ABD`'s withheld
+dependency was.
+
+### The ladder
+
+- `tools/acpi/gauguin.asl` is **4,271 lines**, md5 `2f73382d3e7bb475145f5404dcfab5c8`,
+  matching `uefi/Silicium-ACPI/Platforms/Xiaomi/gauguin/gauguin.asl` and
+  `work/uefi/Mu-Silicium/…/gauguin.asl` — the full three-stage chain run, all three
+  copies the same.
+- `iasl -p /tmp/direct485 -tc gauguin.asl`: AML **6,358 bytes, 266 opcodes, 409 named
+  objects**, checksum `0xac`, length `0x18d6`, byte sum `0x00`,
+  sha256 `6d8ac55b64befa27302e4daa2697a9156f3cc43ec8cf027606fb1bd8cb7621ec`.
+  `QCOM0A0A` sits at offset **2490**, immediately before `QCOM0A0C` (`GIO0`) at
+  2588 and `QCOM0A10` (`IC10`, `IC11`, `IC13`) at 2859, 2979 and 3227 — so the four
+  0A-platform device ids are now adjacent in the table. Everything after the
+  insertion point shifted by exactly the 88 bytes the node added: `QCOM0A0D` 3384 →
+  3472, `QCOM06DC` 3331 → 3419, `QCOM0A84` 3427 → 3515.
+- Build: `PROGRESS - Success` followed by the known benign
+  `ValueError: DTB image must not be empty.` from Mu-Silicium's own `.img`.
+- `--dump-fvmain`: 7,356,416 bytes (`0x704000`),
+  sha256 `60b5781707c30a9618993d4a6cf695a6df40af33f77cc77501dee8d76e064930`,
+  byte-identical to `Build/…/FV/FVMAIN.Fv`; `EFI_FV_TAKEN_SIZE = 0x703ff0`, up
+  `0x58` for the node's 88 bytes.
+- The ACPI readback: 6 tables, `DSDT` at `0x0054d4c8` — **the same offset for a
+  fifteenth step** — 6,358 bytes with a valid checksum and byte-identical to the
+  direct compile, carrying `QCOM0A0A`. `SSDT`/`APIC`/`GTDT` valid; only `FACP` and
+  `FACS` do not, as expected before `AcpiTableDxe` runs.
+- The three payloads are `a82821bd…` (silicon/gzip), `9cf1208a…` (stock/gzip) and
+  `e38046c2…` (stock/none), all three matching GenFv's map at **123 offsets and
+  GUIDs, zero mismatches**, and all three passing `--expect P2FreeWhy` with the full
+  ten-instrument ladder. They are archived in `work/out/p2-4.85`.
+- `work/out/p2-variants` **still holds the 4.74 set** — `90b21643…`, `e693e1a0…`,
+  `26919861…`. **Ninth** step running.
+- Device count **37 → 38** `Device (` declarations. The census: **51 `_HID`/`_CID`
+  declarations, 37 distinct**, `QCOM0A0A` being the new declaration and a claimed id
+  (`qckmbam7280/qckmbam7280.inf`, listed twice by the census because the id appears
+  both in that inf's models line and in a comment line above it). The same two remain
+  unclaimed as every step since 4.70: `QCOM0A8B` (`URS0`) and `QCOM24A5` (`UFS0`).
+- One correction was made to an earlier comment. The `_CRS` paragraph as first
+  drafted said the corpus writes `0x01DC4000 / 0x24000 / 0x130` in 21 of 21; the
+  length is 18 of 21, and the `0C` tables write `0x28000`. The same paragraph had
+  placed the LPASS at `0x3000000` on both this board and Kodiak; this board's *ADSP*
+  is at `0x3000000`, sc7280's at `0x3700000`, and its SLIMbus at `0x03AC0000`.
+  Both were corrected before the build, and the numbers in the ladder above are the
+  corrected ones.
+- The device is absent from this host throughout, so nothing here is a hardware
+  reading. The payload in `boot` is still the **4.74** set and its panel reading is
+  **still owed** under 先读屏，再刷下一次. Step 4.85 changes the payload in
+  `work/out/p2-4.85` and not the one on the device.
