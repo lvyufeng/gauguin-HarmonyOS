@@ -15027,3 +15027,215 @@ to derive the adjacent node, which re-walks the same corpus for its own reasons.
   payload in `boot` is still the **4.74** set and its panel reading is **still owed** under
   先读屏，再刷下一次. Step 4.81 changes the payload in `work/out/p2-4.81` and not the one on
   the device.
+
+## Step 4.82 — the id an id already in the table decides, and one switch with three symptoms
+
+### What this step was
+
+Wrote `GLNK`, the Generic Link transport — `_HID` `QCOM0A84`, claimed outright by
+`qcglink7280.inf`. It goes between `PILC` and `QGP0`, where two unanimous relations
+leave exactly one slot and no other.
+
+The id is the step in a form this file has not used before. `PILC`'s and `RPEN`'s were
+decided by the driver set because the corpus's generation could not decide them; `GLNK`'s
+is decided by an id this table had *already* written — `QGP0` and `QGP1` are `QCOM0A88`,
+`0A` is in the `88` index group, and within `0A` there is one `GLNK` id in the corpus and
+both of its tables write it. The driver set then agrees twice rather than once, because
+it claims the whole pair: `qcglink7280.inf` for `QCOM0A84` and `qcipcrouter7280.inf` for
+`QCOM0A0D`, the only two `0A`-generation ids anywhere in the 112 infs.
+
+The node also carries the first `_DEP` in this table whose dependency the *board* states
+rather than the corpus — the three `glink-edge` nodes in gauguin's tree all `mboxes` into
+the same `mailbox@408000`, which is the `IPCC` node written in Step 4.73.
+
+Step 4.81's claim about this node was checked and holds exactly: `GLNK`'s `_DEP` is
+`Package (0x02) { \_SB.IPCC, \_SB.RPEN }` in 12 of its 21 tables and
+`Package (One) { \_SB.RPEN }` in the other nine. Nothing needed correcting this step.
+
+### The id: six tables with identical service ids and three different transport ids
+
+Twenty-one corpus tables declare a `GLNK`, under nine ids:
+
+| generation | tables | id |
+|---|---|---|
+| 05 | mh2, cepheus, nabu, pipa, vayu | `QCOM058D` ×5 |
+| 1A | lemonade, venus, vili, Lahaina MTP | `QCOM1A84` ×4 |
+| 0C | Kailua MTP, Kailua QRD, Waipio | `QCOM0C84` ×3 |
+| 08 | a52q, miatoll | `QCOM088D` ×2 |
+| **0A** | **a52sxq, lisa** | **`QCOM0A84` ×2** |
+| 09 | renoir, Cedros IDP | `QCOM0984` ×2 |
+| 02 | caymanslm | `QCOM02F9` ×1 |
+| 25 | alioth | `QCOM2584` ×1 |
+| 14 | surya | `QCOM148D` ×1 |
+
+The low byte is `84` in five of the nine (09, 0A, 0C, 1A, 25), `8D` in three (05, 08, 14)
+and `F9` in one (02) — the same three-way grouping `QGP0`'s comment measured on its own
+index (`88` / `93` / `F4`). Two nodes, two indices, the same partition.
+
+The reason the id could not simply be read off the generation is the table below. Six
+corpus tables write **this table's own `PILC`, `RPEN` and `IPCC` ids byte for byte** —
+`06E0`, `06E1`, `06C2` — and they split three ways on `GLNK`:
+
+| tables | PSUB | `PILC` | `RPEN` | `IPCC` | `GLNK` |
+|---|---|---|---|---|---|
+| a52sxq, lisa | `IDP07280` | `06E0` | `06E1` | `06C2` | **`QCOM0A84`** |
+| renoir, Cedros IDP | `IDP07350` | `06E0` | `06E1` | `06C2` | `QCOM0984` |
+| Kailua MTP, Kailua QRD | `MTP`/`QRD08550` | `06E0` | `06E1` | `06C2` | `QCOM0C84` |
+| Waipio | *(none)* | — | `06E1` | `06C2` | `QCOM0C84` |
+
+Two tables each, and Waipio the seventh vote — the one table of the seven with no `PILC`.
+
+This is the hardest form of the standing rule the file has yet had to state. Steps 4.80
+and 4.81 showed the generation is the table's and not the SoC's by comparing tables that
+*differ*; here six tables agree on three ids and disagree on the fourth, so the service
+series and the transport series are numbered independently and one cannot be read off the
+other. It is the same shape as `RPEN`'s pairing — issued together without being numbered
+together — one level up.
+
+What decides it is the fourth id already in this table. `QGP0` and `QGP1` were written
+`QCOM0A88` in Step 4.75, on the driver-set argument that comment records: `0A` is in the
+`88` group with 09, 0C, 1A and 25, and of those only `0A` also pairs with this table's
+`06E0`/`06E1`/`06C2` service series. So the family was fixed at `0A` before this step
+started. Within `0A` there is one `GLNK` id in the corpus, written by both of its tables:
+
+```
+qcgli nk7280.inf -> %GLINK.DeviceDesc%=GLINK_Device, ACPI\QCOM0A84
+qcipcrouter7280.inf -> %IPC_ROUTER.DeviceDesc%=IPC_ROUTER_Device, ACPI\QCOM0A0D
+```
+
+The driver set claims the pair whole, and those two are the only `0A`-generation ids in
+the 112 infs. `0A0D` is `IPC0`'s and is not written here.
+
+### The hardware, from the board
+
+`qcglink7280.inf`'s own description string says what the device is:
+`GLINK.DeviceDesc = "Qualcomm(R) Shared Memory Port Device"`. The board states all three
+pieces of it.
+
+```
+smem {
+    compatible = "qcom,smem";
+    memory-region = <0x2c>;          /* memory@80900000 <0x80900000 0x200000> */
+    hwlocks = <0x2d 0x03>;           /* hwlock 3 of hwlock@1f40000 */
+};
+
+hwlock@1f40000 { compatible = "qcom,tcsr-mutex"; reg = <0x1f40000 0x40000>; phandle = <0x2d>; };
+mailbox@408000 { compatible = "qcom,sm6350-ipcc", "qcom,ipcc"; reg = <0x408000 0x1000>; phandle = <0x2e>; };
+```
+
+and three edges, each an `mbox` into that same phandle `0x2e`:
+
+| edge | under | label | remote-pid | mbox |
+|---|---|---|---|---|
+| `glink-edge` | `remoteproc@3000000` (`qcom,sm6350-adsp-pas`) | `lpass` | 2 | `<0x2e 0x03 0x00>` |
+| `glink-edge` | the modem | `modem` | 1 | `<0x2e 0x02 0x00>` |
+| `glink-edge` | `remoteproc@8300000` (`qcom,sm6350-cdsp-pas`) | `cdsp` | 5 | `<0x2e 0x06 0x00>` |
+
+`mailbox@408000` is the `IPCC` node this table already has, written in Step 4.73 at
+`QCOM06C2` and at the board's one interrupt, INTID `0x104`. So the `_DEP` entry is not a
+namespace formality: it is the interrupt path the three edges actually ride on. Nothing
+else in this table has a dependency the board states and the corpus only confirms.
+
+### The body: one switch with three symptoms
+
+Nine of the 21 tables carry a `Method (_CRS)` returning nine `Interrupt` descriptors —
+eight `Edge`, one `Level` — and a one-entry `_DEP` naming `\_SB.RPEN` alone. Twelve carry
+no `_CRS` at all and a two-entry `_DEP` naming `\_SB.IPCC` and `\_SB.RPEN`. Measured, the
+two properties are not merely correlated but **coincident**:
+
+| | `_CRS` present | `_CRS` absent |
+|---|---|---|
+| tables | 9 | 12 |
+| declare an `IPCC` device | 0 | 12 |
+| `_DEP` entries | 1 | 2 |
+| generations | 02, 05, 08, 14 | 09, 0A, 0C, 1A, 25 |
+
+The nine with the resource list are exactly the nine that declare no `IPCC`; the twelve
+without one are exactly the twelve that do. And the same line divides the generations, so
+the block changed shape once, in the same generation step that added the `IPCC` node to
+these tables. This table is on the newer side and this node takes the newer form: the
+`_DEP` written and the `_CRS` not. The withheld resource is withheld for a better reason
+than `QGP0`'s interrupts were — there is no family-`0A` `GLNK` `_CRS` to copy, and the
+nine that exist are on other boards' GIC lines.
+
+The rest of the body is unanimous or near it:
+
+| member | corpus | written here |
+|---|---|---|
+| `_HID` | 21/21, nine ids | `QCOM0A84` |
+| `_UID` `Zero` | **21/21** | `Name (_UID, Zero)` |
+| `_SUB` | **21/21** — 20 as `Alias (\_SB.PSUB, _SUB)`, Waipio as `Method (_SUB)` | `Alias (^PSUB, _SUB)` |
+| `_DEP` | 21/21 — `{IPCC, RPEN}` in 12, `{RPEN}` in 9 | `{ \_SB.IPCC, \_SB.RPEN }` |
+| `_STA` | 2/21 (`Return (0x0F)`) | **omitted** |
+| `_CRS` | 9/21 | **omitted** |
+
+The two `_STA` carriers are vili and Waipio — the same two tables that carry an `RPEN`
+with no `PILC` beside it. That is recorded as the observation it is and not explained.
+
+### Position: forced by two relations, corroborated by twenty-three
+
+`PILC` precedes `GLNK` in 19 of the 19 tables that have a `PILC`, and `QGP0` follows it
+in 19 of 19. In this file `PILC` and `QGP0` are **adjacent**, so those two relations
+alone leave exactly one slot, and no other integer satisfies them.
+
+Twenty-three unanimous relations are satisfied by it and none is broken:
+
+- **before** — `UFS0`, `DEV0`, `ABD`, `PMIC`, `PM01` (21/21 each), `PMAP` and `PRTC` (20),
+  `UARD` (13), `PML0` (11), `IC10` (9), `IC11` (3), and then `RPEN` (21/21) and `PILC`
+  (19/19), the two nodes immediately above it here;
+- **after** — `QGP0` (19/19) and `QGP1` (21/21), then `CPU0`–`CPU3` (21 each) and `CPU4`–
+  `CPU7` (19 each).
+
+Two near-misses are broken by the slot and recorded rather than repaired: `SCM0` precedes
+`GLNK` in 20 of 21 and `IPCC` in 11 of 12, and this file placed both after it — `SCM0` in
+Step 4.71 and `IPCC` in 4.73.
+
+Six more relations are unsatisfiable in any slot, and they are the same six the `PILC`
+and `RPEN` comments already carry: `UCS0` (10/10), `URS0`, `USB0`, `UFN0`, `MMU0` and
+`MMU1` (20 each) sit on the far side of `GLNK` in the corpus and on the near side here,
+because this file wrote its early block in an order of its own.
+
+The one thing this slot cannot reproduce is the adjacency the corpus was measured on. The
+corpus puts `GLNK` immediately after `IPC0` in all 21 tables and immediately before `ARPC`
+in 19, and neither neighbour is in this table. When `IPC0` is written it lands between
+`PILC` and this node — its own unanimous relations are `PILC` before (19/19) and `GLNK`
+after (21/21) — and the run reappears here in the order the corpus keeps.
+
+### The ladder
+
+- Three-copy identity: `tools/acpi/gauguin.asl`, `uefi/Silicium-ACPI/Platforms/Xiaomi/
+  gauguin/gauguin.asl` and `work/uefi/Mu-Silicium/Silicium-ACPI/Platforms/Xiaomi/gauguin/
+  gauguin.asl` all md5 `ce4951a37caa2f02a5b8ea0dc213038c`, 3,798 lines.
+- `iasl` **0 errors**, 24 warnings and 55 remarks — unchanged from 4.81. AML **6,174 bytes**,
+  sha256 `b783500f4fe5b039a635a75b35a7d445cfec9872f1bd33b607a9f28fc7b1d17c`, 264 opcodes,
+  393 named objects (up 5: the node, `_HID`, `_SUB`, `_UID`, `_DEP`), length `0x181e`,
+  checksum `0x34`.
+- Disassembly round-trip: `Device (GLNK)` appears at line 1054 of the disassembly,
+  immediately after `Device (PILC)` (1045) and immediately before `Device (QGP0)` (1066).
+  Its `_DEP` disassembles to the same bare-name form this file's `PMAP` and `PMIC` `_DEP`s
+  already do, so it is compiled in the established form.
+- `build_uefi.py`: `PROGRESS - Success`, the volume written, then the known
+  `mkbootimg` `ValueError: DTB image must not be empty` footer on Mu-Silicium's own image.
+  `FVMAIN.Fv` `0x704000` at sha256 `55ee1015…`, `EFI_FV_TAKEN_SIZE 0x703f38`; the
+  `AcpiTables` FFS file grew 7,482 → 7,534 and the volume's 123 files grew by the same 52.
+  `FVMAIN_COMPACT` taken `0x10afb0` of `0x300000` — 2,052,176 free, and *more* free than
+  4.81 because the compressed inner file came out 82 bytes smaller.
+- The ACPI readback: 6 tables, `DSDT` at `0x0054d4c8` — **the same offset for a twelfth
+  step** — 6,174 bytes with a valid checksum; `SSDT`/`APIC`/`GTDT` valid; only `FACP` and
+  `FACS` do not, which is expected before `AcpiTableDxe` runs.
+- `--dump-fvmain`: the payload's DSDT is **byte-identical** to the direct `iasl` compile
+  (`cmp` clean), and carries `QCOM0A84` and not `QCOM0A0D`.
+- The three payloads are `1366617…` (silicon/gzip), `7560e87d…` (stock/gzip) and
+  `734e65c8…` (stock/none), all three matching GenFv's map at **123 offsets and GUIDs,
+  zero mismatches**. They are archived in `work/out/p2-4.82`.
+- `work/out/p2-variants` **still holds the 4.74 set** — `90b21643…`, `e693e1a0…`,
+  `26919861…`. Eighth step running.
+- Device count **34 → 35** `Device (` declarations (plus 13 `ThermalZone (`, so 47 → 48
+  named ACPI objects). The census: **48 `_HID`/`_CID` declarations, 34 distinct, 32
+  claimed** — up one in each column, `QCOM0A84` being the new declaration and a claimed id.
+  The same two remain unclaimed as every step since 4.70: `QCOM0A8B` (`URS0`) and
+  `QCOM24A5` (`UFS0`).
+- The device is absent from this host throughout, so nothing here is a hardware reading.
+  The payload in `boot` is still the **4.74** set and its panel reading is **still owed**
+  under 先读屏，再刷下一次. Step 4.82 changes the payload in `work/out/p2-4.82` and not the
+  one on the device.

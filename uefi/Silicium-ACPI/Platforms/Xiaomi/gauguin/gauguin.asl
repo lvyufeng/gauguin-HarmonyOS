@@ -2425,8 +2425,8 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
         // names. GLNK's _DEP is Package (0x02){ \_SB.IPCC, \_SB.RPEN } in 12 of its
         // twenty-one tables and Package (One){ \_SB.RPEN } in the other nine, so on
         // all twenty-one reference boards GLNK cannot start until RPEN is there -
-        // and this file's GLNK, when it is written, will be waiting on the node
-        // below. Nothing in this group depends on RPEN directly: the group's own
+        // and this file's GLNK, written in Step 4.82, names this node in its own
+        // _DEP. Nothing in this group depends on RPEN directly: the group's own
         // _DEP entries name IPC0 (TFTP), PEP0, GLNK and IPC0 (PDSR), IPCC and QDIG
         // (SSVC), and none of those five is in this table. GLNK is not in this
         // group and is claimed, which is why the dependency is recorded.
@@ -2474,6 +2474,133 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
             {
                 Return (0x0F)
             }
+        }
+
+        // GLNK is the Generic Link transport, and the name for it that ships is
+        // in qcglink7280.inf: one hardware id, %GLINK.DeviceDesc%=GLINK_Device,
+        // ACPI\QCOM0A84, and one description string, "Qualcomm(R) Shared Memory
+        // Port Device". It is the channel layer the remote processors talk over
+        // - each remoteproc on this board carries a glink-edge, and this node is
+        // the other end of all of them.
+        //
+        // The board states the three pieces of it. The transport's memory is the
+        // reserved region the smem node points at - memory@80900000,
+        // reg = <0x00 0x80900000 0x00 0x200000>, phandle 0x2c - and smem itself
+        // is { compatible = "qcom,smem"; memory-region = <0x2c>;
+        // hwlocks = <0x2d 0x03> }, the lock being hwlock 3 of hwlock@1f40000
+        // (qcom,tcsr-mutex, reg = <0x1f40000 0x40000>). The edges are three:
+        //
+        //   adsp  remoteproc@3000000  glink-edge { label = "lpass"; remote-pid = 2 }
+        //   mpss  (the modem)         glink-edge { label = "modem"; remote-pid = 1 }
+        //   cdsp  remoteproc@8300000  glink-edge { label = "cdsp";  remote-pid = 5 }
+        //
+        // - and all three mbox into the same controller, phandle 0x2e, which is
+        // mailbox@408000, qcom,sm6350-ipcc. That controller is already this
+        // table's IPCC node, written in Step 4.73 at the id the driver set claims
+        // for it and at the board's own single line, INTID 0x104. So the entry
+        // this node's _DEP carries is not a namespace formality: it is the
+        // interrupt path the board's three glink-edges actually ride on, and this
+        // is the first dependency in this table that the board states and the
+        // corpus only confirms.
+        //
+        // The id. Twenty-one tables declare a GLNK, under nine ids: QCOM058D five
+        // times, QCOM1A84 four, QCOM0C84 three, QCOM088D, QCOM0A84 and QCOM0984
+        // twice each, and QCOM02F9, QCOM2584 and QCOM148D once. The low byte is
+        // 84 in five of the nine (09, 0A, 0C, 1A, 25), 8D in three (05, 08, 14)
+        // and F9 in one (02) - the same three-way grouping QGP0's comment
+        // measured on its own index, 88/93/F4, which is a second sighting of the
+        // families and not a coincidence.
+        //
+        // What settles the id is this table's own four, and the shape of the
+        // argument is the hardest form of the standing rule so far. This table
+        // already writes PILC QCOM06E0, RPEN QCOM06E1, IPCC QCOM06C2 and QGP0 and
+        // QGP1 QCOM0A88. Six corpus tables write the first three of those
+        // together - a52sxq, lisa, renoir, Cedros' IDP, and Kailua's MTP and QRD
+        // - and they split three ways on GLNK:
+        //
+        //   a52sxq, lisa                   IDP07280      QCOM0A84
+        //   renoir, Cedros IDP             IDP07350      QCOM0984
+        //   Kailua MTP, Kailua QRD         MTP/QRD08550  QCOM0C84
+        //
+        // Two tables each, and Waipio - the seventh table whose RPEN is 06E1 and
+        // whose IPCC is 06C2, and the one table of the seven with no PILC - is a
+        // third vote for 0C84. Six tables with byte-identical service ids carry
+        // three different transport ids, so the service series does not determine
+        // the transport series; the table owns both and numbers them apart. That
+        // is why this id could not be read off as "the generation after 06", the
+        // way RPEN's could not be counted up from PILC's.
+        //
+        // The fourth id already here decides it. QGP0 and QGP1 are QCOM0A88, and
+        // 0A is in the 88 group with 09, 0C, 1A and 25, so this table's QUP-side
+        // family was fixed at 0A when those two nodes were written - by the same
+        // driver-set argument QGP0's comment records at length. Within 0A there
+        // is one GLNK id in the corpus and both of its tables write it: QCOM0A84.
+        // The driver set agrees twice rather than once, because the pair is
+        // claimed whole: qcglink7280.inf takes ACPI\QCOM0A84 and
+        // qcipcrouter7280.inf takes ACPI\QCOM0A0D, and those two are the only
+        // 0A-generation ids anywhere in the 112 infs - 0A0D being the next node's
+        // and not written here. So the corpus and the drivers both put this node
+        // in 0A, and they are two measurements of one thing rather than one
+        // measurement repeated.
+        //
+        // The body is the corpus's, and its shape is one switch with three
+        // symptoms. Nine of the twenty-one carry a Method (_CRS) returning nine
+        // Interrupt descriptors - eight Edge, one Level - and a one-entry _DEP
+        // naming \_SB.RPEN alone; twelve carry no _CRS at all and a two-entry
+        // _DEP naming \_SB.IPCC and \_SB.RPEN. The two properties are not merely
+        // correlated but coincident: the nine with the resource list are exactly
+        // the nine tables that declare no IPCC device, and the twelve without one
+        // are exactly the twelve that do. And the same line divides the
+        // generations - 02, 05, 08 and 14 on one side, 09, 0A, 0C, 1A and 25 on
+        // the other - so the block changed shape once, in the same generation
+        // step that added the IPCC node to these tables. This table is on the
+        // newer side and this node takes the newer form: the _DEP written and the
+        // _CRS not. The withheld resource is withheld for a better reason than
+        // the QGP interrupts were: there is no family-0A GLNK _CRS to copy, and
+        // the nine that exist are on GIC lines belonging to other boards.
+        //
+        // _UID is Zero in all twenty-one, as it is on UFS0, URS0, ABD and GIO0
+        // here. So is the alias, in all twenty-one - twenty as
+        // Alias (\_SB.PSUB, _SUB) and one, Waipio, as the Method (_SUB) form the
+        // PEP0 comment records as that board's habit. No _STA: the two tables
+        // that carry one are vili and Waipio, and they are also the two tables
+        // that write a GLNK _STA on a table whose RPEN has no PILC beside it.
+        // That is left as the observation it is.
+        //
+        // Position, and it is forced by two relations rather than fixed by many.
+        // Before: UFS0, DEV0, ABD, PMIC and PM01 (21 of 21 each), PMAP and PRTC
+        // (20), UARD (13), PML0 (11), IC10 (9) and IC11 (3), and then the two
+        // nodes above - RPEN (21 of 21) and PILC (19 of 19). After: QGP0 (19 of
+        // 19) and QGP1 (21 of 21), then CPU0 to CPU3 (21 each) and CPU4 to CPU7
+        // (19 each). All twenty-three of those unanimous relations are satisfied
+        // by one slot, and it is the only slot that satisfies them: PILC is above
+        // it and QGP0 is below it and the two are adjacent in this file, so the
+        // choice here is this node or no position at all. Two relations the
+        // corpus nearly agrees on are broken by that slot and are recorded rather
+        // than repaired - SCM0 precedes GLNK in 20 of 21 and IPCC in 11 of 12,
+        // and this file placed both after it, SCM0 in Step 4.71 and IPCC in 4.73.
+        // Six more are unsatisfiable in any slot, and they are the same six the
+        // PILC and RPEN comments record: UCS0 (10 of 10), URS0, USB0, UFN0, MMU0
+        // and MMU1 (20 each) sit on the far side of GLNK in the corpus and on the
+        // near side here, because this file wrote its early block in an order
+        // that is not the corpus's.
+        //
+        // The one thing this slot cannot reproduce is the adjacency it was
+        // measured on: the corpus puts GLNK immediately after IPC0 in all
+        // twenty-one tables, and IPC0 is not in this table yet. It will be, and
+        // when it is written it lands between PILC and this node, because IPC0's
+        // own unanimous relations are the same ones - PILC before it and GLNK
+        // after it - and the run reappears here in the order the corpus keeps.
+        Device (GLNK)
+        {
+            Name (_HID, "QCOM0A84")  // _HID: Hardware ID
+            Alias (^PSUB, _SUB)  // _SUB: Subsystem ID
+            Name (_UID, Zero)  // _UID: Unique ID
+            Name (_DEP, Package (0x02)  // _DEP: Dependencies
+            {
+                \_SB.IPCC,
+                \_SB.RPEN
+            })
         }
 
         // QGP0 and QGP1 are the two GPI DMA controllers, and they are here
