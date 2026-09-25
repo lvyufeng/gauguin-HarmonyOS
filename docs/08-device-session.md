@@ -18836,3 +18836,374 @@ and the file to compare it against is the one at the failing index.
   exits **0** on it with all ten instruments present. One photograph of the bottom of the panel
   decides between `Out of Resources x27` and a split, with no new build and no flash. Until then the
   ordering rule stands: **先读屏，再刷下一次**.
+
+## Step 4.97 — the status surface of the 27, and the one letter that would be read as absence
+
+### `L` is written on one line of the dispatcher and carries no reason
+
+`P2 SEQ` was read off the panel on 2026-09-23 and is 46 characters: 18 `s`, `LLL` at positions
+18–20, one `s` at 21, then 24 `L`. The letter is written by `P2Record`
+(`Dispatcher.c:617`), which `CoreDispatcher` calls at `:1111` inside `if (EFI_ERROR (Status))`
+after `CoreLoadImage` (`:1081`), and it is the *phase* and not the status:
+
+```c
+  P2MarkSeq (Guid, (Phase == 'L') ? 'L' : 'S', Status);
+```
+
+So `L` says exactly one thing — the load failed, so `EntryPoint` was never reached — and nothing
+about why. The status itself is kept, in `mP2ApriWhy` and `mP2ApriSt` (`P2MarkSeq`, `:607-609`,
+reached from `P2Record` at `:630`), and printed twice more by `P2Digest`: once as a class letter
+(`P2 WHY`) and once grouped and counted (`P2 ERR %r x%d`). Neither row has ever been read on this
+board, which is why "why do 27 of the 46 fail" has stayed open across a dozen steps. **The object
+that can be enumerated without the device is the set of statuses `CoreLoadImage` can return for these
+27 calls**, and that is what this step enumerates. Everything a host can strike out is struck out
+below, with the measurement that strikes it; what is left is what one photograph decides.
+
+### The call, before the sites
+
+`CoreDispatcher` makes one call shape for all 46, at `Dispatcher.c:1081-1088`:
+
+```c
+        Status = CoreLoadImage (
+                   FALSE,                        // BootPolicy
+                   gDxeCoreImageHandle,          // ParentImageHandle
+                   DriverEntry->FvFileDevicePath,
+                   NULL,                         // SourceBuffer
+                   0,                            // SourceSize
+                   &DriverEntry->ImageHandle
+                   );
+```
+
+`CoreLoadImage` (`:1605`) forwards `DstBuffer` as `(EFI_PHYSICAL_ADDRESS)(UINTN)NULL` (`:1625`) and
+`NumberOfPages` as `NULL` (`:1626`), and adds
+`RUNTIME_REGISTRATION | DEBUG_IMAGE_INFO_TABLE_REGISTRATION` (`:1629`). Two of the entry conditions
+below are settled by the call's shape before any driver is examined: `SourceBuffer == NULL` makes
+`:1267` unreachable outright, and `DstBuffer == 0` makes `:756`/`:764` unreachable and selects the
+page-count computation at `:682-688`. The other dismissed sites — `:1233`, `:1239`, `:1321`, the
+`Handle.c` checks, and the security and memory-protection arms — need the arguments or the loaded
+volume, and are struck out in the rows that follow.
+
+### The sites on `CoreLoadImageCommon`, and which of them can fire
+
+Every `goto Done` and every `return` in the function that can carry a non-`EFI_SUCCESS` `Status`:
+
+| site | status | on the 27's path |
+| --- | --- | --- |
+| `Image.c:1233`, `:1239` | `INVALID_PARAMETER` | **no** — `ImageHandle` is non-NULL, `ParentImageHandle` is `gDxeCoreImageHandle`, and `CoreLoadedImageInfo` resolves it |
+| `Image.c:1267` | `LOAD_ERROR` | **no** — it needs `SourceBuffer != NULL` with `SourceSize == 0` (`:1264-1268`); the dispatcher passes `NULL`, `0` |
+| `Image.c:1311` | **`NOT_FOUND`** | **yes** — and it is the one site whose status is not the reason the load failed; see the section below |
+| `Image.c:1321` | `OUT_OF_RESOURCES` | **no** — the `LoadFile` route; the device path resolves against `gEfiFirmwareVolume2ProtocolGuid` (`:1296`) and `ImageIsFromLoadFile` stays FALSE |
+| `Image.c:1383` | whatever `gSecurity`/`gSecurity2` returned | **no** — no security protocol exists on this board, for the whole batch |
+| `Image.c:1393` | `OUT_OF_RESOURCES` | **yes** — `AllocateZeroPool (sizeof (LOADED_IMAGE_PRIVATE_DATA))`, a fixed few hundred bytes |
+| `Image.c:1429` | `OUT_OF_RESOURCES`, `INVALID_PARAMETER` | OOR yes; `INVALID_PARAMETER` **no** — `*UserHandle` is `&Image->Handle` and `Image->Handle` is zero out of `AllocateZeroPool`, so `Handle.c:467-472` is skipped |
+| `Image.c:1443` | the second table | yes |
+| `Image.c:1478` | `NOT_FOUND`, `ACCESS_DENIED`, `INVALID_PARAMETER` | **no** — all four of `CoreReinstallProtocolInterface`'s checks pass by construction |
+| `Image.c:1499`, `:1513` | `OUT_OF_RESOURCES`, `INVALID_PARAMETER` | OOR yes; `INVALID_PARAMETER` **no** — neither protocol is on the handle yet, so `Handle.c:467-472` is skipped, and `Image->Handle` is valid, so `CoreValidateHandle` at `:529` passes |
+| `Image.c:1524` | `OUT_OF_RESOURCES` (`MemoryProtection.c:589`) | **no** — the policy resolves to `DO_NOT_PROTECT`, whose arm returns `EFI_SUCCESS` at `:577` |
+| `Image.c:1556` | `SECURITY_VIOLATION` on a load that **succeeded** | **no** — it needs the same absent security producer |
+
+Three of those rows are worth more than the table cell.
+
+**`:1311` is a laundering site, and it is the first allocation on the path.** `FHand.Source` is the
+return value of `GetFileBufferByFilePath` (`MdePkg/Library/DxeServicesLib/DxeServicesLib.c:607`),
+whose return type is `UINT8 *` — **the function has no status to report**. Every failure inside it,
+including an allocation failure, arrives at `Image.c:1305` as a null pointer and is turned into
+`EFI_NOT_FOUND` one line later. On the FV route that function calls `ReadSection (EFI_SECTION_PE32)`
+and falls back to `ReadFile` (`:684-711`), and both of those allocate: the section's own buffer at
+`CoreSectionExtraction.c:1356` and the whole-file cache at `FwVolRead.c:330`. **So a heap that
+cannot serve the file copy is recorded as `NOT_FOUND`, and `P2WhyLetter` prints `N`.** That is not a
+hypothesis about this board; it is the return type of the function, and it is the reason `N` on the
+panel must not be read as "the file was not there".
+
+**`:1478` cannot fire, and the argument is the handle's age.** `CoreReinstallProtocolInterface`
+(`Hand/Notify.c:190-251`) can return `INVALID_PARAMETER` from its parameter check, `CoreValidateHandle`'s
+status, `EFI_NOT_FOUND` from `CoreFindProtocolInterface` (`:207-210`) or from
+`CoreRemoveInterfaceFromProtocol` (`:228-232`), and `EFI_ACCESS_DENIED` from
+`CoreDisconnectControllersUsingProtocolInterface` (`Hand/Handle.c:58`). The handle it is given was
+created at `Image.c:1429`, one protocol was installed on it there with `Notify` FALSE, and the
+interface passed in is that same `&Image->Info`. The handle is valid, the interface is found, and its
+`OpenList` is empty — `CoreDisconnectControllersUsingProtocolInterface` starts `Status = EFI_SUCCESS`
+and only reaches `EFI_ACCESS_DENIED` if an open item survives the disconnect loop. All four checks
+pass, so this site contributes nothing to the 27, and an `O` (the letter `P2WhyLetter` gives
+`EFI_ACCESS_DENIED`) is not a candidate either.
+
+**A failing `AllocateRuntimePool` at `Image.c:836` cannot produce an `L` at all.** The arm is a bare
+`goto Done` with no assignment:
+
+```c
+      Image->RuntimeData = AllocateRuntimePool (sizeof (EFI_RUNTIME_IMAGE_ENTRY));
+      if (Image->RuntimeData == NULL) {
+        goto Done;
+      }
+```
+
+`Status` still holds `PeCoffLoaderRelocateImage`'s `EFI_SUCCESS` from `:804`, so `CoreLoadPeImage`
+returns success and the image is loaded *unregistered* in the runtime image list. This is the one
+allocation on the load path whose failure is invisible: it needs `Subsystem 12`, it needs the heap
+to be unable to serve a 48-byte runtime pool, and when it fires the driver is started normally.
+
+**This is the correction to Step 4.96's `:18692-18696`, and it is a correction of a pairing rather
+than of a count.** That paragraph says the two `AllocateRuntimePool` calls at `:793` and `:837` "each
+… arrive at `FindFreePages` through `CoreAllocatePoolPages`". The *allocation* claim is right — both
+do reach the page allocator that way, and both spend the same heap — but only `:793`'s failure is
+reported: its arm assigns `Status = EFI_OUT_OF_RESOURCES` at `:795` before the `goto Done` at `:796`.
+`:837`'s arm assigns nothing. So a heap that refuses the 48-byte pool at `:836` produces no record at
+all, not an `R`, and 4.96's sentence does not distinguish the two. The 20-versus-6 count of
+out-of-resources producers is unchanged; what changes is that one of the six is not a producer of
+anything observable.
+
+### The sites inside `CoreLoadPeImage`
+
+| site | status | on the 27's path |
+| --- | --- | --- |
+| `Image.c:608` `PeCoffLoaderGetImageInfo` | `LOAD_ERROR`, `UNSUPPORTED` | acts on header fields all 46 share |
+| `Image.c:613`/`:624` `CoreIsImageTypeSupported` | `UNSUPPORTED` | **no** — `Machine` takes one value across all 46 |
+| `Image.c:643-645` | `UNSUPPORTED` | **no** — `Subsystem` is 11 or 12 on all 46 |
+| `Image.c:664` | `SECURITY_VIOLATION` | **no** — needs `Subsystem 10` and a nonzero `gDxeMps` bit |
+| `Image.c:697`/`:741` | `OUT_OF_RESOURCES` | **yes** — the page request, the one that reaches `P2FreeWhy` |
+| `Image.c:795` | `OUT_OF_RESOURCES` | **yes**, when the image is subsystem 12 — **6 of the 27** (`:7300`'s line-up; 10 of the 46 promoted) |
+| `Image.c:781`/`:804` — arms at `:783`/`:806` | the loader's vocabulary | `BUFFER_TOO_SMALL` **no**; `LOAD_ERROR`/`INVALID_PARAMETER` see below |
+| `Image.c:836` | **none** | a silent failure, above |
+
+`BUFFER_TOO_SMALL` is out for a reason worth keeping: the only producer reachable from `:741` is
+`BasePeCoff.c:1310-1312`, which compares the caller's `ImageSize` against the image's, and the
+`DstBuffer` this call passes is `NULL` — `CoreLoadPeImage` computes `ImageSize` itself at
+`:676-684` and the recomputed context cannot exceed it. (`Image.c:764`'s `EFI_BUFFER_TOO_SMALL` is on
+the caller-supplied-buffer branch at `:745-769`, which this call never enters, and `Image.c:1445`'s
+`EFI_BUFFER_TOO_SMALL`/`EFI_OUT_OF_RESOURCES` special case exists for the same caller.)
+`INVALID_PARAMETER` has one producer in the loader that is worth naming even though it cannot fire:
+`BasePeCoff.c:1315-1321` returns it when the image address resolved to `0`, which would mean
+`CoreAllocatePages` handed back address zero — i.e. it would already have failed at `:740`.
+
+### Every PE-header-derived status is ruled out by the split itself
+
+The four header-driven arms above are not ruled out by reading them; they are ruled out by the
+observation that **each field takes only values that also occur among the 19 that loaded**.
+`tools/pe-facts.py` over the payload of record, with the panel's SEQ string passed in as the
+classification:
+
+```
+field                      s vals L vals      values  threshold
+Machine                         1      1      shared  n/a
+Magic                           1      1      shared  n/a
+NumberOfSections                3      3      shared  n/a
+SizeOfOptionalHeader            1      1      shared  n/a
+Characteristics                 2      2      shared  n/a
+ImageBase                       1      1      shared  n/a
+SectionAlignment                2      2      shared  n/a
+FileAlignment                   2      2      shared  n/a
+```
+
+`Machine` has one value across the whole promoted set and it is the same value on both sides, so
+whatever `CoreIsImageTypeSupported` does with it, it does the same to all 46 — and 19 of them pass
+it, because `s` entries exist. `Magic` likewise: `PeCoffLoaderGetPeHeader`'s DOS and PE signature
+checks are functions of a field with one value, and the 19 prove the value passes. `Characteristics`
+is `0x2e` or `0x2022`, and `IMAGE_FILE_RELOCS_STRIPPED` (bit 0) is clear in both — and clear
+therefore on all 46, because `has_reloc` is a different field and the four `has_reloc=False` entries
+do not touch this bit (Step 4.46). The tool also read every section table, so
+`PeCoffLoaderLoadImage`'s section-base resolution (`BasePeCoff.c:1415-1426`) is looking at tables
+that parse. **`Subsystem` has two values, 11 and
+12, and both occur on the succeeding side**, so the `default:` arm of the memory-type switch at
+`Image.c:643-645` — the only other place `EFI_UNSUPPORTED` is produced — is not taken by any of the
+46.
+
+That also disposes of two arms that a reader of the loader's own source would expect to matter, both
+gated on `RelocationsStripped`:
+
+```c
+  if (CheckContext.RelocationsStripped) {
+    if (CheckContext.ImageType == EFI_IMAGE_SUBSYSTEM_EFI_RUNTIME_DRIVER) {
+      ImageContext->ImageError = IMAGE_ERROR_INVALID_SUBSYSTEM;
+      return RETURN_LOAD_ERROR;                       /* :1334 */
+    }
+    if (CheckContext.ImageAddress != ImageContext->ImageAddress) {
+      ImageContext->ImageError = IMAGE_ERROR_INVALID_IMAGE_ADDRESS;
+      return RETURN_INVALID_PARAMETER;                /* :1343 */
+    }
+  }
+```
+
+`RelocationsStripped` is set from `IMAGE_FILE_RELOCS_STRIPPED`
+(`BasePeCoff.c:660-665`) and not from the presence of a `.reloc` section, and that bit is clear on all
+46 — the fact Step 4.46 established for the page allocator and which applies here unchanged. So the
+loader's `LOAD_ERROR`-for-a-runtime-driver arm cannot fire for any of the six subsystem-12 entries
+among the 27 either, and those six do not fail by that route.
+
+**The read callback cannot fail, which kills the loader's read-error arms.** `CoreReadImageFile`
+(`Image.c:299-334`) returns `EFI_INVALID_PARAMETER` only for a null handle, size pointer or buffer
+(`:309-315`) and `EFI_SUCCESS` at its single other exit (`:333`). It *clamps* rather than failing: a
+request that runs past the end has `*ReadSize` reduced to what was left (`:324-330`), and a request
+that starts at or past the end reads zero bytes and still succeeds. So a short file is
+indistinguishable from a good one to every caller, and `BasePeCoff.c:1397`'s and `:1576`'s
+`IMAGE_ERROR_IMAGE_READ` arms — the `RETURN_LOAD_ERROR` at `:1398` and `:1577` — are dead: they test
+a status the callback cannot produce.
+
+What survives in the loader's own vocabulary is therefore narrow: `:1424-1425`'s
+`IMAGE_ERROR_SECTION_NOT_LOADED` (a section whose `VirtualAddress + VirtualSize` maps outside the
+image), the debug-directory pair at `:1540-1541` and `:1556-1558`, and the
+`IMAGE_ERROR_FAILED_RELOCATION` arms `:1086-1138` and `:1194` (a malformed relocation block).
+All are facts about the file's internal tables that the host tools read without complaint on all 46,
+and all would be extraordinary for a set that is not size-correlated and whose members share a build
+and a compiler. `E` is not impossible; it is the only surviving non-resource producer, and it would
+be the surprise.
+
+### Memory protection is ruled out at three levels, and the middle one is a string in the image
+
+`Image.c:1524` calls `ProtectUefiImage` for every image that reaches the end of a successful load,
+and `MemoryProtection.c:589` is an `EFI_OUT_OF_RESOURCES` producer inside it. It cannot fire here.
+
+1. **No HOB producer exists.** `gDxeMemoryProtectionSettingsGuid`
+   (`Include/Guid/DxeMemoryProtectionSettings.h`) has consumers and no producer in the tree: a
+   `grep` for the symbol finds `GetFirstGuidHob` callers only —
+   `MemoryProtectionSupport.c:1844`, `DxeMemoryProtectionHobLib.c:268`, two `UefiTestingPkg` test
+   apps — plus `DxeMain.inf:133` and `DxeMemoryProtectionHobLib.inf:34` declaring the dependency.
+   There is no `BuildGuidHob` or `BuildGuidDataHob` of it anywhere.
+2. **The consumer library zeroes its own copy when the HOB is absent, and its message is in the
+   payload.** `DxeMemoryProtectionHobLibConstructor` ends with
+   `DEBUG ((DEBUG_INFO, "DxeMemoryProtectionHobLibConstructor - Unable to fetch memory protection HOB. Zero-ing memory protection settings\n"))`
+   followed by `ZeroMem (&gDxeMps, sizeof (gDxeMps))` (`:294-298`), and the doc comment above the
+   function states the same contract. Measured in the payload of record, in the 7,364,608-byte inner
+   FV: `DxeMemoryProtectionHobLibConstructor` **2**, `Zero-ing memory protection settings` **2**,
+   `Unable to fetch memory protection HOB` **2** — and the GUID's sixteen bytes occur exactly
+   **twice**, at inner-FV offsets `0x28d04` in `DxeCore` and `0x3e594` in `ArmCpuDxe`, which are the
+   consumer library linked into two modules and are the only two referrers in the volume. The
+   `ProtectUefiImage` diagnostic string `ProtectUefiImage - 0x%x` occurs **0** times, which is the
+   same result every payload has given.
+3. **The zeroed policy's arm returns `EFI_SUCCESS` and discards both of its calls' statuses.**
+   `GetProtectionPolicyFromImageType` (`:145-165`) returns `DO_NOT_PROTECT` unless
+   `ProtectImageFromUnknown` or `ProtectImageFromFv` is set — both are bits of `gDxeMps`, which is
+   zero. `GetUefiImageProtectionPolicy` (`:179-239`) has one early return before that
+   (`:205`, `!IsEnhancedMemoryProtectionActive ()`, which is the other way to reach
+   `DO_NOT_PROTECT` — `mEnhancedMemoryProtectionActive` is `TRUE` at
+   `MemoryProtectionSupport.c:24` and only cleared at `:2042`), and a DxeCore special case at
+   `:214-231` that reads the HOB *directly* because the constructor has not run yet; with no HOB,
+   `Settings` is `NULL`, and that case falls through to the same zeroed policy. The
+   `case DO_NOT_PROTECT:` arm at `:571` then calls `ClearAccessAttributesFromMemoryRange` and
+   `CreateNonProtectedImagePropertiesRecord` — neither of whose statuses is captured — and
+   `return EFI_SUCCESS;` at `:577`. **The arm cannot return an error at all.**
+
+There is a second, independent route to the same conclusion, and it is the one that would have
+mattered if a HOB somehow appeared: the only call that clears `mEnhancedMemoryProtectionActive` is
+`ActivateCompatibilityMode` at `:2042`, called from `Image.c:669`, and the guard above it needs
+`Subsystem 10` and `gDxeMps.ImageProtectionPolicy.Fields.BlockImagesWithoutNxFlag` — and `Subsystem`
+is 11 or 12 on all 46, so the load path never reaches it. `BlockImagesWithoutNxFlag` and
+`Compatibility mode reduces firmware security` are both in `DxeCore`'s strings and in no other
+module's.
+
+`ProtectUefiImage` also has a second call site whose status is thrown away (`Image.c:278`, inside
+`CoreUnloadAndCloseImage`), which is worth one line because it is the call that runs on the *error*
+path: it cannot be the reason a load failed, since it runs after one has.
+
+### Security is ruled out by the dispatch order, not by a policy
+
+`gSecurity` and `gSecurity2` are filled by the DXE arch-protocol notification database
+(`DxeMain/DxeProtocolNotify.c:22` in `mArchProtocols[]`, `:42` in `mOptionalProtocols[]`) when a
+producer installs them. The only producer in this volume is `SecurityStubDxe`, whose entry point
+installs both in one `InstallMultipleProtocolInterfaces`
+(`MdeModulePkg/Universal/SecurityStubDxe/SecurityStub.c:198-205`, after asserting at `:192-193` that
+neither is already present).
+It is `ap37`, SEQ position 36, and its letter is `L`. **It is one of the 27.** So for the whole
+batch — positions 18 through 45, every failure and the one success among them — neither pointer is
+set, `SecurityStatus` keeps the `EFI_SUCCESS` it was given at `Image.c:1224`, and the entire security
+vocabulary is dead on the load path:
+
+- `Image.c:1333-1369`, the two arms that would call `FileAuthentication`/`FileAuthenticationState`,
+  and `Image.c:1374-1386`, the arm that turns their verdict into the returned status — including the
+  `EFI_ACCESS_DENIED` case that nulls `*ImageHandle` (`:1375`, `:1380`) and the
+  `ASSERT (gSecurity != NULL)` at `:1348` that would have fired had `gSecurity2` been non-NULL;
+- `Image.c:664`, the NX-compat block, which additionally needs a `Subsystem 10` image;
+- **`Image.c:1555`, which is the one site in the whole function that returns an error for a load that
+  worked**:
+  ```c
+    } else if (EFI_ERROR (SecurityStatus)) {
+      Status = SecurityStatus;
+    }
+  ```
+  A driver that loaded, was relocated and installed would come back as `EFI_SECURITY_VIOLATION` and
+  be recorded as an `L`, with no entry point called. It is also the only way a driver reaches the
+  dispatcher's `Untrusted` state (`Dispatcher.c:1096-1101`), the state `P2 RETRY`'s `bs9=` field
+  watches. Since no security protocol exists, none of the 27 can be untrusted, and `P2 RETRY`'s
+  counters must be flat for a reason that is now established rather than assumed.
+
+### What is left, and the letter that would be misread
+
+After the rows struck out above, a non-`EFI_SUCCESS` return from `CoreLoadImage` for one of the 27
+is one of three things, and `P2WhyLetter` gives each one letter:
+
+| letter | status | the live producers |
+| --- | --- | --- |
+| `N` | `EFI_NOT_FOUND` | `Image.c:1311` only — a null from `GetFileBufferByFilePath`, **including an allocation failure inside the FV read** |
+| `R` | `EFI_OUT_OF_RESOURCES` | `Image.c:1393`, `:795`, `:697`/`:741`, and the protocol installs at `:1429`/`:1499`/`:1513` — where the `Handle.c:463` preset escapes through `CoreFindProtocolEntry` (`:482-485`, NULL only if its own 48-byte `PROTOCOL_ENTRY` pool fails) or through the `PROTOCOL_INTERFACE` and `IHANDLE` pools at `:491`/`:502` |
+| `E` | `EFI_LOAD_ERROR` | `BasePeCoff.c:1424-1425` (a section whose base or end resolved to `NULL`), `:1540-1541` and `:1556-1558` (the CodeView/debug directory), and the relocation block `:1086-1138`, `:1194` — none of which is an allocation |
+
+**Every one of those producers except `E` is an allocation, and the largest of them is not in
+`CoreLoadPeImage`.** The order in which the 27 make their requests is: the whole-file cache first
+(`FwVolRead.c:330`, up to `BdsDxe`'s 385,166 bytes, 95 pages), the PE32 section's buffer second
+(`CoreSectionExtraction.c:1356`, the same order of magnitude), the image pages third
+(`Image.c:731`, `ImageSize` plus `SectionAlignment` where that exceeds a page — `0x10000` on eight of
+the 46, per `:682-688`), and the fixed pools
+last (`Image.c:1393`, the protocol installs). A heap that fails at the *first* of those produces an
+`N`; a heap that fails at the third produces an `R`; and nothing on the path distinguishes them for
+the reader, because the first failure's status is overwritten by `EFI_NOT_FOUND` at `:1311`.
+
+That is the correction this step makes to the pending reading, and it is worth stating as a rule:
+
+> **`P2 ERR Not Found x27` is a resource reading, not an absence reading.** `P2 WALK`
+> (five lines, `seen`/`iter`/`last` per file type) and `P2 APRI` (`bytes=`, `entries=`, `sum=`, and
+> `matched=%d..%d`) already establish that the files are in the volume and that the Apriori array is
+> whole. A `P2 WHY` that begins `ssssssssssssssssssNNN` is therefore evidence that the load path
+> failed to obtain a buffer it should have obtained, and the sizes to compare it against are the
+> whole-file and section copies, not any image's `SizeOfImage`.
+
+The three letters also partition the remaining work cleanly. `N` sends the search to
+`FwVolRead`/`CoreSectionExtraction` and to the pool path below `GetFileBufferByFilePath` — which no
+step has yet instrumented, because every instrument placed so far sits at or above
+`CoreLoadPeImage`. `R` sends it to the page allocator, where `P2FreeWhy`'s `t=4` row already waits
+for it. `E` sends it to the PE headers of 27 files whose section tables the host tools read without
+complaint, and would be the finding that the volume and the disk disagree.
+
+### The row that would have been read, and the tool that reads it
+
+The instrument has never been the problem. `P2Digest` (`:2239`) prints `P2 SEQ [%a]` at `:2348` and
+`P2 WHY [%a]` at `:2349` — **adjacent rows, same width, one line apart** — and `P2 ERR` below both at
+`:2373`. `tools/probe-fingerprint.py`'s ladder has said for three steps that the payload which
+produced the SEQ reading (`boot-now-0923`) carries `P2 WHY` and does not carry `P2 ERR`. So a
+reading that captured the SEQ row and not the WHY row captured a window whose bottom edge fell
+between two adjacent lines, and the answer to this step's question was, most likely, already on that
+photograph — one row below the line that was transcribed. If the photograph still exists,
+`tools/panel-text.py --decode` reads it without a transcription, which is what that tool was written
+to do after Step 4.39 found the transcription itself to be the lossy part.
+
+### Nothing was built and nothing was flashed
+
+- `docs/08-device-session.md` is the only file this step changes — **+371 / −0** against `f695591` —
+  and the only artifact it touches. No `.c`, no `.inf`, no `.asl`, no `APRIORI.inc`, no FFS file, no
+  comment edit and no revert.
+- **No build, no staging, no flash, and no write to any partition.** The device is absent from this
+  host throughout, so nothing here is a hardware reading and no panel was photographed.
+- The payload of record does not move: `work/out/p2-4.94/Mu-gauguin-silicon-gzip.img`,
+  **1,144,832 bytes**, sha256
+  `d621f732f4763a303e980c5af04451479c2ace31801e796993a258f226c177a5`, re-checked by `sha256sum`.
+  `work/out/p2-variants/Mu-gauguin-silicon-gzip.img` is still the 4.74 set, **1,142,784 bytes**,
+  sha256 `90b21643e3450c326fb3d24baf64d58d4692a5d155c36b76d2e020ff04a96b59` — **twenty-first** step
+  running.
+- The symbols this step cites are the ones on disk, re-read rather than remembered:
+  `Image.c:299-334`, `:608`, `:613`, `:624`, `:643-645`, `:664`, `:669`, `:682-688`, `:697`, `:731`,
+  `:741`, `:745-769`, `:781`, `:783`, `:795`, `:804`, `:806`, `:836`, `:1224`, `:1233`, `:1239`,
+  `:1264-1268`, `:1296`, `:1304`, `:1311`, `:1321`, `:1333`, `:1348`, `:1374`, `:1383`, `:1393`,
+  `:1429`, `:1443`, `:1445`, `:1478`, `:1499`, `:1513`, `:1524`, `:1555`, `:1619-1630`;
+  `Dispatcher.c:1081`, `:1096`, `:1111`, `:1122`, `:2239`, `:2348`, `:2349`, `:2373`;
+  `Hand/Handle.c:463`, `:467-472`, `:483-485`, `:491`, `:502`, `:511`, `:529`, `:58`;
+  `Hand/Notify.c:190-251`; `Library/Library.c:29`;
+  `MemoryProtection.c:145`, `:205`, `:214`, `:571`, `:577`, `:589`;
+  `MemoryProtectionSupport.c:24`, `:2042`; `MemoryProtectionHobLib/DxeMemoryProtectionHobLib.c:17`,
+  `:268`, `:294-298`; `BasePeCoff.c:660-665`, `:1086-1138`, `:1194`, `:1310-1312`, `:1315-1321`,
+  `:1332-1334`, `:1341-1343`, `:1397-1398`, `:1415-1426`, `:1540-1541`, `:1556-1558`, `:1576-1577`;
+  `DxeServicesLib.c:607`, `:684-711`; `FwVolRead.c:330`; `CoreSectionExtraction.c:1356`;
+  `Mem/Pool.c:232`, `:242`, `:247`; `SecurityStub.c:192-193`, `:198-205`;
+  `DxeProtocolNotify.c:22`, `:42`.
+- The reading that would settle it is on the device already. The 4.74 payload in `boot` carries all
+  ten instruments — `tools/probe-fingerprint.py --expect P2FreeWhy` exits **0** on it — so one
+  photograph of the **bottom** of the panel, decoded with `tools/panel-text.py --decode`, decides
+  between `R`, `N` and `E` with no new build and no flash. Read the screen first; flash second:
+  **先读屏，再刷下一次**.
