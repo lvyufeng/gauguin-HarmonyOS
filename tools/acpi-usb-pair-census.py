@@ -65,9 +65,32 @@ DEFAULT_ASL = os.path.join(REPO, "tools/acpi/gauguin.asl")
 # The declarations a device body can hold. `If`, `While`, `Buffer` and `Package`
 # open braces too, and they are deliberately absent: a brace they open is a
 # scope, not a device, and the walk pushes an empty frame for it.
+#
+# The name of the first five is one to four characters rather than exactly four.
+# AML pads a short name with trailing underscores on disk, but `iasl -d` prints
+# what was written, and the corpus holds 196 three-character `Device`s (`ABD`,
+# `CDI`, `GPS`, `GSI`, `IPA`, `LLC`, `MPA`, `QSM`, `RP1`, `SSM`, ...), 150
+# three-character `ThermalZone`s, 79 short `Method`s and 56 short `Name`s, 19 of
+# them two characters. A `{4}` read every one of them as no declaration at all,
+# so their bodies were billed to whatever enclosed them and a question asked
+# about one of those names - `--empty ABD`, say - came back with zero nodes and
+# no complaint. The guard in `walk` stops a match starting inside a longer
+# identifier, and AML has no five-character name, so the widening adds the short
+# names and nothing else.
+#
+# `Scope` and `External` keep the four-character floor, because their argument
+# is the one that is not a name - it is a namespace *path*, and every table but
+# ours prints it with its root or parent marker: `Scope (\_SB.PEP0)`, `Scope
+# (^^GIO0)`. `Scope (_SB)`, bare, is printed in twelve tables, this one among
+# them, and it is `\_SB` with the marker dropped. Read at three characters it
+# becomes a frame named `_SB` and re-parents every device in those twelve
+# tables, which is not an improvement in attribution but a regression in it, and
+# it moves the ADC census's "is the block the last device of the table" reading
+# for this table and no other. Four characters is what keeps a root reference
+# out of a chain the walk documents as holding device names.
 DECL = re.compile(
-    r"(Device|ThermalZone|Name|Method|Scope|PowerResource|External)"
-    r"\s*\(\s*([A-Z0-9_]{4})")
+    r"(Device|ThermalZone|Name|Method|PowerResource)\s*\(\s*([A-Z0-9_]{1,4})"
+    r"|(Scope|External)\s*\(\s*([A-Z0-9_]{4})")
 
 BAND_A = ("USB0", "UFN0")   # \_SB.URS0's two controllers
 BAND_B = ("USB1", "UFN1")   # \_SB.URS1's, which this table does not have
@@ -106,7 +129,7 @@ def walk(text):
     while i < n:
         m = DECL.match(text, i)
         if m and not (i > 0 and (text[i - 1].isalnum() or text[i - 1] == "_")):
-            kind, name = m.group(1), m.group(2)
+            kind, name = m.group(1) or m.group(3), m.group(2) or m.group(4)
             out.append((kind, name, tuple(x for x in stack if x), m.start()))
             j = m.end()
             depth = 1

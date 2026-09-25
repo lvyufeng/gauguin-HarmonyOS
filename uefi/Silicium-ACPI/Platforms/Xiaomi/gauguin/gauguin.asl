@@ -289,10 +289,20 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
         // OS resolves when it loads the device - an entry that does not
         // resolve is not a hint, it is a failure. 19 of the 21 tables write
         // exactly Name (_DEP, Package (One) { \_SB.PEP0 }), and the exception
-        // is the one that matters: Waipio is the only table in the corpus with
-        // no PEP0 anywhere in it, and its ABD carries no _DEP either. That is
-        // this table's situation, so what is written here is the form a
-        // shipped table writes when the dependency is absent.
+        // is the one that matters: of the 21 tables that carry an ABD, Waipio
+        // is the only one that declares no PEP0 device, and its ABD carries no
+        // _DEP either. That is this table's situation, so what is written here
+        // is the form a shipped table writes when the dependency is absent.
+        //
+        //   "Waipio is the only table in the corpus with no PEP0 anywhere in
+        //   it" is what that sentence said until Step 4.94, and over the corpus
+        //   it is false: 45 of the 65 reference tables declare no PEP0 device
+        //   of their own, three of them declaring no device at all. The claim
+        //   is true of the ABD family and was written as true of the corpus -
+        //   the same mistake the QUP protocol counts below were making in the
+        //   same step, and the reason `tools/acpi-dep-census.py` now exists to
+        //   be asked again: `--carrier ABD SCM0` is the reading that says which
+        //   family a sentence like this one is about.
         //
         //   A correction, because the comment above the SMMUs gives that rule
         //   a justification that is not true. It says "a one-entry _DEP is a
@@ -2858,8 +2868,16 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
         // child is not written and why I2C9 alone does not give touch.
         //
         // I2C8 and I2C9 are the same node as IC11 with a different slot, and
-        // carry the same omission: no _DEP, because every engine in the family
-        // depends on \_SB.PEP0 and this table has none. I2C8's bus is the audio
+        // carry the same _DEP, written in Step 4.94: Package (One) { \_SB.PEP0 },
+        // which is the entry the family writes on 52 of its 53 I2C nodes. The
+        // omission recorded here until then - no _DEP, because every engine in
+        // the family depends on \_SB.PEP0 and this table had none - closed when
+        // PEP0 landed in Step 4.93, and the count that was expected to settle
+        // the rest did not have to: of the 53 I2C nodes 43 write PEP0 alone, 8
+        // add a QGP, and the corpus gives no rule for which, so the one-entry
+        // form is the family's and the QGP tail is the exception. The three
+        // nodes' own QGP is QGP1 by their dmas and is named in the QGP block's
+        // comment below rather than here. I2C8's bus is the audio
         // amplifiers cs35l41@40 and cs35l41@41, which no driver in the set
         // claims; I2C9's is the touch and the NFC controller nq@28, and the set
         // has no driver for either. Both nodes are written for the bus and not
@@ -2872,6 +2890,10 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
             Name (_HID, "QCOM0A10")  // _HID: Hardware ID
             Alias (^PSUB, _SUB)
             Name (_UID, 0x08)  // _UID: Unique ID
+            Name (_DEP, Package (One)  // _DEP: Dependencies
+            {
+                \_SB.PEP0
+            })
             Name (_CCA, Zero)  // _CCA: Cache Coherency Attribute
             Name (_STR, Unicode ("QUP_1_SE_1"))  // _STR: Description String
             Method (_CRS, 0, NotSerialized)  // _CRS: Current Resource Settings
@@ -2896,6 +2918,10 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
             Name (_HID, "QCOM0A10")  // _HID: Hardware ID
             Alias (^PSUB, _SUB)
             Name (_UID, 0x09)  // _UID: Unique ID
+            Name (_DEP, Package (One)  // _DEP: Dependencies
+            {
+                \_SB.PEP0
+            })
             Name (_CCA, Zero)  // _CCA: Cache Coherency Attribute
             Name (_STR, Unicode ("QUP_1_SE_2"))  // _STR: Description String
             Method (_CRS, 0, NotSerialized)  // _CRS: Current Resource Settings
@@ -3048,6 +3074,15 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
         // relations about other nodes and did not change. The role change moves
         // no slot, and the corrected counts are written there.
         //
+        // The _DEP is written in Step 4.94 and is the one-entry form. The
+        // referent landed in Step 4.93; the shape is the UART population's own,
+        // 35 of the 38 UART-named nodes in the corpus writing {PEP0} and
+        // nothing else, and the three that do not - a52q's, miatoll's and
+        // surya's UAR4 - being a different id from this one, QCOM0818 and
+        // QCOM1418. No UART node in the corpus names a GPI DMA or a GPIO
+        // controller in a _DEP, and this engine's tree node carries no dmas at
+        // all, so there is nothing else a longer entry could name.
+        //
         // qcuart7280.inf claims QCOM0A16, so this node has a driver, and it is
         // the only engine written in this step whose bus is not I2C.
         Device (UAR2)
@@ -3055,6 +3090,10 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
             Name (_HID, "QCOM0A16")  // _HID: Hardware ID
             Alias (^PSUB, _SUB)
             Name (_UID, 0x02)  // _UID: Unique ID
+            Name (_DEP, Package (One)  // _DEP: Dependencies
+            {
+                \_SB.PEP0
+            })
             Name (_CCA, Zero)  // _CCA: Cache Coherency Attribute
             Name (_STR, Unicode ("QUP_0_SE_1"))  // _STR: Description String
             Method (_CRS, 0, NotSerialized)  // _CRS: Current Resource Settings
@@ -3139,8 +3178,10 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
         // lesson with its two halves separated: the wrapper-relative index
         // travels between SoCs, and neither the slot nor the address does.
         //
-        // _DEP is left off, as on UCS0, because every I2C node in the family
-        // depends on \_SB.PEP0 and this table has no PEP0. _STR carries no
+        // _DEP is written as of Step 4.94, and it is the one-entry form: every
+        // I2C node in the family depends on \_SB.PEP0, the referent landed in
+        // Step 4.93, and of the corpus's 53 I2C nodes 43 write PEP0 and nothing
+        // else. The three above carry the same entry. _STR carries no
         // suffix: lisa's only ",Shared" is on I2C2 and its own charger bus
         // IC11 has none, so gauguin's qcom,shared does not map onto the suffix
         // and the suffix is not written until something shows that it does.
@@ -3149,6 +3190,10 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
             Name (_HID, "QCOM0A10")  // _HID: Hardware ID
             Alias (^PSUB, _SUB)
             Name (_UID, 0x0B)  // _UID: Unique ID
+            Name (_DEP, Package (One)  // _DEP: Dependencies
+            {
+                \_SB.PEP0
+            })
             Name (_CCA, Zero)  // _CCA: Cache Coherency Attribute
             Name (_STR, Unicode ("QUP_1_SE_4"))  // _STR: Description String
             Method (_CRS, 0, NotSerialized)  // _CRS: Current Resource Settings
@@ -3653,44 +3698,65 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
         // with; if the SMMU driver turns out never to fire, this is the cell to
         // flip first.
         //
-        // Three things every corpus SMMU carries are deliberately not here. The
-        // _DEP, and this is the entry Step 4.93 changed the reason for without
-        // changing the decision. PEP0 landed in that step, so the referent every
-        // SMMU _DEP in the corpus names now exists in this table and the entry
-        // is writable for the first time - the rule the QUP engines and the QGP
-        // nodes above already followed is satisfied. What holds it back now is
-        // not a missing node but a split: re-counted in Step 4.93 over the 20
-        // tables that carry both SMMUs, MMU1 writes {PEP0} in all 20 while MMU0
-        // writes {PEP0} in 11 and {MMU1} in 9. This file said "the _DEP is
-        // {PEP0} in all 40 nodes" and that count was wrong - 9 of the 40 name
-        // the peer SMMU instead - so the entry waits on which of the two the
-        // family means, and that is the next step's question. (This used to add
-        // "and a one-entry _DEP is a shape no table has", which was true of the
-        // tables read when it was written and is false: Step 4.75 measured ABD's
-        // _DEP at one entry in 19 of 21 tables and PRTC's at one entry naming
-        // \_SB.PMAP as a string. The conclusion is unchanged and the reason was
-        // wrong - size is not what makes an entry un-writable, the missing
-        // referent is. See the ABD node above for the reading.) _STA is absent from 19 of the 20 MMU0s and
+        // The _DEP is written, and it took two steps to become writable. PEP0
+        // landed in Step 4.93 - the referent every SMMU in the corpus names -
+        // but the form needed a count first, and this file's older one was
+        // wrong. Re-measured over the 20 tables that carry both SMMUs: MMU1
+        // writes {PEP0} in all 20, and MMU0 writes {PEP0} in 11 against {MMU1}
+        // in 9. So "the _DEP is {PEP0} in all 40 nodes" was wrong by 9, and the
+        // entry could not be written until the split was resolved rather than
+        // averaged.
+        //
+        // It resolves by _HID, which is the rule every other id in this table
+        // follows. The nine {MMU1} writers are exactly QCOM0212 (1), QCOM0509
+        // (5), QCOM0809 (2) and QCOM1409 (1); the eleven {PEP0} writers are
+        // exactly QCOM0909 (2), QCOM0A09 (2), QCOM0C09 (2), QCOM1A09 (4) and
+        // QCOM2509 (1). The boundary is a set and not a number - 0909 and 0A09
+        // sit numerically between 0809 and 1409 and fall on the other side -
+        // so there is no ordering rule to extrapolate and the two sets are
+        // recorded as measured. The set is what decides it here anyway: this
+        // board's id is QCOM0A09, whose only two other instances are lisa and
+        // a52sxq, and both write {PEP0} on both SMMUs. Both nodes take the
+        // one-entry form, and the split is a fact about the family rather than
+        // about this board.
+        //
+        // (An older draft of this comment held the entry back for a second
+        // reason - "a one-entry _DEP is a shape no table has" - and that reason
+        // was wrong: Step 4.75 measured ABD's _DEP at one entry in 19 of 21
+        // tables and PRTC's at one entry naming \_SB.PMAP as a string. What
+        // makes an entry un-writable is a missing referent, not a small package.
+        // The conclusion held anyway, because at the time PEP0 was genuinely
+        // absent; the reason did not.)
+        //
+        // Two things every corpus SMMU carries are still deliberately not here.
+        // _STA is absent from 19 of the 20 MMU0s and
         // from 9 of the 20 MMU1s; where it is present it is a board's decision -
         // nine MMU1s return 0x0F, which says what leaving the method out says,
         // and three nodes return Zero, alioth's MMU1 and vili's MMU0 and MMU1,
         // which is a board hiding an SMMU from the OS rather than describing
         // one. The GPU's SMMU is hardware this port means to drive, so this
-        // table takes the shorter form on both nodes. And every corpus SMMU
-        // aliases \_SB.SVMJ to _HRV; SVMJ is a Name (SVMJ, 0xFFFF) declared once
+        // table takes the shorter form on both nodes. And 38 of the 40 alias
+        // \_SB.SVMJ to _HRV - caymanslm's MMU0 and MMU1 are the two that carry
+        // only the _SUB alias; SVMJ is a Name (SVMJ, 0xFFFF) declared once
         // under \_SB, 0xFFFF is what every released DSDT carries there rather
         // than SM7225's silicon revision, and this table has no SVMJ at all, so
         // adding it is its own measurement and not a side effect of this one.
         //
-        // What this pair unblocks is the engine _DEPs: every family engine _DEP
-        // that names a GPI DMA names MMU0 beside it, and both halves of that
-        // reference now resolve. All four family shapes still need PEP0, which
-        // is why none of them is written yet.
+        // What this reference does for the engines is make the second half of
+        // their _DEP resolvable. Every family engine _DEP that names a GPI DMA
+        // names MMU0 beside it, and several of those are written in this step
+        // for the first time; the ones whose shape the corpus still splits -
+        // the SPI nodes, and the I2C nodes that name a QGP - are not, and the
+        // engine comments say which is which.
         Device (MMU0)
         {
             Name (_HID, "QCOM0A09")  // _HID: Hardware ID
             Alias (^PSUB, _SUB)
             Name (_UID, Zero)  // _UID: Unique ID
+            Name (_DEP, Package (One)  // _DEP: Dependencies
+            {
+                \_SB.PEP0
+            })
             Method (_CRS, 0, NotSerialized)  // _CRS: Current Resource Settings
             {
                 Name (RBUF, ResourceTemplate ()
@@ -4033,6 +4099,10 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
             Name (_HID, "QCOM0A09")  // _HID: Hardware ID
             Alias (^PSUB, _SUB)
             Name (_UID, One)  // _UID: Unique ID
+            Name (_DEP, Package (One)  // _DEP: Dependencies
+            {
+                \_SB.PEP0
+            })
             Method (_CRS, 0, NotSerialized)  // _CRS: Current Resource Settings
             {
                 Name (RBUF, ResourceTemplate ()
@@ -4146,22 +4216,29 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
         // Alias (\_SB.PSUB, _SUB), Name (_UID, Zero), and nothing else. Waipio
         // is the ninth and differs the same two ways it differs on ABD - no
         // _DEP at all, and _SUB written as a method returning \_SB.PSUB - and
-        // it is also the only table in the corpus with no PEP0. So the two
-        // nodes agree about their odd table, which is worth more than either
-        // agreement alone.
+        // it is also the one table of the 21 that carry an SCM0 which declares
+        // no PEP0. So the two nodes agree about their odd table, which is worth
+        // more than either agreement alone. This said "the only table in the
+        // corpus with no PEP0" until Step 4.94, which is not true of the
+        // corpus: 45 of its 65 reference tables declare no PEP0 device of their
+        // own, three of them declaring no device at all. It is true of the
+        // family the sentence is about, and the reading that keeps the two
+        // apart is `tools/acpi-dep-census.py --carrier ABD SCM0`, which is what
+        // the correction was made from.
         //
-        // The _DEP is not written, and here the corpus leaves it more open than
-        // it did for ABD. Across the 21 declarations the dependency is present
-        // in 11 and absent in 10, and split by its referent the implication is
-        // exact in all 21: every table that names \_SB.PEP0 has a PEP0, and the
-        // one table that has no PEP0 is also the one with no _DEP. But 11 of
-        // the 20 tables that DO have a PEP0 still omit the entry - it is a bare
-        // majority, 11 against 9, and SCM0 is the first node here where the
-        // corpus would leave the choice genuinely open on a board that had a
-        // PEP0. That does not change this table's answer, because gauguin has
-        // no PEP0 and the entry would name a device this table has not got; it
-        // changes how the answer is recorded, which is as a fact about the
-        // referent and not as a fact about what the family does.
+        // The _DEP is written, and the count that was open here in Step 4.93 is
+        // the one this step closed. Across the 21 declarations the dependency
+        // is present in 11 and absent in 10, which reads as a bare majority and
+        // is not: the 10 are exactly the nine 050B, 080B, 140B and 0214 tables
+        // - none of which writes a _DEP on any node of this name, in any
+        // generation - and Waipio's QCOM04DD, which is the one of the 21 with
+        // no PEP0 in it. So the choice is not open at all once the
+        // declarations are split by _HID: this node's own id, QCOM04DD, writes
+        // {PEP0} in 8 of its 9 instances and the ninth has nothing to name, and
+        // the sibling id QCOM05DD writes it in all 3. 11 of the 12 tables at
+        // 04DD or 05DD carry the entry, against 0 of 9 at the other four ids -
+        // a rule about the id and not a vote. Step 4.93 recorded it as a bare
+        // majority and left the entry out, and that reading was the mistake.
         //
         // _STA is written for ABD's reason: two of the 21 carry one and both
         // return 0x0F - Waipio and vili - and the nineteen that omit it are
@@ -4188,6 +4265,10 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
             Name (_HID, "QCOM04DD")  // _HID: Hardware ID
             Alias (^PSUB, _SUB)  // _SUB: Subsystem ID
             Name (_UID, Zero)  // _UID: Unique ID
+            Name (_DEP, Package (One)  // _DEP: Dependencies
+            {
+                \_SB.PEP0
+            })
             Method (_STA, 0, NotSerialized)  // _STA: Status
             {
                 Return (0x0F)
@@ -5341,40 +5422,128 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
         // lisa's UARD on 0x17, the four that do not being pipa's UARD, UR14,
         // UR18 and UR20. A _CRS resource is not a dependency, and the
         // correction is recorded rather than quietly made. GIO0 does carry _DEP
-        // entries elsewhere in the family - {PEP0, GIO0, SPI1} in three tables,
-        // {GIO0, I2C4} in three, {AFT1, GIO0, IC10} in one - so the reference
-        // would be writable here, this table having declared GIO0 as its twelfth
-        // device. It is not written because every UART shape the family writes
-        // begins with PEP0, which was absent when this was written.
+        // entries elsewhere in the family - {GIO0, PEP0, SPI5} on TSC1 in three
+        // tables, {GIO0, PEP0, SPI1} on surya's TSC1 in one, {GIO0, I2C4} on
+        // four tables' speaker amps, {AFT1, GIO0, IC10} on miatoll's SPK1 - so
+        // the reference would be writable here, this table having declared GIO0
+        // as its twelfth device. It is not written, and that is now a decision
+        // reached on its own rather than a consequence of a missing referent:
+        // PEP0 landed in Step 4.93 and this table's UART _DEP was written in
+        // Step 4.94, while GIO0 is still left out because no UART node in the
+        // corpus names a GPIO controller in a _DEP at all - zero of the
+        // thirty-four - so adding one here would be this table's invention and
+        // not the family's.
         //
-        // This table therefore writes no engine _DEP at all, for the same reason
-        // the IC nodes above do not: every family shape here needs PEP0, and the
-        // entries the family writes beside it - GIO0's today, MMU0's since Step
-        // 4.72 - are the family's second and third entries rather than entries
-        // of their own. One alone would be a shape no engine in the corpus
-        // writes. That is a preference about the shape and is recorded as one,
-        // not a claim that the entry is un-writable.
+        //   The counts in that sentence stood as "three", "three" and "one" and
+        //   named SPI1 for the shape SPI5 carries, until Step 4.94 re-measured
+        //   them; the sets and the nodes it names agree and the counts did not.
+        //   The UART denominator read thirty-eight there and is thirty-four.
+        //   Same reading as everywhere else in this file now:
+        //   `tools/acpi-dep-census.py`.
         //
-        // Step 4.93 landed PEP0, so the missing referent is missing no longer
-        // and these entries are writable as they stand. They are held for one
-        // more step anyway, and the reason is the count rather than the shape:
-        // writing them is a per-node decision, because the family's own entries
-        // disagree where this table would have to choose. The UARTs are the
-        // settled part - 31 of the corpus's 34 nodes write {PEP0} alone, UAR8
-        // included at 4 of 4 and UARD at 13 of 13 - but the IC nodes are not
-        // (I2C8 writes {PEP0} in 4 of 5 and {PEP0, QGP1} in the fifth), the SPI
-        // nodes are not (SPI5 writes {PEP0, QGP1, MMU0} twice and {PEP0, QGP0,
-        // MMU0} once), and the two nodes the family writes as the second entry
-        // are themselves split - MMU0 at 11 {PEP0} against 9 {MMU1}, SCM0 at 11
-        // {PEP0} against 10 with none at all. Those four counts are Step 4.94's
-        // question, and they are the reason this step is PEP0 and not PEP0's
-        // dependents.
+        // This table wrote no engine _DEP until Step 4.94, for the same reason
+        // the IC nodes above did not: every family shape here needs PEP0, the
+        // entries the family writes beside it - GIO0's, MMU0's - are the
+        // family's second and third entries rather than entries of their own,
+        // and one alone would have been a shape no engine in the corpus writes.
+        // That last half of the reason was wrong and Step 4.94 measured it: an
+        // engine _DEP with PEP0 alone is the family's commonest shape by far,
+        // 43 of the 55 I2C/IC nodes and 31 of the 34 UART nodes. The first half
+        // was right and is what made the entry unwritable until PEP0 landed.
+        //
+        // The counts, re-measured in Step 4.94 over every generation of every
+        // node name rather than over the one id this board binds - which is
+        // what Step 4.93's numbers had been, and why SCM0 read there as a bare
+        // majority when it is not one:
+        //
+        //   protocol    nodes   {PEP0}   none   other   QGP tail   MMU0 entry
+        //   I2C / IC      55       43      3       9         8           5
+        //   SPI / SP      17        0      0      17        17          16
+        //   UART          34       31      0       3         0           3
+        //
+        // So the shape follows the protocol rather than the address, and it has
+        // a reading: an SPI transfer is bulk and wants the DMA, an I2C or UART
+        // transfer is small enough for the FIFO path, and every SPI engine in
+        // the corpus names its GPI DMA while 43 of 55 I2C/IC engines and 31 of
+        // 34 UARTs name nothing but PEP0. This table's four engines are three
+        // I2C and one I2C-mode UART, so all four take the one-entry form.
+        //
+        //   A correction, and this is the third reading of these counts in one
+        //   step. The table above stood as "I2C / IC 53 43 8 5" and "UART 38 35
+        //   0 3" in the first draft of this comment, and the prose two
+        //   paragraphs up stood as "52 of the 53 I2C nodes and 38 of 38 UART
+        //   nodes". The three disagree, which is itself the finding: only one of
+        //   them can have been a reading of the corpus, and one of the two that
+        //   were written into this file was not. The numbers above are over the
+        //   65 reference tables with this one left out, which is what
+        //   `tools/acpi-dep-census.py` prints by default - the tool is in the
+        //   repository so the question can be asked again rather than
+        //   remembered, which is the rule `acpi-hid-census.disassemble` states
+        //   for every other number in this file. `--keep-self` prints the
+        //   framing that counts this table among the corpus, and it moves every
+        //   total by this table's own four engines - 58 and 46, and 35 and 32 -
+        //   which is the difference a census has to name before it can be one.
+        //
+        // The QGP tail is left out on that reading and not on a vote, and the
+        // difference matters for whichever step adds it. Where it appears the
+        // corpus gives no rule for when: lisa's and a52sxq's I2C4 are the same
+        // node at the same address, 0x98C000, and one writes {PEP0, QGP0} while
+        // the other writes {PEP0}; in a52sxq the engines at 0x984000 and
+        // 0x98C000 name a QGP while the one at 0x994000 between them names
+        // none. The board's own tree does settle which controller each of this
+        // table's three would name - dmas = <0x4b 0x00 0x01 0x03 ...> on
+        // i2c@984000 and its two siblings, phandle 0x4b being dma-controller@
+        // 900000, which this table calls QGP1 - and the corpus agrees with that
+        // attribution wherever it is checked, by the rule that the engine names
+        // the QGP whose base is the nearest at or below its own: 8 I2C nodes
+        // over 5 distinct engine names in 4 tables, every one of them naming a
+        // controller below its own base. The rule is a rule and not a law, and
+        // Step 4.94 found the one place it does not hold: pipa's SPI4 sits at
+        // 0x88C000 and names QGP0 at 0x904000, above it, while its four
+        // siblings at the same address name QGP0 at 0x804000. It is recorded
+        // here because it is the derivation a later step needs, and withheld
+        // because of what the entry does rather than what it says: a _DEP on
+        // QGP1 holds the engine's driver until qcgpi7280 binds, and if that
+        // driver never binds the engine is held with it, where {PEP0} alone
+        // asks only for the power engine without which the engine cannot run at
+        // all. (This sentence read "in all five of its I2C nodes that name one"
+        // before the re-measurement; there are 8, and five is the number of
+        // distinct node names among them.)
+        //
+        // The same census closes eight other nodes in this file for good, and
+        // they are worth naming once because each of their own comments
+        // describes a missing entry and each of those descriptions is now a
+        // measurement rather than a deferral. Counted over every generation of
+        // the name: SPMI 22 of 22 declare no _DEP, BAM1 21 of 21, GIO0 21 of 21,
+        // RPEN 21 of 21, QGP1 21 of 21, PILC 19 of 19, QGP0 19 of 19 and AGR0
+        // 20 of 20. Not one node of any of those eight names carries a _DEP in
+        // any table of the corpus - the ids change from generation to
+        // generation and the emptiness does not - so their entries are absent
+        // because the family writes them absent, and not because anything was
+        // missing here. None of them changes in Step 4.94.
+        //
+        // Step 4.93 landed PEP0, so the referent is present and the entries are
+        // written as of Step 4.94. What they had been waiting on was counted
+        // wrong in Step 4.93 and the correction is the interesting part: the
+        // UARTs were already settled (UAR8 at 4 of 4 and UARD at 13 of 13,
+        // every one of them {PEP0}), the SPI nodes were not split at all (five
+        // nodes named SP12, SP14, SP18 and SP19 - and all five write {PEP0,
+        // QGPn, MMU0}, the QGP number following the table's own inventory), and
+        // the two counts that really were splits - MMU0 at 11 {PEP0} against 9
+        // {MMU1}, SCM0 at 11 {PEP0} against 10 with none at all - both resolve
+        // by _HID rather than by vote: MMU0's nine are QCOM0212, QCOM0509,
+        // QCOM0809 and QCOM1409 and this board's QCOM0A09 is not among them,
+        // and SCM0's ten are nine tables at four other ids plus the one table
+        // in the corpus with no PEP0 in it.
         // The consequence is worth stating rather than hiding - qci2c7280.inf
-        // and qcgpi7280.inf are both in the Windows driver set, so once those
-        // two bind, nothing in this table orders the GPI DMA ahead of the
-        // engines that DMA for it. Engine _DEPs waited on PEP0, and PEP0 landed
-        // in Step 4.93, so what holds them now is the count and not the
-        // referent: the shapes are writable and the next step writes them.
+        // and qcgpi7280.inf are both in the Windows driver set, so nothing in
+        // this table orders the GPI DMA ahead of the engines that DMA for it,
+        // and Step 4.94 chose that deliberately against the board's own wiring:
+        // every one of the four engines the step gave a _DEP is reachable over
+        // FIFO and none of them runs a bulk transfer, so the DMA edge buys
+        // ordering this table cannot yet test and can cost the engine its start
+        // if qcgpi7280 never binds. The paragraph above carries the derivation
+        // the step that adds it will need.
         // Neither QGP node carries _STA either; both nodes in the board's tree
         // are ok and a52sxq's QGP0 and QGP1 are literally byte-identical in the
         // two tables of that family, so there is nothing about this block for a
@@ -5383,9 +5552,9 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
         // <&apps_smmu 0x4D6 0>, and phandle 0x17 is apps-smmu@15000000) and
         // every family _DEP that names the GPI DMA names MMU0 beside it, but
         // the family's QGP nodes do not describe it. What would is MMU0, and
-        // this table has it as of Step 4.72, two nodes below; the engine _DEPs
-        // that want a GPI DMA and an SMMU together can now resolve that half of
-        // the reference, and still wait on the half that is PEP0.
+        // this table has it as of Step 4.72, two nodes below, with MMU1; both
+        // halves of that reference now resolve, and the engines that name one
+        // name PEP0 and nothing else.
         Device (QGP0)
         {
             Name (_HID, "QCOM0A88")  // _HID: Hardware ID

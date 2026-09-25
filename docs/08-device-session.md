@@ -18001,3 +18001,251 @@ describes — the corpus's shape, not a concession.
   The payload in `boot` is still the **4.74** set and its panel reading is **still owed**
   under 先读屏，再刷下一次. Step 4.93 archives `work/out/p2-4.93` and does not touch the one
   on the device.
+
+## Step 4.94 — the seven dependencies that waited, and three numbers a reader could not have measured
+
+### What this step was
+
+Two halves, and the second half is the one that took the work.
+
+The first is what Step 4.93 unblocked and said it would do: seven `_DEP`s that until `PEP0`
+existed had nothing to resolve against — four QUP engines (`I2C8`, `I2C9`, `UAR2`, `IC11`)
+and the three devices the family's later nodes name as their secure-side or memory-side
+partner (`MMU0`, `MMU1`, `SCM0`). All seven are the one-entry form:
+
+```asl
+Name (_DEP, Package (One)  // _DEP: Dependencies
+{
+    \_SB.PEP0
+})
+```
+
+`_DEP` now appears **35 times** in the table — 22 as a `Name` and 13 as a `Method` — against
+25 at 4.93. The AML moved 12,257 → **12,341 bytes** for those seven.
+
+The second half is what running the corpus again over those numbers turned up, and it is the
+reason this step has a tool rather than a paragraph. Every `_DEP` count this file had written
+was measured by a reader that could not have measured it, in three separate ways, and each
+one had to be fixed in the reading before any of the counts could be believed.
+
+### The corpus contains this table
+
+`tools/sync-uefi-platform.sh` installs `tools/acpi/gauguin.asl` into the Mu-Silicium
+checkout's `Silicium-ACPI` tree as `Platforms/Xiaomi/gauguin/DSDT.aml`, so our own table is
+**one of the 66** the census reads. A census of the family that includes the file being
+written is not a census; it is the file being written plus something else.
+
+The three census tools all drop it by default, matching the *platform directory component*
+rather than the path string, and `--keep-self` prints the other framing. Both framings are
+printed side by side because the difference is not a rounding — it is exactly this table's
+own contribution:
+
+```
+corpus less our own table (65 tables)        corpus including it (66 tables)
+I2C / IC   55 nodes   43 {PEP0}              I2C / IC   58 nodes   46 {PEP0}
+UART       34 nodes   31 {PEP0}              UART       35 nodes   32 {PEP0}
+```
+
+Four engines, and every total in the file moved by them. The prose above the QUP table said
+"52 of the 53 I2C nodes and 38 of 38 UART nodes" and the table said "53 43" and "38 35":
+three numbers for two populations, disagreeing with each other, and none of them the corpus.
+Only one of the three can have been a reading, and it was not one of the two written down.
+
+### The package inside the parentheses
+
+`_DEP` does not have the body shape the shared helpers assume. It is written
+
+```asl
+Name (_DEP, Package (0x01)  // _DEP: Dependencies
+{
+    \_SB.PEP0
+})
+```
+
+— the brace is *inside* the declaration's own parentheses, not after them. `span()`, the
+helper every other reading in these tools uses to find a declaration's body, skips the
+argument list and then looks for `{`. Here the argument list is where the brace is, so
+`span()` returns `None` and the node is reported as carrying an empty package. Every `_DEP`
+in the corpus read that way.
+
+`tools/acpi-dep-census.py` reads it with a `Package (`-anchored matcher of its own. The same
+reading is applied to `Method (_DEP)` deliberately: the thirteen thermal zones write
+`Method (_DEP) { Return (Package (0x01) { \_SB.PEP0 }) }`, and for the question "does this
+node name PEP0" a `Return (Package …)` names it in the same sense `Name` does. All 451
+corpus `Method (_DEP)` bodies in the 65 reference tables carry a `Package (` literal and a
+`Return`, so the tool's own comment that "a `Method` form is not a package at all" was too
+strong and is now stated as the shape distinction it actually is.
+
+### The name a `{4}` regex could not see
+
+`walk()`'s `DECL` regex required exactly four characters after the declaration keyword. AML
+pads a short name with trailing underscores on disk, but `iasl -d` prints what was written,
+and the corpus is full of short names:
+
+| kind | short names in the corpus |
+|---|---|
+| `Device` | 196 three-character (`ABD`, `CDI`, `GPS`, `GSI`, `IPA`, `LLC`, `MPA`, `QSM`, `RP1`, `SSM`, …) |
+| `ThermalZone` | 150 three-character |
+| `Method` | 79 short |
+| `Name` | 56 short, 19 of them two characters |
+| | **481 declarations** |
+
+A `{4}` regex read every one of them as no declaration at all, so their bodies were billed
+to whatever enclosed them. The symptom is not a wrong number, it is *no* number: asking the
+tool about `ABD` came back with zero rows and no complaint, because `ABD`'s frame was never
+pushed and nothing said so.
+
+The first five alternatives are `{1,4}` now. `Scope` and `External` are not, and that is the
+part worth recording, because the obvious widening is wrong:
+
+- Their argument is the one that is **not** a name — it is a namespace *path*. Every table
+  but ours writes it with a root or parent marker: `Scope (\_SB.PEP0)`, `Scope (^^GIO0)`.
+- `Scope (_SB)`, bare, is printed in **twelve** tables, ours among them. It is `\_SB` with
+  the marker dropped.
+- Read at three characters it becomes a frame named `_SB`, pushed onto the device chain, and
+  every device in those twelve tables is re-parented under it.
+
+Measured, not assumed: the first attempt widened them too and moved
+`tools/acpi-adc-blob-census.py`'s "the block is the last device of the table" reading from
+**21 of 21 to 20 of 21**. With the four-character floor restored, the ADC census is
+byte-identical to its pre-widening output.
+
+The widening is not a no-op on the pair census either, and the two lines it moves are a real
+old bug fixed:
+
+```
+Platforms-Xiaomi-nabu-DSDT  RHUB: (('Name','_ADR'), ('Method','_DSM'))        before
+Platforms-Xiaomi-nabu-DSDT  RHUB: (('Name','_ADR'), ('Device','MP0'))         after
+```
+
+nabu has three `RHUB`s; the third holds `Device (MP0)`, whose frame the old regex never
+pushed, so `XMKB` — a later sibling at the same brace depth — was billed to the `RHUB` above
+it. Correct now.
+
+### The eight corrections
+
+Every one is recorded in the file as a correction, with the old text named, rather than
+folded in silently.
+
+1. **`ABD`, ~line 288.** "Waipio is the only table in the corpus with no PEP0 anywhere in
+   it" → of the 21 tables that carry an `ABD`, Waipio is the only one that declares no
+   `PEP0` device. The corpus reading: **45 of the 65 reference tables declare no `PEP0`
+   device of their own, 3 of those declaring no device at all.** The sentence was true of
+   the family and false of the corpus, and only the second column of `--carrier` separates
+   the two.
+2. **`SCM0`, ~line 4206.** The same claim, corrected to "the one table of the 21 that carry
+   an `SCM0` which declares no PEP0".
+3. **`SCM0`, ~line 4235.** The same claim a third time, as "the one of the 21 with no PEP0 in
+   it".
+4. **The `GIO0` clause, ~line 5424.** The quoted entry sets were re-measured and the counts
+   were wrong. What the corpus has: `{GIO0, PEP0, SPI5}` on `TSC1` in **three** tables,
+   `{GIO0, PEP0, SPI1}` on surya's `TSC1` in **one**, `{GIO0, I2C4}` on four tables' speaker
+   amps, `{AFT1, GIO0, IC10}` on miatoll's `SPK1`. The file said "three", "three" and "one"
+   and named **`SPI1` for the shape `SPI5` carries.** The UART denominator read 38 and is 34.
+5. **The prose above the QUP table.** "52 of the 53 I2C nodes and 38 of 38 UART nodes" →
+   **43 of the 55 I2C/IC nodes and 31 of the 34 UART nodes**.
+6. **The QUP protocol table, ~line 5459.** Replaced with the measured six-column form:
+
+   ```
+   protocol    nodes   {PEP0}   none   other   QGP tail   MMU0 entry
+   I2C / IC      55       43      3       9         8           5
+   SPI / SP      17        0      0      17        17          16
+   UART          34       31      0       3         0           3
+   ```
+7. **A second copy of the same counts, ~line 5480.** "43 of 53 I2C engines and 35 of 38
+   UARTs" → **43 of 55 I2C/IC engines and 31 of 34 UARTs**. Items 5, 6 and 7 are three
+   readings of one measurement that had drifted apart, which is the finding.
+8. **The QGP nearest-base rule, ~line 5496.** "in all five of its I2C nodes that name one"
+   → **8 I2C nodes over 5 distinct engine names in 4 tables**, every one naming a controller
+   below its own base. The "five" was the count of distinct names, not of nodes. And the
+   rule has exactly one counterexample, now written in: **pipa's `SPI4` sits at `0x88C000`
+   and names `QGP0` at `0x904000`, above it**, while its four siblings at the same address
+   name `QGP0` at `0x804000`. A rule and not a law.
+
+Re-verified and left alone: the eight closed families (SPMI 22, BAM1 21, GIO0 21, RPEN 21,
+QGP1 21, PILC 19, QGP0 19, AGR0 20 — every one of them zero nodes carrying a `_DEP`), the
+`MMU0` and `SCM0` `_HID` splits, the `ABD` `_HID` split, and the thermal-zone `_DEP` form.
+
+There is a ninth, and it is in the new tool rather than in the table. `tools/acpi-dep-census.py`
+was written with a comment over its `shape()` constants saying a `Method` form "is not a
+package at all" and "is reported as its own shape" — which is false twice over: `Method
+(_DEP)` bodies *are* packages, and `shape()` returns one of four values for both kinds
+alike. Measured: all **451** `Method (_DEP)` bodies in the 65 reference tables, every one of
+them, are a `Return (Package (…))` and nothing else. The comment now says that and records
+that it said the opposite, because an unverified claim about the corpus is exactly what this
+step exists to catch, and a new tool is not exempt from it.
+
+### The MMU0 count, and a transcription that was mine
+
+`--split MMU0` sums to 20 nodes over the 65 tables — `QCOM0212` 1, `QCOM0509` 5,
+`QCOM0809` 2, `QCOM0909` 2, `QCOM0A09` 2, `QCOM0C09` 2, `QCOM1409` 1, `QCOM1A09` 4,
+`QCOM2509` 1 — and the last of those sums the two readings taken during the step disagreed
+on. They do not: the earlier figure was transcribed without the `QCOM2509` line. Twenty is
+the count, and with this table included it is 21, our own `MMU0` being the third `QCOM0A09`
+and the one this step gave a `_DEP`.
+
+### The ladder
+
+- `tools/acpi/gauguin.asl` is **6,668 lines**, 347,796 bytes, md5
+  `f175c5e1e2886638787f9f1906fe15d3`. All three copies are the same file:
+  `tools/acpi/`, `uefi/Silicium-ACPI/Platforms/Xiaomi/gauguin/` and
+  `work/uefi/Mu-Silicium/Silicium-ACPI/Platforms/Xiaomi/gauguin/`. Against HEAD the diff is
+  **+253 / −84**.
+- The compiled table is **12,341 bytes**, length `0x3035`, checksum `0x42`, sha256
+  `0f5df26b424ab609027aa388ef02cbc82907f0b83ee72411433ec6c30c3ffa47`, with **742 opcodes and
+  515 named objects** and 0 errors, **26 warnings**, **93 remarks** and **383
+  optimizations**.
+- The previous table was re-derived rather than remembered: `git show
+  HEAD:tools/acpi/gauguin.asl` is 6,499 lines / 337,179 bytes /
+  `88e98a14764ec2ac0a81bab98c26e756` and compiles to 12,257 bytes / `0x2fe1` / `0xab` /
+  `7f171e70…` with 742 opcodes, 508 named objects, 26 warnings, 93 remarks and 376
+  optimizations — **exactly the identity the 4.93 entry states**, which is what makes the
+  delta above a measurement rather than a subtraction. Comparing the two AMLs, the first
+  differing byte is at `0x4`, the length field.
+- `FVMAIN.Fv` is **7,364,608 bytes (`0x706000`)**, sha256
+  `7e1d4b8445af4c18c2b29905ef0b528efd7661f9ef815aba11825dca415a9727`, with
+  `EFI_FV_TAKEN_SIZE = 0x705750` (from `0x705700`) and `FVMAIN_COMPACT`'s taken size
+  `0x10b670` (from `0x10b650`). The `AcpiTables` FFS file is **13,702 bytes**, up from
+  13,618 — exactly the 84 new bytes of AML — and the volume's **123** files are unchanged in
+  count.
+- Read back out of the built payload: six tables, `SSDT` (61) at `0x0054d484`, `DSDT`
+  **12,341 bytes at `0x0054d4c8`** — **the same offset for a twenty-fourth step** — checksum
+  valid and sha256 equal to the direct compile's, `APIC` (724) at `0x00550504`, `FACP` (276)
+  at `0x005507dc` and `FACS` (64) at `0x005508f4` not checksumming, as expected before
+  `AcpiTableDxe` runs and only those two, and `GTDT` (156) valid at `0x00550938`.
+- The three payloads are `d621f732f4763a303e980c5af04451479c2ace31801e796993a258f226c177a5`
+  (silicon/gzip, 1,144,832 bytes), `d0de6b3d48ad289b02dfb364127f4104916edd43507b13ec6d57be71bd6b40aa`
+  (stock/gzip, 1,155,072 bytes) and
+  `bd3b67d1b0142c9e726c1bb0506d9ca097db46db3d575ff722a2511f5cada647`
+  (stock/none, 3,248,128 bytes), all three matching GenFv's map at **123 offsets and GUIDs
+  with zero mismatches** and passing the checks ABL makes before it hands control over.
+  Archived in `work/out/p2-4.94`.
+- **The corrections are comments only, and re-building proved it.** The platform copy was
+  regenerated with `tools/make_uefi_platform.py` and reinstalled with
+  `tools/sync-uefi-platform.sh`, which refused the stale copy until it was; the recompiled
+  `DSDT.aml` came back at the same 12,341 bytes and the same `0f5df26b…`; a full rebuild
+  produced the same FVMAIN and the same three payload hashes, **byte for byte**. A
+  comment-only change that moves nothing is the whole point of writing this down.
+- The order vote is **12,312 votes, 12,240 of a 12,240 ceiling, over 700 pairs and 640
+  relations, 0 broken** — unmoved from 4.93, as a step that adds no node should leave it.
+- The census is **56 `_HID`/`_CID` declarations, 42 distinct** (unmoved from 4.93), over
+  **112 `.inf` files and 158 distinct ACPI hardware ids**, with the unclaimed pair unchanged
+  at `QCOM0A8B` (`URS0`) and `QCOM24A5` (`UFS0`).
+- Devices **46** and methods **132** in the compiled table, both unmoved; thirteen thermal
+  zones; `_DEP` **35** times (22 `Name`, 13 `Method`) up from 25; `_TZD` exactly 3 times.
+- **The tool is new and it is the deliverable.** `tools/acpi-dep-census.py`, 367 lines,
+  15,696 bytes, untracked until this commit: `--protocol` (the default), `--split NAME`
+  (per-`_HID` splits), `--empty NAME…` (families that carry no `_DEP`), `--carrier NAME…
+  [--other NAME]` (which tables hold a device, against `PEP0` by default), `--keep-self`,
+  and `--tree/--cache`. It imports `walk`, `strip`, `children` and `span` from
+  `tools/acpi-usb-pair-census.py`, which is the module that owns the walk and is the only
+  file this step changed twice.
+- `tools/acpi-usb-pair-census.py` itself is **+26 / −3**, all of it in the `DECL` regex and
+  its comment — the widening described above, with the `Scope`/`External` exception written
+  down where the next reader will hit it.
+- `work/out/p2-variants` **still holds the 4.74 set** — `90b21643…`, `e693e1a0…`,
+  `26919861…`. **Eighteenth** step running.
+- The device is absent from this host throughout, so nothing here is a hardware reading. The
+  payload in `boot` is still the **4.74** set and its panel reading is **still owed** under
+  先读屏，再刷下一次. Step 4.94 archives `work/out/p2-4.94` and does not touch the one on the
+  device.
