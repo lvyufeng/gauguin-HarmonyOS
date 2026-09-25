@@ -16296,3 +16296,243 @@ four characters of one string.
   reading. The payload in `boot` is still the **4.74** set and its panel reading is
   **still owed** under 先读屏，再刷下一次. Step 4.86 changes the payload in
   `work/out/p2-4.86` and not the one on the device.
+
+## Step 4.87 — the slot the engine's own number gives, and a witness the same shape as this SoC
+
+### What this step was
+
+Wrote no node and added no id. Applied the correction Step 4.86 measured and left
+standing: the three wrapper-1 QUP engines this file wrote are renamed, and each
+name now carries the engine's own number instead of the number an eight-SE
+wrapper would give it.
+
+| address | was | `_UID` | is | `_UID` | `_STR` |
+|---|---|---|---|---|---|
+| `0x00984000` | `IC10` | `0x0A` | `I2C8` | `0x08` | `QUP_1_SE_1` |
+| `0x00988000` | `IC11` | `0x0B` | `I2C9` | `0x09` | `QUP_1_SE_2` |
+| `0x00990000` | `IC13` | `0x0D` | `IC11` | `0x0B` | `QUP_1_SE_4` |
+
+`_HID` (`QCOM0A10`), the alias, `_CCA`, both addresses, all three lengths
+(`0x4000`) and all three GSIs (`0x182`, `0x183`, `0x185`) are unchanged. This is
+a rename of three devices and the correction of the prose that named them; the
+nodes' resources do not move and the file's order does not move.
+
+`PML0` moves with them, because it was the node that named them: its `_DEP`
+reads `\_SB.IC11` and both of its `I2cSerialBusV2` entries read
+`"\\_SB.IC11"`, where they read `"\\_SB.IC13"` until this step.
+
+The step also carries a method correction of its own, recorded below.
+
+### The rule the file already had, and the shape it was measured on
+
+The file has stated the ladder since 4.86 as **the `_UID` is the engine's SE
+number plus one** — no wrapper in it — with `_UID = 8 * wrapper + SE index + 1`
+as that rule *on an SoC whose wrappers carry eight SEs*. The CRD's `I2C1` is
+wrapper 0's SE 0 and takes `_UID` `One`; that is the form the corpus's lisa,
+a52sxq and SC7280 CRD tables all fit, and all three of them are eight-SE-wrapper
+parts.
+
+gauguin's wrappers carry **six**: the board's alias block numbers `0x980000`
+through `0x990000` `qupv3_se6` through `qupv3_se10`, the SoC's own tree names the
+same window `i2c6`, `i2c7`, `i2c8`, `uart9`, `i2c10`, and `gpi_dma1` masks six
+DMA channels (`0x3f`) against `gpi_dma0`'s five (`0x1f`). So wrapper 1's first SE
+is global SE 6, and the engines at `0x984000`, `0x988000` and `0x990000` — the
+wrapper's second, third and fifth SEs — are global SE 7, 8 and 10, taking slots
+8, 9 and 11. The eight-per-wrapper form gives 10, 11 and 13, which is where the
+`IC10`, `IC11` and `IC13` names came from: each two too high, by exactly the two
+SEs gauguin's wrapper 0 is short of eight.
+
+### The witness: the same arithmetic on a SoC shaped like this one
+
+4.86 recorded this as a measurement. It is stronger than that, because two
+tables in the corpus are six-SE-wrapper parts of this generation and they name
+the engines themselves.
+
+**miatoll** (SM7225, the Redmi Note 9 Pro's sibling) and **a52q** (the same part
+under Samsung) both write wrapper 1 at base `0x00A80000`, with the engines at
+`+0`, `+0x4000`, `+0x8000`, `+0xC000`, `+0x10000` and `+0x14000`. Both write:
+
+| offset in wrapper 1 | address | name | `_UID` |
+|---|---|---|---|
+| `+0x4000` | `0x00A84000` | `I2C8` | `0x08` |
+| `+0x8000` | `0x00A88000` | `UARD` | `0x09` |
+| `+0xC000` | `0x00A8C000` | `IC10` | `0x0A` |
+| `+0x10000` | `0x00A90000` | *(unwritten)* | — |
+| `+0x14000` | `0x00A94000` | `SP12` / `IC12` | `0x0C` |
+
+and, in wrapper 0, a52q writes `I2C1` at `0x00880000` with `_UID` `One`, `UAR4`
+at `0x0088C000` with `_UID` `0x04` and `I2C5` at `0x00890000` with `_UID`
+`0x05`; miatoll writes the first two and not the third.
+
+Read off those, three things follow without any appeal to gauguin.
+
+- **Wrapper 1's first SE is global SE 6 on these parts too.** The name `I2C8` at
+  `+0x4000`, and `_UID 0x08`, fixes the wrapper's second SE at 7 — so the first
+  is 6, which is a wrapper 0 carrying six SEs.
+- **The `+0x10000` gap is real and the ladder continues across it.** `SP12` /
+  `IC12` at `+0x14000` takes `_UID 0x0C`, which is SE 11 plus one. So the SE
+  spacing within the window is one per `0x4000`, the unwritten SE 10 at
+  `+0x10000` included — which is the SE gauguin's `0x990000` is.
+- **Wrapper 0's numbering is the same rule with no wrapper in it at all.**
+  `I2C5` at `0x00890000` is wrapper 0's fifth SE at `_UID 5`, and `UAR4` is its
+  fourth at `_UID 4`. Nothing here is a wrapper count; the offset from the
+  wrapper base plus one is the `_UID`, and the name is that number in the
+  engine's form.
+
+So `0x984000` is SE 7, `_UID 8` and `I2C8` because the engine at the same offset
+of the same-shaped wrapper on two other parts is named `I2C8` — the correction is
+**witnessed and not only derived**, which is what the file's `UAR2` comment now
+says.
+
+Two fields of the witness are *not* transferable, and both are recorded rather
+than smoothed over. miatoll's and a52q's ids are the older service group —
+`QCOM0811` for `I2C8` and `IC10`, `QCOM0818` for `UARD`, `QCOM080F` for `SP12` —
+so the *names* cross to gauguin and the ids do not. And the engine at
+`+0x8000` is an I2C engine on gauguin, an `IC10` on both witnesses and a UART on
+neither of gauguin's neighbours' boards in the same role: `UARD` there, `I2C9`
+here. That is not a contradiction but the rule 4.71 already measured at lisa's
+`SP14` against a52sxq's `IC14` — **the slot identifies the engine and the board
+identifies the protocol** — with the roles and the spellings both differing.
+
+### The two numbering concepts, now separated in the file
+
+The correction exposed a conflation the file had been carrying since 4.69. Two
+different numbers are in play and they coincide on wrapper 0 and differ by six on
+wrapper 1:
+
+- the **wrapper-relative index**, which is what `_STR "QUP_1_SE_n"` carries and
+  what the second cell of the board's `dmas` property carries (`0x190 0 4 3` for
+  `0x990000`), and which travels between SoCs;
+- the **global SE number**, which plus one is the `_UID` and the slot, and which
+  does not.
+
+`0x990000` is index 4, slot 11, and its `_STR` says `SE_4`. Both numbers were
+being read off one another, which is why the eight-per-wrapper form looked like a
+law: on an eight-SE part the index and the global number differ by exactly the
+wrapper width, and on gauguin's wrapper 1 they differ by six. The file now says
+so in three places — the engine table, the `UAR2` comment and the slot
+arithmetic — and the closing lesson is the one the arithmetic gives: **the
+wrapper-relative index travels between SoCs, and neither the slot nor the address
+does.**
+
+### What this costs 4.68's reading
+
+4.68 read `i2c@988000` as "gauguin's slot 11" because it is the engine lisa's
+`IC11` is reached by, at the same GSI `0x183`. The engine is the same engine and
+the GSI is the same GSI; the *number* is not. lisa's wrapper 0 carries eight SEs,
+so lisa's first engine of wrapper 1 is SE 8 and this one is SE 10, `_UID 0x0B`,
+`IC11`. gauguin's wrapper 0 carries six, so the same engine is SE 8 here and
+takes `_UID 0x09`, `I2C9`.
+
+The touch reading does not move: `i2c@988000` is still the touch and NFC bus,
+`focaltech@38` is still on it, and `qcom,i2c-touch-active` still says so. What
+moves is only the file's claim that "slot 11" is its name for it. 4.68's sentence
+is left in place where it is historic narrative and the sentence that carries the
+rule was rewritten; the superseded reading is recorded and not deleted.
+
+### A method correction: a rename is three matched strings, not three replacements
+
+The first pass at this step used `re.sub` over the whole file — one pattern for
+the `Device (…)` header, one for the `_UID` line. Neither matched, because the
+`_UID` lines carry a trailing `// _UID: Unique ID` comment the pattern's `\)`
+could not cross, while a plain literal replace of `\_SB.IC13` → `\_SB.IC11` did
+fire. The result was three corrupted bodies: a header that had lost its
+`Device (` prefix, a `_UID` that had become `0x08` under the old name, and a
+`Return (RBUF)` comment naming a device that no longer existed.
+
+It was caught immediately by re-enumerating every name-bearing line and repaired
+with asserted exact replacements for each of the three parts — the `Device (NAME)`
+header line, its `Name (_UID, 0xNN)` line, and its `Return (RBUF) /* \_SB_.NAME… */`
+comment — each asserted to match exactly once. Because the old `_UID` values
+`0x08`, `0x09` and `0x0B` were unclaimed and the new names are exactly what the
+corpus writes at those slots, each pair could be written directly with no
+collision-avoiding two-pass scheme.
+
+The lesson is the one Step 4.86 also drew from its own first draft: a
+search-and-replace over a table with three related parts is not three
+independent string operations, and the check that catches it is enumerating the
+parts afterwards, not reading the diff.
+
+### The body
+
+```asl
+Device (I2C8)                      // was Device (IC10)
+{
+    Name (_HID, "QCOM0A10")  // _HID: Hardware ID
+    Alias (^PSUB, _SUB)
+    Name (_UID, 0x08)  // _UID: Unique ID
+    Name (_CCA, Zero)  // _CCA: Cache Coherency Attribute
+    Name (_STR, Unicode ("QUP_1_SE_1"))  // _STR: Description String
+    Method (_CRS, 0, NotSerialized)  // _CRS: Current Resource Settings
+    {
+        Return (RBUF) /* \_SB_.I2C8._CRS.RBUF */
+    }
+}
+
+Device (I2C9)                      // was Device (IC11), _UID 0x09, "QUP_1_SE_2"
+Device (IC11)                      // was Device (IC13), _UID 0x0B, "QUP_1_SE_4"
+```
+
+and `PML0`, whose `_DEP` and the two `I2cSerialBusV2` entries now name `\_SB.IC11`.
+
+### The ladder
+
+- `tools/acpi/gauguin.asl` is **4,437 lines**, 246,445 bytes,
+  md5 `eb0c8b5dce0c7ddcb3ca9a21304b0b6b` (from 4,395 lines and 243,295 bytes at
+  `a9369d51e220a0905f26dac0294b3db8`), matching
+  `uefi/Silicium-ACPI/Platforms/Xiaomi/gauguin/gauguin.asl` and
+  `work/uefi/Mu-Silicium/…/gauguin.asl` — the full three-stage chain run, all
+  three copies the same.
+- `iasl -p /tmp/chk487 -tc gauguin.asl`: AML **6,350 bytes, 266 opcodes, 409
+  named objects**, checksum `0xcc`, length `0x18ce`, byte sum `0x00`,
+  sha256 `b4f900f96520898097159d5d369149c09b5f18cb6bb8abbaa55c89795732c59e`.
+  **The size is 4.86's size exactly** — `I2C8`/`I2C9` and `IC10`/`IC11` are both
+  four characters, so a rename costs nothing in length — and the AML nonetheless
+  changed, which the checksum records: `0xd0` at 4.86 against `0xcc` here, the
+  same 6,350 bytes, 266 opcodes and 409 named objects as before.
+- Every id offset is unmoved from 4.86: `QCOM0A16` 3099, the three `QCOM0A10` at
+  2859, 2979 and 3219, `QCOM06DC` 3411, `QCOM0A0D` 3464, `QCOM0A84` 3507. Both
+  the name segments and the ids are four bytes, so nothing downstream shifted.
+- The disassembly reads `… I2C8, I2C9, UAR2, IC11, RPEN …` in order, with
+  `_UID 0x08`, `0x09` and `0x0B` against `0x00984000`, `0x00988000` and
+  `0x00990000`, `_STR` unchanged, and `PML0`'s `_DEP` and both `I2cSerialBusV2`
+  strings naming `\_SB.IC11`.
+- Build: `PROGRESS - Success` followed by the known benign
+  `ValueError: DTB image must not be empty.` from Mu-Silicium's own `.img`.
+- `--dump-fvmain`: 7,356,416 bytes (`0x704000`),
+  sha256 `817d9994ea48b2c5b9e6469546dc7ad4ea06e355b52827a2e1b2403e4dbd041a`,
+  byte-identical to `Build/…/FV/FVMAIN.Fv`; `EFI_FV_TAKEN_SIZE = 0x703fe8`,
+  unmoved from 4.86 for the same reason the AML's size is; `FVMAIN_COMPACT`
+  `EFI_FV_TAKEN_SIZE = 0x10aff8`, up `0x08`.
+- The ACPI readback: 6 tables, `DSDT` at `0x0054d4c8` — **the same offset for a
+  seventeenth step** — 6,350 bytes with a valid checksum and byte-identical to
+  the direct compile. `SSDT`/`APIC`/`GTDT` valid; only `FACP` and `FACS` do not,
+  as expected before `AcpiTableDxe` runs. The `AcpiTables` FFS file is 7,710
+  bytes, unmoved.
+- The payload's own DSDT, extracted at `0x54d4c8`, carries `I2C8` once, `I2C9`
+  once and `IC11` four times — the one `NameSeg` and the three `PML0` strings —
+  and `IC10` and `IC13` nowhere. Checked as byte strings, which is how a
+  `NameSeg` is stored, in contrast to the `_STR`s, which are UTF-16.
+- The three payloads are `614c747f…78468faa` (silicon/gzip), `121cce29…8b8287d9`
+  (stock/gzip) and `c4bdffdc…bb6aed92` (stock/none), all three matching GenFv's
+  map at **123 offsets and GUIDs, zero mismatches**, and all three passing the
+  checks ABL makes before it hands control over. They are archived in
+  `work/out/p2-4.87`.
+- `work/out/p2-variants` **still holds the 4.74 set** — `90b21643…`, `e693e1a0…`,
+  `26919861…`. **Eleventh** step running.
+- Device count **38** `Device (` declarations, unchanged — a rename and not an
+  addition. The census: **51 `_HID`/`_CID` declarations, 37 distinct**, both
+  unchanged. `QCOM0A10` remains claimed by `qci2c7280.inf` and is now carried by
+  `I2C8`, `I2C9` and `IC11`; `QCOM0A16` by `qcuart7280.inf` on `UAR2`. The same
+  two remain unclaimed as every step since 4.70: `QCOM0A8B` (`URS0`) and
+  `QCOM24A5` (`UFS0`).
+- The ASL still contains five `IC10` and one `IC13`, every one of them a corpus
+  quotation and every one deliberately kept: line 1245 (a52q's `\_SB.IC10`, in
+  the `UCS0` comment), 2425 (miatoll's own node list, inside this step's new
+  witness paragraph), 2504 (the file's list of the corpus's `_UID` predictions),
+  2541 (the sentence that records what the node at `0x990000` carried until
+  Step 4.87), and 3343 (`{AFT1, GIO0, IC10}` in a corpus `_DEP` table).
+- The device is absent from this host throughout, so nothing here is a hardware
+  reading. The payload in `boot` is still the **4.74** set and its panel reading
+  is **still owed** under 先读屏，再刷下一次. Step 4.87 changes the payload in
+  `work/out/p2-4.87` and not the one on the device.

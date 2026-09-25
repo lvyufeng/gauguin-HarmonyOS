@@ -1235,12 +1235,13 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
         // and stops. The six tables that add 0x0C/0x0D are boards with a second
         // part and this is not one, which is the same reading as the bitmap: 0b01.
         //
-        // The bus is IC13 and the pins are GIO0's, both from that same board
-        // reading. i2c@990000 has reg = <0x990000 0x4000>, and this table's IC13
-        // is Memory32Fixed (0x00990000, 0x00004000), _UID 0x0D, _STR
-        // "QUP_1_SE_4" - the QUP whose SE index the board's own dmas property
-        // confirms, 0x190 0 4 3 there and slot 4 here. The corpus names its bus in
-        // this same cell - lisa \_SB.I2C2, lemonade and renoir \_SB.IC14, a52q
+        // The bus is IC11 and the pins are GIO0's, both from that same board
+        // reading. i2c@990000 has reg = <0x990000 0x4000>, and this table's IC11
+        // is Memory32Fixed (0x00990000, 0x00004000), _UID 0x0B, _STR
+        // "QUP_1_SE_4" - the QUP whose wrapper-relative index the board's own
+        // dmas property confirms, 0x190 0 4 3 there and 4 here, and whose slot
+        // is 11 by the global numbering Step 4.87 applied. The corpus names its
+        // bus in this same cell - lisa \_SB.I2C2, lemonade and renoir \_SB.IC14, a52q
         // \_SB.IC10 - so the source string is the one cell of the corpus's _CRS a
         // port must change, and the address cells do not move. The pins are the
         // board's as well: reset-gpios is <&tlmm 0x3a 1> and interrupts-extended
@@ -1302,18 +1303,18 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
             Alias (^PSUB, _SUB)  // _SUB: Subsystem ID
             Name (_DEP, Package (One)  // _DEP: Dependencies
             {
-                \_SB.IC13
+                \_SB.IC11
             })
             Method (_CRS, 0, NotSerialized)  // _CRS: Current Resource Settings
             {
                 Name (RBUF, ResourceTemplate ()
                 {
                     I2cSerialBusV2 (0x0008, ControllerInitiated, 0x000186A0,
-                        AddressingMode7Bit, "\\_SB.IC13",
+                        AddressingMode7Bit, "\\_SB.IC11",
                         0x00, ResourceConsumer, , Exclusive,
                         )
                     I2cSerialBusV2 (0x0009, ControllerInitiated, 0x000186A0,
-                        AddressingMode7Bit, "\\_SB.IC13",
+                        AddressingMode7Bit, "\\_SB.IC11",
                         0x00, ResourceConsumer, , Exclusive,
                         )
                     GpioIo (Exclusive, PullNone, 0x0000, 0x00C8, IoRestrictionNone,
@@ -1990,7 +1991,7 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
         // Realme's bitra and Xiaomi's gauguin, declare no BAM of any kind.
         // Writing BAM5 would reserve
         // 0x32000 of address space and GSI 0xC4 on the strength of another die's
-        // layout, which is the ground SP1 and SP12 were withheld on. The node is
+        // layout, which is the ground SP1 and SP10 were withheld on. The node is
         // owed and it waits on the ADSP, which is also owed.
         //
         // BAME and BAMF are the other two the QCOM0A0A tables carry, at
@@ -2196,10 +2197,18 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
         //
         //   0x880000  spi@880000          w0 SE0  slot  1  GSI 0x279  SPI
         //   0x884000  qcom,qup_uart@884000 w0 SE1 slot  2  GSI 0x27A  4-wire UART
-        //   0x984000  i2c@984000          w1 SE1  slot 10  GSI 0x182  I2C
-        //   0x988000  i2c@988000          w1 SE2  slot 11  GSI 0x183  I2C
-        //   0x98c000  spi@98c000          w1 SE3  slot 12  GSI 0x184  SPI
-        //   0x990000  i2c@990000          w1 SE4  slot 13  GSI 0x185  I2C
+        //   0x984000  i2c@984000          w1 SE1  slot  8  GSI 0x182  I2C
+        //   0x988000  i2c@988000          w1 SE2  slot  9  GSI 0x183  I2C
+        //   0x98c000  spi@98c000          w1 SE3  slot 10  GSI 0x184  SPI
+        //   0x990000  i2c@990000          w1 SE4  slot 11  GSI 0x185  I2C
+        //
+        // where "SE" is the wrapper-relative index the node's own _STR carries
+        // and the slot is the engine's number on the SoC, its global SE number
+        // plus one. The four wrapper-1 rows are SE 7, 8, 9 and 10 and slots 8,
+        // 9, 10 and 11; the index and the global number differ by six here
+        // because gauguin's wrapper 0 carries six SEs, and this slot column
+        // said 10, 11, 12 and 13 until Step 4.87 - which is what the family's
+        // eight-per-wrapper ladder gives such a wrapper.
         //
         // and everything else at a QUP address - i2c@888000, i2c@980000,
         // spi@888000, spi@980000, the UARTs at 0x984000 and 0x98c000 - is
@@ -2238,7 +2247,7 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
         // id, and of the four QUP ids the set carries - QCOM0A0B, QCOM0A0C,
         // QCOM0A10, QCOM0A16 - the SPI engine's QCOM0A0E is not among them. The
         // same search over the other four driver trees in ~/work/woa-ref finds
-        // it nowhere at all. Writing SP1 and SP12 would therefore register two
+        // it nowhere at all. Writing SP1 and SP10 would therefore register two
         // unknown devices that reserve 0x880000 and 0x98c000 and their GSIs
         // against no driver, and would describe the touch as reachable over a
         // bus this table cannot open. They are withheld, not refused: lisa
@@ -2254,26 +2263,26 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
         // focaltech,reset-gpio on TLMM pins 22 and 21, a vdd-supply, six panel
         // phandles, its own pinctrl for the interrupt and the reset, and
         // qcom,i2c-touch-active = "focaltech,fts_ts" naming it the active one.
-        // So the chip is at I2C address 0x38 on slot 11 and the SPI node is
+        // So the chip is at I2C address 0x38 on slot 9 and the SPI node is
         // there to hold the engine. No driver in the set drives the chip on
         // either bus - there is no touch .inf in it at all - which is why the
-        // child is not written and why IC11 alone does not give touch.
+        // child is not written and why I2C9 alone does not give touch.
         //
-        // IC10 and IC11 are the same node as IC13 with a different slot, and
+        // I2C8 and I2C9 are the same node as IC11 with a different slot, and
         // carry the same omission: no _DEP, because every engine in the family
-        // depends on \_SB.PEP0 and this table has none. IC10's bus is the audio
+        // depends on \_SB.PEP0 and this table has none. I2C8's bus is the audio
         // amplifiers cs35l41@40 and cs35l41@41, which no driver in the set
-        // claims; IC11's is the touch and the NFC controller nq@28, and the set
+        // claims; I2C9's is the touch and the NFC controller nq@28, and the set
         // has no driver for either. Both nodes are written for the bus and not
         // for the slaves, on the same reasoning that withholds the SPI engines:
         // qci2c7280.inf binds the engine, and a child with no driver is an
         // unknown device. The slaves are the four-line addition when one
         // arrives.
-        Device (IC10)
+        Device (I2C8)
         {
             Name (_HID, "QCOM0A10")  // _HID: Hardware ID
             Alias (^PSUB, _SUB)
-            Name (_UID, 0x0A)  // _UID: Unique ID
+            Name (_UID, 0x08)  // _UID: Unique ID
             Name (_CCA, Zero)  // _CCA: Cache Coherency Attribute
             Name (_STR, Unicode ("QUP_1_SE_1"))  // _STR: Description String
             Method (_CRS, 0, NotSerialized)  // _CRS: Current Resource Settings
@@ -2289,15 +2298,15 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
                         0x00000182,
                     }
                 })
-                Return (RBUF) /* \_SB_.IC10._CRS.RBUF */
+                Return (RBUF) /* \_SB_.I2C8._CRS.RBUF */
             }
         }
 
-        Device (IC11)
+        Device (I2C9)
         {
             Name (_HID, "QCOM0A10")  // _HID: Hardware ID
             Alias (^PSUB, _SUB)
-            Name (_UID, 0x0B)  // _UID: Unique ID
+            Name (_UID, 0x09)  // _UID: Unique ID
             Name (_CCA, Zero)  // _CCA: Cache Coherency Attribute
             Name (_STR, Unicode ("QUP_1_SE_2"))  // _STR: Description String
             Method (_CRS, 0, NotSerialized)  // _CRS: Current Resource Settings
@@ -2313,7 +2322,7 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
                         0x00000183,
                     }
                 })
-                Return (RBUF) /* \_SB_.IC11._CRS.RBUF */
+                Return (RBUF) /* \_SB_.I2C9._CRS.RBUF */
             }
         }
 
@@ -2403,10 +2412,24 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
         // qupv3_se10, the SoC's own tree agrees (i2c6, i2c7, i2c8, uart9, i2c10),
         // and wrapper 1's GPI DMA masks six channels (0x3f). So 0x984000 is SE 7
         // and not the ten the ladder gives it, 0x988000 is SE 8 and not 11, and
-        // 0x990000 is SE 10 and not 13: those three _UIDs, and the IC10, IC11
-        // and IC13 names that follow them, are each two too high. The correction
-        // is measured here and not applied - it renames three devices and is a
-        // step of its own, named for the next one.
+        // 0x990000 is SE 10 and not 13: those three _UIDs, and the names that
+        // followed them, were each two too high. Step 4.86 measured that and
+        // Step 4.87 applied it - the three nodes below are I2C8 (_UID 8), I2C9
+        // (_UID 9) and IC11 (_UID 0x0B) - and the correction is witnessed and
+        // not only derived, by a second SoC of this generation whose wrappers
+        // are shaped like this one's. miatoll's wrapper 1 starts at 0xA80000 and
+        // its wrapper 0 carries six SEs as well - I2C1 at 0x880000 is _UID One,
+        // UAR4 at 0x88C000 is _UID 4, I2C5 at 0x890000 is 5, each SE plus one -
+        // so its global SE numbers start at 6 exactly as gauguin's 0x980000
+        // does, and it names the engines after that base I2C8 at 0x00A84000
+        // (_UID 0x08), UARD at 0x00A88000 (0x09), IC10 at 0x00A8C000 (0x0A) and
+        // SP12 at 0x00A94000 (0x0C): SE 7, 8, 9 and 11 by the same rule, with
+        // 0x00A90000 - SE 10 - unwritten between the last two. a52q, the same
+        // part under Samsung, writes the first three and IC12 for SP12, which is
+        // the SP14/IC14 lesson below a third time. So gauguin's 0x984000 being
+        // SE 7, _UID 8 and I2C8 is not only the arithmetic that follows from
+        // six-per-wrapper: it is the name two other tables of this generation
+        // write at that SE.
         //
         // _STA is left out on purpose, and the family's practice is split by
         // role rather than uniform. All thirteen UARDs are visible - twelve
@@ -2428,8 +2451,8 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
         // four-wire ports, since that is the role this node now claims, and they
         // hold: the UART precedes PILC, RPEN, GLNK, TFTP and IPC0 in 10 of 10,
         // is followed by QGP0 in 8 of 8 and QGP1, MMU0, MMU1 and SCM0 in 10 of
-        // 10 each, and precedes IC10 and IC11 in 2 of 2 each - the last the one
-        // relation this file breaks, already charged to IC10 below. The three
+        // 10 each, and precedes I2C8 and I2C9 in 2 of 2 each - the last the one
+        // relation this file breaks, already charged to I2C8 below. The three
         // sites that cited the UART read "UARD (13 of 13)" and "UARD (13)"
         // before - the debug name's own node count - and read "the four-wire
         // ports (10 of 10)" and "(10)" now; the counts standing beside them are
@@ -2471,10 +2494,12 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
         // CRD's _UID 0x0B follow from its _STR "QUP_1_SE_2"; it follows, and by
         // an arithmetic the whole family obeys:
         //
+        //   _UID = SE number + 1, which on a wrapper of eight SEs is
         //   _UID = 8 * wrapper + SE index + 1
         //
         // which fits all 23 engine nodes in the three tables that carry any -
-        // lisa, a52sxq and the SC7280 CRD - with no exception, and predicts
+        // lisa, a52sxq and the SC7280 CRD, all three eight-SE wrappers - with
+        // no exception, and predicts
         // the CRD's I2C1 = One for SE 0, I2C2 = 2, I2C4 = 4, I2C5 = 5,
         // UARD = 6, UAR8 = 8, I2C9 = 9, IC10 = 0x0A, IC11 = 0x0B, IC14 = 0x0E.
         // The other half of the convention is the name, and it is the same
@@ -2485,11 +2510,17 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
         // question is not answerable from the slot and is not the same question.
         //
         // That second question is which of gauguin's engines this is, and the
-        // device tree answers it. gauguin's slot 11 is real and it is not this
-        // bus: i2c@988000 sits at wrapper 1, engine 2, carries the corpus's own
-        // _UID 0x0B, is reached by the same GSI 0x183 lisa's IC11 is reached by,
-        // and is the touch and NFC bus (focaltech@38, nq@28). The charger
-        // cluster is on the engine gauguin's tree names:
+        // device tree answers it. i2c@988000 sits at wrapper 1, engine 2 - SE 8
+        // by the board's own numbering - is reached by the same GSI 0x183
+        // lisa's IC11 is reached by, and is the touch and NFC bus
+        // (focaltech@38, nq@28); its slot is 9 and its name I2C9, where lisa's
+        // is 11 and IC11 for the same GSI, because lisa's wrapper 0 carries
+        // eight SEs and gauguin's six. This paragraph said "gauguin's slot 11 is
+        // real and it is not this bus" until Step 4.87, on the family's
+        // eight-per-wrapper ladder - the reading of Step 4.68 that the ladder's
+        // rule does not carry across a wrapper-count change, and the one this
+        // step corrects. The charger cluster is on the engine gauguin's tree
+        // names:
         //
         //   i2c@990000   reg 0x990000 + 0x4000, interrupts SPI 0x165, ok
         //                fsa4480@42, qcom,pm8008@8, qcom,pm8008@9,
@@ -2505,24 +2536,30 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
         // wrapper outright rather than by arithmetic: this bus's phandle 0x193
         // is qcom,qupv3_1_geni_se@9c0000's.
         //
-        // So the slot is 8 * 1 + 4 + 1 = 13 and the name is IC13. The
-        // interrupt is the family's number for the slot rather than a
-        // derivation: gauguin's whole wrapper-1 ladder, 0x181 through 0x185, is
-        // the corpus's 0x181 through 0x186 one GSI per engine, even though the
-        // two put wrapper 1 at different addresses - gauguin 0x980000, the CRD
-        // and a52sxq 0xA80000. That is the ids' own lesson again: the slot
-        // travels between SoCs and the address does not.
+        // So the slot is 6 * 1 + 4 + 1 = 11 and the name is IC11 - the rule on
+        // gauguin's six-SE wrappers, where the eight-per-wrapper form gave the 13
+        // and the IC13 this node carried until Step 4.87. The three measurements
+        // above all give the wrapper-relative index, which is what the _STR
+        // carries: the global SE number is that index plus the six SEs of the
+        // wrapper below it, and only the global number is the slot. The
+        // interrupt is the family's number for the engine within its wrapper
+        // rather than a derivation: gauguin's whole wrapper-1 ladder, 0x181
+        // through 0x185, is the corpus's 0x181 through 0x186 one GSI per
+        // engine, even though the two put wrapper 1 at different addresses -
+        // gauguin 0x980000, the CRD and a52sxq 0xA80000. That is the ids' own
+        // lesson with its two halves separated: the wrapper-relative index
+        // travels between SoCs, and neither the slot nor the address does.
         //
         // _DEP is left off, as on UCS0, because every I2C node in the family
         // depends on \_SB.PEP0 and this table has no PEP0. _STR carries no
         // suffix: lisa's only ",Shared" is on I2C2 and its own charger bus
         // IC11 has none, so gauguin's qcom,shared does not map onto the suffix
         // and the suffix is not written until something shows that it does.
-        Device (IC13)
+        Device (IC11)
         {
             Name (_HID, "QCOM0A10")  // _HID: Hardware ID
             Alias (^PSUB, _SUB)
-            Name (_UID, 0x0D)  // _UID: Unique ID
+            Name (_UID, 0x0B)  // _UID: Unique ID
             Name (_CCA, Zero)  // _CCA: Cache Coherency Attribute
             Name (_STR, Unicode ("QUP_1_SE_4"))  // _STR: Description String
             Method (_CRS, 0, NotSerialized)  // _CRS: Current Resource Settings
@@ -2538,7 +2575,7 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
                         0x00000185,
                     }
                 })
-                Return (RBUF) /* \_SB_.IC13._CRS.RBUF */
+                Return (RBUF) /* \_SB_.IC11._CRS.RBUF */
             }
         }
 
@@ -2633,8 +2670,8 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
         // and CDI immediately after in 19 of 19, so this node is the second member
         // of a run - RPEN, PILC, CDI, SCSS, ADSP, SLM1, ADCM, AUDD - that no table
         // ever splits. Neither neighbour is here, so the slot comes from the
-        // relations this file can check: the four-wire ports (10 of 10), IC10
-        // (9 of 9) and IC11 (3 of 3) precede it, and MMU0, MMU1 and SCM0 (19 of
+        // relations this file can check: the four-wire ports (10 of 10), I2C8
+        // (9 of 9) and I2C9 (3 of 3) precede it, and MMU0, MMU1 and SCM0 (19 of
         // 19 each), IPCC (10 of 10), QGP0 (17) and QGP1 (19) follow it. Every
         // one of those nine is satisfied by the slot below, and no later slot
         // is: between QGP1 and MMU0 the two QGP relations break instead. Six further relations are
@@ -2728,7 +2765,7 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
         // So the slot is fixed by the node after it, which is already here.
         // Fifteen relations agree with it. Before: UFS0, DEV0, ABD, PMIC and PM01
         // (21 of 21 each), PMAP and PRTC (20), the four-wire ports (10), PML0
-        // (11) and IC10 (9).
+        // (11) and I2C8 (9).
         // After: PILC (19 of 19), QGP1 and SCM0 (21), QGP0 (19) and IPCC (12).
         // Six relations no slot can satisfy, and they are the same six PILC's
         // comment now records: UCS0 (10 of 10), URS0, USB0, UFN0 and GIO0 (20
@@ -2851,7 +2888,7 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
         //   UFN0       19    at position 6; likewise
         //   SPMI       12    at position 7; corpus puts it after SCM0
         //   GIO0        7    at position 13; corpus puts it after SPMI
-        //   IC10        1    before UAR2; corpus puts the UART first, 9 of 9
+        //   I2C8        1    before UAR2; corpus puts the UART first, 9 of 9
         //                    by the debug name and 2 of 2 for the four-wire
         //                    ports, and this node is the four-wire one
         //   QGP0       10    at position 22; corpus puts it after CPU7
@@ -3142,7 +3179,7 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
         //
         // Position, and it is forced by two relations rather than fixed by many.
         // Before: UFS0, DEV0, ABD, PMIC and PM01 (21 of 21 each), PMAP and PRTC
-        // (20), the four-wire ports (10), PML0 (11), IC10 (9) and IC11 (3), and
+        // (20), the four-wire ports (10), PML0 (11), I2C8 (9) and I2C9 (3), and
         // then the two
         // nodes above - RPEN (21 of 21) and PILC (19 of 19). After: QGP0 (19 of
         // 19) and QGP1 (21 of 21), then CPU0 to CPU3 (21 each) and CPU4 to CPU7
@@ -3200,10 +3237,15 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
         // the order its dma-names gives, and they differ in exactly one cell,
         // the first, 0 then 1 - so the cells after the phandle read <tx/rx, SE
         // index, code, 0x40, 0> and the list above quotes the tx one. The
-        // second cell is the engine's SE index in all five - 0, 1, 2, 3, 4 for
-        // wrapper 0's SPI0 and the four wrapper-1 buses - another measurement
-        // of the numbering the IC nodes above were built on, from a property
-        // that had no part in deriving it. The third cell is constant per
+        // second cell is the engine's index within its wrapper in all five - 0,
+        // 1, 2, 3, 4 for wrapper 0's SPI0 and the four wrapper-1 buses. It is the
+        // wrapper-relative index and not the global SE number: the two coincide
+        // on wrapper 0's SPI0 - index 0, SE 0 - and differ by six on the other
+        // four, indexes 1 through 4 at SE 7 through 10. This comment read it as
+        // a second measurement "of the numbering the IC nodes above were built
+        // on" until Step 4.87 separated the two, and the separation is the step:
+        // this property, like the _STR beside it, measures the index, and the IC
+        // nodes' _UIDs follow the global number. The third cell is constant per
         // protocol - 1 on the two SPI engines and 3 on the three I2C engines -
         // which is one more statement of which protocol sits at each slot, and
         // it is read here and not decoded. The fourth and fifth are 0x40 and 0
@@ -3225,7 +3267,7 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
         // shipping boards disagree about one, and the family has been doing
         // this all along. It is also why the letter in an engine's name is the
         // protocol and not the slot: gauguin's two live SPI engines are slots 1
-        // and 12 and would be SP1 and SP12, and lisa's SP14 is a52sxq's IC14.
+        // and 10 and would be SP1 and SP10, and lisa's SP14 is a52sxq's IC14.
         //
         // The id is QCOM0A88, and the family evidence is broad rather than a
         // pair for once: 20 of the 66 tables declare a QGP device, under nine
