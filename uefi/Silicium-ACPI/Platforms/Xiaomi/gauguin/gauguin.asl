@@ -2476,6 +2476,119 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
             }
         }
 
+        // IPC0 is the IPC router, and qcipcrouter7280.inf names it in one line:
+        // %IPC_ROUTER.DeviceDesc%=IPC_ROUTER_Device, ACPI\QCOM0A0D, description
+        // string "Qualcomm(R) Data IPC Router Device", service QCIPC_ROUTER,
+        // binary qcipcrouter7280.sys, KMDF 1.33, class SYSTEM, StartType 3. It
+        // rides the transport GLNK and its inf says so in a place a name can be
+        // read off: every one of its five transports carries PortName "IPCRTR".
+        //
+        // It is also the first node here whose driver ships a user-mode half.
+        // The same inf copies qsocketipcrum.dll into the system directory and
+        // grants the device one ACE more than qcglink7280.inf does -
+        // (A;;GA;;;S-1-5-84-0-0-0-0-0), the user-mode-driver SID, on top of the
+        // administrators and LocalSystem that both infs grant - which is what a
+        // device with a user-mode client should look like and what the transport
+        // next door, with none, does not.
+        //
+        // Its transport list is five entries, all Type 1, Transport "SMEM", Port
+        // "IPCRTR" and MaxIntents 4, differing only in RemoteSS: "mpss", "lpass",
+        // "dsps", "cdsp", "wpss". The board declares three glink-edges, labelled
+        // "lpass", "modem" and "cdsp". Three of the five names line up and two
+        // have no remoteproc here at all - "dsps" and "wpss" - and the one
+        // difference in wording is the modem, which this inf calls "mpss" and
+        // the board labels "modem". qcglink7280.inf's own SMP2P_interrupts table
+        // is a second sighting of the same four remote processors, with host ids
+        // SMEM_MODEM 1, SMEM_ADSP 2, SMEM_CDSP 5 and SMEM_WPSS 13 against IPCC
+        // clients MPSS 2, LPASS 3, NSP0 6 and WPSS 24 - and the first three are
+        // this board's remote-pids exactly, 1, 2 and 5.
+        //
+        // The id is GLNK's, one generation down, and the two are issued as a
+        // pair. Twenty-one tables declare an IPC0, under nine ids, and they line
+        // up with the twenty-one GLNK ids table for table:
+        //
+        //   gen   GLNK   IPC0   tables
+        //   02    02F9   021C   caymanslm
+        //   05    058D   050E   mh2, cepheus, nabu, pipa, vayu
+        //   08    088D   080E   a52q, miatoll
+        //   09    0984   090D   renoir, Cedros IDP
+        //   0A    0A84   0A0D   a52sxq, lisa
+        //   0C    0C84   0C0D   Kailua MTP, Kailua QRD, Waipio
+        //   14    148D   140E   surya
+        //   1A    1A84   1A0D   lemonade, venus, vili, Lahaina MTP
+        //   25    2584   250D   alioth
+        //
+        // The high byte is never different between the two ids of a row, and the
+        // low byte never crosses between the groups: GLNK 84 goes with IPC0 0D,
+        // 8D with 0E, and F9 with 1C, and no table departs from its row. So the
+        // transport and the router are issued as a pair the way RPEN and PILC are
+        // (06E1 and 06E0) - and unlike those two the pairing carries no
+        // generation of its own, because there is no IPC0 whose high byte differs
+        // from its own GLNK's. QGP0 and QGP1 are the third index over the same
+        // nine generations and they partition them the same way - 93 for 05/08/14,
+        // 88 for 09/0A/0C/1A/25, F4 for 02 - so three indices now agree on the
+        // families. They do not agree on the offset between them: 93 to 8D is six
+        // and 88 to 84 is four and F4 to F9 goes the other way by five. The
+        // family is a property of the table and the spacing between the indices
+        // is not.
+        //
+        // With the generation fixed at 0A by QGP0 and QGP1's QCOM0A88, the row is
+        // the only one that matters here, and both halves of it are written: 0A84
+        // was GLNK's, in Step 4.82, and 0A0D is this node's. The corpus's only
+        // two 0A tables, a52sxq and lisa, both write it. The driver set agrees
+        // and agrees only that far, which is the shape the GLNK comment already
+        // records: of the nine IPC0 ids exactly one appears anywhere in the 112
+        // infs, QCOM0A0D in qcipcrouter7280.inf, and of the nine GLNK ids exactly
+        // one does, QCOM0A84 in qcglink7280.inf. The drivers claim one generation
+        // out of nine and it is the one QGP0 had already put this table in.
+        //
+        // The body is the smallest of any node this file has written: a _DEP
+        // naming \_SB.GLNK alone in all twenty-one, an _HID, and the alias. No
+        // _UID anywhere in the corpus - none in twenty-one, where the GLNK above
+        // it has one in twenty-one - and no _CRS in any table, including the nine
+        // where GLNK carries nine Interrupt descriptors. Those nine are the
+        // transport's own lines and they stay on the transport. No _STA but the
+        // same two tables, vili and Waipio. The alias in twenty and Waipio's
+        // Method (_SUB) in the twenty-first: that is the second node in a row
+        // where Waipio is the only departure, and with _STA it makes three
+        // members on which this board and vili's are the corpus's whole
+        // disagreement about this node.
+        //
+        // Position: the corpus agrees on what follows this node and not on what
+        // precedes it. Immediately after it, in 21 of 21, is GLNK. Immediately
+        // before it there is no agreement at all - RP1 in 14 tables, GIO0 in 3,
+        // QPPX in 2, and RPEN and IPCC in one each - so the run is anchored at its
+        // bottom and not its top. Three unanimous relations pin the slot exactly.
+        // RPEN precedes IPC0 in 21 of 21 and PILC in 19 of 19, the two tables
+        // without a PILC being vili and Waipio, the same two as everywhere else;
+        // GLNK follows it in 21 of 21. In this file RPEN, PILC and GLNK are
+        // consecutive, so of the two slots those relations allow - above PILC or
+        // below it - only the second survives, and this node lands between PILC
+        // and GLNK, which is where the GLNK comment said it would land and for
+        // the reason it gave. Twenty-four unanimous relations are satisfied by
+        // that slot, one more than GLNK's slot satisfied on its own, the
+        // difference being the GLNK relation this node now supplies. Not one of
+        // the six GLNK's slot breaks is repaired, and they are the same six by
+        // name: MMU0 and MMU1 (20 of 20) sit above IPC0 in the corpus and below
+        // it here, and UCS0 (10 of 10), UFN0, URS0 and USB0 (20 each) sit below
+        // it and above it here. The cause is the early block this file wrote in
+        // an order of its own; a reordering is its own measurement, so they are
+        // recorded and not repaired, as at RPEN and PILC and GLNK.
+        //
+        // Three nodes the corpus puts before IPC0 in every table that has both
+        // are not in this table yet - BAM1 and BAM5 (21 of 21) and TFTP (21 of
+        // 21). TFTP is on the list, and when it is written it goes above this
+        // node and not below it.
+        Device (IPC0)
+        {
+            Name (_HID, "QCOM0A0D")  // _HID: Hardware ID
+            Alias (^PSUB, _SUB)  // _SUB: Subsystem ID
+            Name (_DEP, Package (One)  // _DEP: Dependencies
+            {
+                \_SB.GLNK
+            })
+        }
+
         // GLNK is the Generic Link transport, and the name for it that ships is
         // in qcglink7280.inf: one hardware id, %GLINK.DeviceDesc%=GLINK_Device,
         // ACPI\QCOM0A84, and one description string, "Qualcomm(R) Shared Memory
@@ -2587,10 +2700,14 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
         //
         // The one thing this slot cannot reproduce is the adjacency it was
         // measured on: the corpus puts GLNK immediately after IPC0 in all
-        // twenty-one tables, and IPC0 is not in this table yet. It will be, and
-        // when it is written it lands between PILC and this node, because IPC0's
-        // own unanimous relations are the same ones - PILC before it and GLNK
-        // after it - and the run reappears here in the order the corpus keeps.
+        // twenty-one tables. IPC0 was written in Step 4.83 and landed between
+        // PILC and this node, as predicted here, because three unanimous
+        // relations leave no other slot - RPEN before it (21 of 21), PILC before
+        // it (19 of 19) and GLNK after it (21 of 21) against this file's
+        // consecutive RPEN, PILC and GLNK. The prediction was right and it was
+        // also short: it counted two relations where the corpus has three, and
+        // it did not know that the six relations this slot breaks are the same
+        // six by name. That is recorded on IPC0's own comment, not here.
         Device (GLNK)
         {
             Name (_HID, "QCOM0A84")  // _HID: Hardware ID

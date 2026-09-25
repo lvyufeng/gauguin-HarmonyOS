@@ -15239,3 +15239,282 @@ after (21/21) — and the run reappears here in the order the corpus keeps.
   The payload in `boot` is still the **4.74** set and its panel reading is **still owed**
   under 先读屏，再刷下一次. Step 4.82 changes the payload in `work/out/p2-4.82` and not the
   one on the device.
+
+## Step 4.83 — the other half of the pair, and the first node with a user-mode client
+
+### What this step was
+
+Wrote `IPC0`, the IPC router — `_HID` `QCOM0A0D`, claimed outright by
+`qcipcrouter7280.inf`. It goes between `PILC` and `GLNK`, which is where Step 4.82
+said it would go and for the reason 4.82 gave.
+
+That prediction was right and it was short. 4.82 recorded two relations for this
+node, `PILC` before it and `GLNK` after it; the corpus has three, because `RPEN`
+precedes `IPC0` in 21 of 21 and is a separate relation from `PILC`. All three hold
+here. What 4.82 could not know at all is that the six relations its own slot breaks
+are the same six by name — so before writing anything, here is what a full
+measurement of this node's position says.
+
+The id turned out to be the cleaner half of the pair. 4.82's argument was that this
+table's generation had to be read off `QGP0`/`QGP1`'s `QCOM0A88` rather than off the
+service ids, because six corpus tables share `06E0`/`06E1`/`06C2` byte for byte and
+split three ways on the transport id. `IPC0` has no such problem: its id is not
+inferred alongside `GLNK`'s, it is `GLNK`'s.
+
+Step 4.82's forecast sentence — "it will be, and when it is written it lands between
+`PILC` and this node" — held exactly, and the `GLNK` comment now says so in the past
+tense rather than the future.
+
+### The id: one generation, two ids, and the pair is not optional
+
+Twenty-one corpus tables declare an `IPC0`, under nine ids. Set beside the
+twenty-one `GLNK` ids, they pair table for table:
+
+| generation | `GLNK` | `IPC0` | tables |
+|---|---|---|---|
+| 02 | `QCOM02F9` | `QCOM021C` | caymanslm |
+| 05 | `QCOM058D` | `QCOM050E` | mh2, cepheus, nabu, pipa, vayu |
+| 08 | `QCOM088D` | `QCOM080E` | a52q, miatoll |
+| 09 | `QCOM0984` | `QCOM090D` | renoir, Cedros IDP |
+| **0A** | **`QCOM0A84`** | **`QCOM0A0D`** | **a52sxq, lisa** |
+| 0C | `QCOM0C84` | `QCOM0C0D` | Kailua MTP, Kailua QRD, Waipio |
+| 14 | `QCOM148D` | `QCOM140E` | surya |
+| 1A | `QCOM1A84` | `QCOM1A0D` | lemonade, venus, vili, Lahaina MTP |
+| 25 | `QCOM2584` | `QCOM250D` | alioth |
+
+The high byte is never different between the two ids of a row, and the low byte
+never crosses between the groups — `84` goes with `0D`, `8D` with `0E`, `F9` with
+`1C`, and no table departs from its row. The transport and the router are issued as
+a pair the way `RPEN` and `PILC` are (`06E1` and `06E0`), and unlike those two the
+pairing carries no generation of its own, because there is no `IPC0` whose high byte
+differs from its own `GLNK`'s.
+
+That is a third index over the same nine generations, and it partitions them the way
+the other two do:
+
+| node | 05 / 08 / 14 | 09 / 0A / 0C / 1A / 25 | 02 |
+|---|---|---|---|
+| `QGP0`, `QGP1` | `93` | `88` | `F4` |
+| `GLNK` | `8D` | `84` | `F9` |
+| `IPC0` | `0E` | `0D` | `1C` |
+
+Three indices, one partition. They do **not** agree on the spacing between them:
+`93` to `8D` is six, `88` to `84` is four, and `F4` to `F9` goes the other way by
+five. The family is a property of the table; the offset between one index and the
+next is not. That is the sharpest form of the standing rule yet — `PILC`'s step
+established that the generation is the table's and not the SoC's, and this says
+which parts of it are structural and which are not.
+
+With the generation fixed at `0A`, the row is the only one that matters, and both
+halves of it are now written here: `0A84` was `GLNK`'s in Step 4.82, `0A0D` is this
+node's. The corpus's only two `0A` tables, a52sxq and lisa, both write it.
+
+### The driver set claims one generation, and it is the right one
+
+Of the nine `IPC0` ids, exactly one appears anywhere in the 112 infs: `QCOM0A0D`,
+in `qcipcrouter7280.inf`. Of the nine `GLNK` ids, exactly one does: `QCOM0A84`, in
+`qcglink7280.inf`. Every other id in both columns — sixteen of them — appears in no
+`.inf` at all.
+
+So the driver set supports one generation out of nine, and it is the generation
+`QGP0` had already put this table in on its own evidence. Two measurements, arrived
+at from different directions, agreeing on a single value: the corpus's two `0A`
+tables write `QCOM0A84` and `QCOM0A0D`, the driver set names exactly those two ids,
+and `QGP0`/`QGP1` at `QCOM0A88` independently says the family is `0A`. It is the
+shape 4.82 recorded one node down, and here it is stronger because the pair gives
+the driver set two chances to be wrong and it takes neither.
+
+### The driver, and the user-mode half
+
+`qcipcrouter7280.inf`, read in full: `Class=SYSTEM`, `ClassGuid={4d36e97d-e325-11ce-bfc1-08002be10318}`,
+`DriverVer = 06/29/2022,1.0.3524.6700` — the same date and the same build stamp as
+`qcglink7280.inf` — `PnpLockDown = 1`, and
+`%IPC_ROUTER.DeviceDesc%=IPC_ROUTER_Device, ACPI\QCOM0A0D` under the description
+string `"Qualcomm(R) Data IPC Router Device"`. Service `QCIPC_ROUTER` at
+`%13%\qcipcrouter7280.sys`, `SERVICE_KERNEL_DRIVER`, `StartType = 3` (demand),
+`KmdfService` with `KmdfLibraryVersion = 1.33`, the same
+`WDTFSOCDeviceCategory {5D078032-6378-437B-8DA5-9B32B7CA3FDD},2,7,,2` as the
+transport next door, and three WPP autologgers rather than two: `IPCRPKTWPP`
+`{5767B83A-4578-4020-8DB1-C26CB6E88A49}`, `IPCRCTRLWPP`
+`{0076BE32-0BE5-4DF7-A923-A19945D66AB0}` and `IPCRERRWPP`
+`{500CFD06-5DB8-49E3-9E1C-1613CF51D308}`.
+
+Two things in it are new for this table.
+
+The first is that it ships a **user-mode half**. Aside from the kernel binary the
+same inf copies `qsocketipcrum.dll` into the system directory, and it grants the
+device one ACE more than `qcglink7280.inf` does:
+`D:P(A;;GA;;;BA)(A;;GA;;;SY)(A;;GA;;;S-1-5-84-0-0-0-0-0)` against the transport's
+`D:P(A;;GA;;;BA)(A;;GA;;;SY)`. `S-1-5-84-0-0-0-0-0` is the user-mode-driver SID.
+A device with a user-mode client opens its own device object; a device with none
+does not have to. The two infs disagree by exactly one ACE and that is the whole
+difference. It is also the first node here whose driver ships a user-mode component
+at all. That was measured rather than assumed: nineteen of the 112 infs copy a DLL
+— `qcdiagrouter7280`, `qcshutdownsvc`, `qcadsprpc7280`, `qcwlan7280`,
+`qcgnss7280`, `qcdx7280`, `qcdeepstandbymdm7280`, `qccamavs7280` and the rest — and
+not one of them is the driver for a node this table has already written. Every node
+written so far is a kernel-mode stack that nothing outside the kernel opens.
+
+The second is that the inf names the transport it rides, in a place a name can be
+read off. All five of its transports carry `PortName "IPCRTR"`, `Transport "SMEM"`,
+`Type 1`, `MaxIntents 4`, and four buffer classes at `Size`/`Count` `0x80`/`0x10`,
+`0x200`/`0x8`, `0x480`/`0x5` and `0x2080`/`0x1`; the five differ only in `RemoteSS`,
+which is `mpss`, `lpass`, `dsps`, `cdsp`, `wpss`. The board declares three
+`glink-edge`s and labels them `lpass`, `modem` and `cdsp`. Three of the five names
+line up — with the modem under two names, the inf's `mpss` and the board's `modem`
+— and two, `dsps` and `wpss`, have no remoteproc on this board at all. So the
+driver is configured for a two-subsystem-superset of what this board ships, which
+is what a shared Qualcomm binary looks like and not a discrepancy to fix.
+
+`qcglink7280.inf` carries a second sighting of the same four, and it is worth
+recording because it is a different shape of evidence — a `SMP2P_interrupts`
+registry table rather than a transport list:
+
+| remote | SMEM host | IPCC client |
+|---|---|---|
+| modem | `SMEM_MODEM` 1 | `MPSS` 2 |
+| adsp | `SMEM_ADSP` 2 | `LPASS` 3 |
+| cdsp | `SMEM_CDSP` 5 | `NSP0` 6 |
+| wpss | `SMEM_WPSS` 13 | `WPSS` 24 |
+
+The first three hosts are this board's `remote-pid`s exactly — 1, 2 and 5. The
+transport's inf also fixes three addresses of its own: `HWMutexReg_PA 0x01F40000`,
+which is the `hwlock@1f40000` the board's `smem` node points at, `TZ_WONCE_PA
+0x01FD4000`, and `IPC_REGISTER_PA 0x17C0000C`, the latter labelled
+`APSS_SHARED_IPC_INTERRUPT` and not to be confused with this table's `IPCC` block at
+`0x408000`, which is a different device.
+
+### The body: the smallest this file has written
+
+Corpus, 21 tables:
+
+| member | corpus | written here |
+|---|---|---|
+| `_DEP` | **21/21**, `Package (One) { \_SB.GLNK }` | `{ \_SB.GLNK }` |
+| `_HID` | 21/21, nine ids | `QCOM0A0D` |
+| `_SUB` | **21/21** — alias in 20, Waipio's `Method (_SUB)` in 1 | `Alias (^PSUB, _SUB)` |
+| `_UID` | **0/21** | **omitted** |
+| `_CRS` | **0/21** | **omitted** |
+| `_STA` | 2/21 | **omitted** |
+
+Three members and no more. `PILC` has two here and the CPU nodes have three, so it
+is the smallest body of any node this file has written that carries a `_DEP` at all,
+and it is the smallest in the corpus in a stronger sense: it has no `_UID` anywhere.
+
+Two asymmetries against `GLNK` are worth naming rather than passing over. `GLNK`
+has a `_UID` in 21 of 21 and this node has none in 21 of 21; and `GLNK` carries a
+nine-descriptor `_CRS` in nine tables while `IPC0` carries a resource list in none —
+not even in those same nine. The nine descriptors are the transport's own lines, so
+the reading that fits is that the resource belongs to the node that owns the
+interrupt rather than to the node that uses it. It is stated as the measurement it
+is and not repaired.
+
+The `_STA` two are vili and Waipio, the same two tables as `GLNK`'s, and the
+`Method (_SUB)` one is Waipio's, the same table as `GLNK`'s. That makes this the
+second node in a row where Waipio is the corpus's only departure, and with `_STA` it
+is three members on which vili's or Waipio's copy of this node is the whole of the
+corpus's disagreement about it.
+
+### Position: the corpus agrees on what follows and not on what precedes
+
+Measured over the 21 tables:
+
+- **immediately after `IPC0`** — `GLNK`, 21 of 21. Unanimous and immediate.
+- **immediately before `IPC0`** — no agreement at all: `RP1` in 14 tables, `GIO0`
+  in 3, `QPPX` in 2, and `RPEN` and `IPCC` in one each.
+
+So the run is anchored at its bottom and not its top, which is the reverse of how
+`PILC`'s run was measured. In this file the consequence is that this node lands
+where the node below it is, not where the node above it is.
+
+Three unanimous relations pin the slot:
+
+| relation | strength |
+|---|---|
+| `RPEN` precedes `IPC0` | 21 of 21 |
+| `PILC` precedes `IPC0` | 19 of 19 |
+| `GLNK` follows `IPC0` | 21 of 21 |
+
+`PILC`'s 19 of 19 is 19 rather than 21 because vili and Waipio have no `PILC`.
+`RPEN` and `PILC` are distinct relations — 4.82 counted only `PILC` — and it is
+`RPEN`'s 21 of 21 that excludes the slot between `RPEN` and `PILC`. In this file
+`RPEN`, `PILC` and `GLNK` are consecutive, so exactly one slot survives:
+`PILC` → `IPC0` → `GLNK`.
+
+**Twenty-four unanimous relations are satisfied by that slot, one more than `GLNK`'s
+slot satisfied before this node existed**; the difference is the `IPC0`→`GLNK`
+relation itself, which could not be satisfied until now.
+
+**Six relations are broken, and they are the same six by name that `GLNK`'s slot
+already broke.** Not one of them is repaired and not one is newly caused:
+
+| node | corpus | here | strength |
+|---|---|---|---|
+| `MMU0` | before `IPC0` | after it | 20 of 20 |
+| `MMU1` | before `IPC0` | after it | 20 of 20 |
+| `UCS0` | after `IPC0` | before it | 10 of 10 |
+| `UFN0` | after `IPC0` | before it | 20 of 20 |
+| `URS0` | after `IPC0` | before it | 20 of 20 |
+| `USB0` | after `IPC0` | before it | 20 of 20 |
+
+The cause is the early block this file wrote in an order of its own, where `UCS0`,
+`URS0`, `USB0` and `UFN0` sit near the top with `UFS0` while `MMU0` and `MMU1` sit
+below `QGP1`. A reordering is its own measurement, so they are recorded and not
+repaired, as at `PILC`, `RPEN` and `GLNK`. What the identity of the two sets means
+is that the run `PILC` → `IPC0` → `GLNK` sits wholly inside the neighbourhood that
+was already broken: adding the middle node changes the count of satisfiable
+relations and nothing about the violations.
+
+Three nodes the corpus puts before `IPC0` in every table that has both are not in
+this table yet: `BAM1`, `BAM5` and `TFTP`, 21 of 21 each. `TFTP` is on the list —
+`QCOM06DC`, `QcTftpKmdf`, `_DEP {IPC0}` — and when it is written it goes **above**
+this node and not below it. That is the first constraint this step hands forward.
+
+### The ladder
+
+- Three-copy identity: `tools/acpi/gauguin.asl`, `uefi/Silicium-ACPI/Platforms/Xiaomi/
+  gauguin/gauguin.asl` and `work/uefi/Mu-Silicium/Silicium-ACPI/Platforms/Xiaomi/gauguin/
+  gauguin.asl` all md5 `3d3148f5b03f162c5401d05de52a1ec8`, 3,915 lines.
+- `iasl` **0 errors**, 24 warnings and 55 remarks — unchanged from 4.82. AML **6,217
+  bytes**, sha256 `0361354cd8f4ac965abe4d1e90d3157e09fca7e75d3dfb91ee170d113b345077`,
+  264 opcodes, 397 named objects (up 4: the node, `_HID`, `_SUB`, `_DEP`), length
+  `0x1849`, checksum `0x8d`.
+- The AML's own strings, in namespace order: `QCOM06E1` at 3268, `QCOM06E0` at 3299,
+  **`QCOM0A0D` at 3331**, `QCOM0A84` at 3374, `QCOM0A88` at 3428. The three `0A` ids
+  this table writes are now adjacent in the table — they were 3331 and 3385 with a
+  gap, and the new node's id took the position the transport's had — which is the
+  run `IPC0`, `GLNK`, `QGP0` written in the order the corpus keeps.
+- Disassembly round-trip: `Device (IPC0)` at line 1054, immediately after
+  `Device (PILC)` (1045) and immediately before `Device (GLNK)` (1064). Its `_DEP`
+  disassembles to the bare-name form `GLNK`, the same form this file's other `_DEP`s
+  compile to.
+- `build_uefi.py`: `PROGRESS - Success`, the volume written, then the known
+  `mkbootimg` `ValueError: DTB image must not be empty` footer on Mu-Silicium's own
+  image. `FVMAIN.Fv` `0x704000` at sha256 `36c01754…`, `EFI_FV_TAKEN_SIZE 0x703f68`;
+  the `AcpiTables` FFS file grew 7,534 → 7,578 and the volume's 123 files grew by the
+  same 44, 7,355,711 → 7,355,755. `FVMAIN_COMPACT` taken `0x10aff8`, **72 bytes more**
+  than 4.82's `0x10afb0`, because the compressed inner file came out larger this time
+  (`0xf8fa9` → `0xf8ff6`, +77) while the AML grew by 43. That is the second step in a
+  row where the two movements do not match: 4.82 the compressed inner file fell 82
+  bytes while the AML grew 53. Compression on this volume is not monotonic in its
+  input, and the compact volume's taken size therefore is not a proxy for the table's
+  size.
+- The ACPI readback: 6 tables, `DSDT` at `0x0054d4c8` — **the same offset for a
+  thirteenth step** — 6,217 bytes with a valid checksum; `SSDT`/`APIC`/`GTDT` valid;
+  only `FACP` and `FACS` do not, which is expected before `AcpiTableDxe` runs.
+- `--dump-fvmain`: the payload's DSDT is **byte-identical** to the direct `iasl`
+  compile (`cmp` clean), and carries `QCOM0A0D`.
+- The three payloads are `787764ba…` (silicon/gzip), `6af857cf…` (stock/gzip) and
+  `45a4040e…` (stock/none), all three matching GenFv's map at **123 offsets and GUIDs,
+  zero mismatches**. They are archived in `work/out/p2-4.83`.
+- `work/out/p2-variants` **still holds the 4.74 set** — `90b21643…`, `e693e1a0…`,
+  `26919861…`. Ninth step running.
+- Device count **35 → 36** `Device (` declarations (plus 13 `ThermalZone (`, so 48 → 49
+  named ACPI objects). The census: **49 `_HID`/`_CID` declarations, 35 distinct, 33
+  claimed** — up one in each column, `QCOM0A0D` being the new declaration and a claimed
+  id. The same two remain unclaimed as every step since 4.70: `QCOM0A8B` (`URS0`) and
+  `QCOM24A5` (`UFS0`).
+- The device is absent from this host throughout, so nothing here is a hardware reading.
+  The payload in `boot` is still the **4.74** set and its panel reading is **still owed**
+  under 先读屏，再刷下一次. Step 4.83 changes the payload in `work/out/p2-4.83` and not the
+  one on the device.
