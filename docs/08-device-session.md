@@ -19644,3 +19644,150 @@ should clear is unchanged and is now expressible in the instrument that owns the
 - Standing rules unchanged: `userdata`, the partition table and the firmware LUN are
   untouched; writes go to `boot` only; the control image is read before anything is
   overwritten; and the screen is read before the next flash.
+
+
+## Step 4.100 — The heap figure is a rung of a six-rung ladder, and the branch the sentence cites is not the branch it names
+
+Step 4.27 quotes **7261 pages** and Step 4.98 quotes **"about 7,258 pages"**, and this
+document has carried both as though one were a correction of the other. They are not
+corrections; they are two rungs of a ladder, and the ladder was measurable all along.
+`tools/fv-inventory.py` reports a BootShim payload's inner firmware volume directly, so
+`9056 − ceil (FVMAIN / 4 KiB)` is a host-side reading on every payload on disk. Measured
+today, all of it, for the first time as a set:
+
+| heap | FVMAIN | pages | payloads on this rung |
+| ---: | ---: | ---: | --- |
+| **7262** | `0x702000` = 7,348,224 | 1794 | `work/out/boot-before-p2walk.img`; `work/out/boot-current-1209.img`, the 48 MiB `boot` readback, whose leading payload is this one; `work/out/retracted/Mu-gauguin-arch-first-gzip.img` |
+| **7261** | `0x703000` = 7,352,320 | 1795 | `work/out/boot-now-0923.img` — **the payload that produced the only SEQ reading**; `p2-silicon-gzip-preread-0923d.img`; `p2-freewhy`, `p2-freewhy-g`, `p2-gio0`, `p2-phywake`, `p2-pmic`; `p2-4.14`, `p2-4.16`, `p2-4.19`, `p2-4.20`, `p2-4.65` |
+| **7260** | `0x704000` = 7,356,416 | 1796 | `work/out/p2-variants/Mu-gauguin-silicon-gzip.img` — **what is in `boot`**; `p2-4.66` … `p2-4.88` |
+| **7259** | `0x705000` = 7,360,512 | 1797 | `p2-4.89` … `p2-4.92` |
+| **7258** | `0x706000` = 7,364,608 | 1798 | `p2-4.93`, `p2-4.94` — **the payload of record** |
+| **7219** | `0x72d000` = 7,524,352 | 1837 | `work/out/usb-host/Mu-gauguin-xhci-host-gzip.img` — unflashed |
+
+Every rung is `9056` minus the FVMAIN's page count and nothing else, so the ladder is the
+decompressed volume's own size ladder: the heap figure is a property of the payload, and
+no payload ever gets a heap that the volume above it did not take.
+
+Three things follow.
+
+**The figure the document quotes is a rung, and it is not the rung of the payload it would
+be compared against.** Step 4.27's 7261 belongs to `boot-now-0923` and twelve other
+payloads. The record is on **7258** and the payload in `boot` is on **7260**. Nothing in
+the document is wrong — Step 4.27 was measuring the payload whose panel reading it decodes,
+and Step 4.98 named the record's rung — but neither section says the number belongs to a
+payload rather than to the platform, and a reader comparing the demand model against 7261
+while `90b21643…` is in `boot` is two pages high.
+
+**The citation behind the figure is no longer readable; the bytes are.** Step 4.27 reads
+7,352,320 B off `Build/gauguinPkg/DEBUG_CLANGPDB/FV/FVMAIN.Fv`. That tree is gone from this
+host — `Build/gauguinPkg/` does not exist — so the path cannot be re-walked. The same
+7,352,320 B is the inner volume at `0x300000` of `work/out/boot-now-0923.img` and of
+`work/out/p2-freewhy/…`, which is *why* they share rung 7261 with the build tree. From here
+the measurement belongs on a payload, where it is reproducible, rather than on a build
+directory that is deleted after the build.
+
+**The rung moves no threshold, and neither does the USB host rung.** The whole spread across
+every payload ever built on this host is 7262 down to 7258 — four pages — and `usb-host`
+sits 39 below the record and 43 below the top rung. Step 4.98's argument is that a 9-page
+request refused at 591 pages of cumulative demand while an *identical* 9-page request
+succeeded at 647 turns on whether `P2 FREE largest=` reads 16 or more; a rung difference of
+4, or even the host stack's 39, cannot move a 16-page threshold that the model says is
+cleared by a factor of 300. So the ladder is recorded here as attribution rather than as a
+correction — and the host stack's measured cost, **39 pages of DXE heap against ~7,258 of
+them**, is the number the "should it be flashed" decision can now be argued against instead
+of against the volume's size in bytes.
+
+### The branch `Gcd.c:2393-2394` names is the branch that runs, for a reason the sentence does not give
+
+Steps 4.27 and 4.30 both write "DxeCore's conventional region is
+`[EfiFreeMemoryBottom, EfiFreeMemoryTop]` (`Gcd.c:2393-2394`)". Read in place, that pair of
+lines is the **second** of four candidate ranges inside `CoreInitializeMemoryServices`,
+reached only when the one before it is too small:
+
+| # | the range it tries | line |
+| ---: | --- | --- |
+| 1 | `[PageAlignAddress (EfiMemoryTop), ResourceHobMemoryTop]`, narrowed by `FindLargestFreeRegion` | `Gcd.c:2385-2386` |
+| 2 | `[PageAlignAddress (EfiFreeMemoryBottom), EfiFreeMemoryTop]` | `Gcd.c:2393-2394` |
+| 3 | `[PageAlignAddress (ResourceHob->PhysicalStart), *HobStart]`, narrowed by `FindLargestFreeRegion` | `Gcd.c:2401-2402` |
+| 4 | the highest resource HOB below `MAX_ALLOC_ADDRESS` that is big enough | `Gcd.c:2428` onward |
+
+Range 1 is dead by construction, on every payload in the ladder above.
+
+- `Sec.c:78` builds the PHIT with
+  `HobConstructor (UefiMemoryBase, UefiMemorySize, UefiMemoryBase, UefiMemoryBase + UefiMemorySize)`,
+  where `UefiMemoryBase`/`UefiMemorySize` come from `LocateMemoryRegionByName ("DXE Heap", …)`
+  (`Sec.c:64-69`) — this phone's `0x9B800000 + 0x02360000`. `PrePiHobLib/Hob.c:91-93` writes
+  `EfiMemoryTop = EfiMemoryBegin + EfiMemoryLength` and `EfiFreeMemoryTop` from the fourth
+  argument, so at construction **`EfiMemoryTop` and `EfiFreeMemoryTop` are the same address**,
+  `0x9DB60000`, the top of that row.
+- `PrePiMemoryAllocationLib/MemoryAllocationLib.c:41-43` takes every PrePi allocation off the
+  top with `NewTop = (EfiFreeMemoryTop & ~EFI_PAGE_MASK) - Pages * EFI_PAGE_SIZE; … EfiFreeMemoryTop = NewTop;`.
+  **`EfiMemoryTop` is written once, in `HobConstructor`, and never again anywhere in PrePi.**
+- Range 1 is `ResourceHobMemoryTop − EfiMemoryTop`, and `MemoryInitPei.c:86-98` settles the
+  other term: `AddHob` builds one resource descriptor HOB per XBL row (`:93`) and, for every
+  row whose `ResourceType` is `EFI_RESOURCE_SYSTEM_MEMORY`, a full-row
+  `EFI_HOB_TYPE_MEMORY_ALLOCATION` as well (`:98`). So the PHIT's resource HOB is the `DXE Heap`
+  row itself and `ResourceHobMemoryTop` is `0x9DB60000` = `EfiMemoryTop`. The window is zero —
+  and a zero-length window cannot be widened by `FindLargestFreeRegion` (`Gcd.c:2177-2223`),
+  which only ever splits an existing window around an allocation HOB.
+
+Range 2 then wins on arithmetic identical for every payload. The bar is
+`MinimalMemorySizeNeeded` (`Gcd.c:2319`): `MINIMUM_INITIAL_MEMORY_SIZE` = 0x10000 (`Gcd.c:17`)
+plus `CalculateTotalMemoryBinSizeNeeded (NULL, gMemoryTypeInformation)`, and the array that
+function reads is the one `BuildMemoryTypeInformationHob` (`PrePiHobLib/Hob.c:887-906`) writes —
+five live entries, ACPIReclaim 0, ACPIMemoryNVS 0, Reserved 0, RuntimeServicesData 300,
+RuntimeServicesCode 150 (`SiliciumPkg.dsc.inc:44-51`) = **450 pages**. The bar is 466 pages,
+and the smallest rung in the table above clears it 15.5×.
+
+So the citation is right, and is now right for a checkable reason. It is worth writing down
+because the sentence it sits in invites the opposite reading — that
+`[EfiFreeMemoryBottom, EfiFreeMemoryTop]` is what DxeCore's region *is*, rather than which of
+four ranges survived — and the next step that tries to move the heap by growing the FD into
+the PHIT range would be reasoning about a range that cannot be selected while `EfiMemoryTop`
+is frozen and `EfiFreeMemoryTop` alone walks down. That is also the precise form of Step
+4.27's "the heap is the row minus what PrePi took": the subtraction happens in a single
+variable, and it is the free top. After range 2 is chosen, `Gcd.c:2540`'s
+`CoreAddMemoryDescriptor (EfiConventionalMemory, BaseAddress, Length >> EFI_PAGE_SHIFT, …)`
+declares exactly that interval and nothing else.
+
+### The one arithmetic correction this step makes to itself
+
+The first draft of the section above said the USB host stack costs 42 pages "against the
+payload of record". Against the record it is **39** (1837 − 1798); 42 is the figure against
+`boot-now-0923` (1837 − 1795) and 43 against the top rung. The table is right and the sentence
+was not, and it is written here because 42 is the number that would otherwise be copied
+forward on its own, detached from the payload it was measured against.
+
+### Nothing was built and nothing was flashed
+
+- One file changes: this document. No `.c`, no `.inf`, no `.asl`, no `APRIORI.inc`, no FFS
+  file, no payload, no partition. Every figure here is host-side arithmetic over files already
+  on disk, plus source that was read and not edited.
+- **No build, no staging, no flash, and no write to any partition.** The device was not
+  attached to this host, so nothing here is a hardware reading and no panel was photographed.
+  The reading owed under *read the panel before the next flash* is still owed, on the payload
+  in `boot`, `90b21643…`, whose rung is **7260**.
+- Nothing was moved, renamed or overwritten: the two `boot` readbacks, the retracted payload
+  and every `work/out/<name>/` directory were opened read-only, and `tools/fv-inventory.py`
+  was imported as a module and not edited.
+- Sizes and digests re-checked rather than recalled: the payload of record
+  `work/out/p2-4.94/Mu-gauguin-silicon-gzip.img`, 1,144,832 B,
+  `d621f732f4763a303e980c5af04451479c2ace31801e796993a258f226c177a5`;
+  `work/out/p2-variants/Mu-gauguin-silicon-gzip.img`, 1,142,784 B,
+  `90b21643e3450c326fb3d24baf64d58d4692a5d155c36b76d2e020ff04a96b59`;
+  `work/out/boot-now-0923.img`, 1,142,784 B,
+  `3547fd0487d333874492e519760155b46164be8989ab3b5db743d42feefbe8ee`;
+  `work/out/usb-host/Mu-gauguin-xhci-host-gzip.img`, 1,169,408 B,
+  `efc8e10d09f0f286011e1aacc638a7edd2ed5fcd86884640b28d14628f58f9f3`; and the two
+  `P2FreeWhy` builds, `eb1601ab98fe97d25ae87106b1dedfda0356e0012a8a3e728219066cef1eb3e3` and
+  `cbe5a13114fc4a0465677e480a29a76fa2836cf2ae00fb9e9838c490e0102132`.
+- Cited, re-read rather than remembered: `Gcd.c:17`, `:2177-2223`, `:2240-2266`, `:2319`,
+  `:2322`, `:2346`, `:2362`, `:2382`, `:2385-2386`, `:2391`, `:2393-2394`, `:2396`,
+  `:2401-2402`, `:2404`, `:2408-2420`, `:2428`, `:2506-2510`, `:2540`;
+  `PrePiHobLib/Hob.c:67`, `:91`, `:93`, `:887-906`;
+  `PrePiMemoryAllocationLib/MemoryAllocationLib.c:30-52`; `MemoryInitPei.c:86`, `:93`, `:98`,
+  `:104`; `MemoryBin.c:58-100`; `Sec.c:55`, `:64-69`, `:78`; `SiliciumPkg.dsc.inc:44-51`; and,
+  in this document, Steps 4.26, 4.27, 4.30, 4.55, 4.98 and 4.99.
+- Standing rules unchanged: `userdata`, the partition table and the firmware LUN are
+  untouched; writes go to `boot` only; the control image is read before anything is
+  overwritten; and the screen is read before the next flash.
