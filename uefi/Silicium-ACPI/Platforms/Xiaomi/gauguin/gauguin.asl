@@ -20,6 +20,10 @@
  *   QGP0 interrupt   276 (0x114)            dts interrupts <0x00 0xF4 0x04>, INTID = 32 + 244
  *   QGP1 window      0x00904000 + 0x50000   dts gpi-dma@900000 0x900000 + 0x60000, "gpi-top"
  *   QGP1 interrupt   677 (0x2A5)            dts interrupts <0x00 0x285 0x04>, INTID = 32 + 645
+ *   MMU0 window      0x15000000 + 0x100000   dts apps-smmu@15000000 0x15000000 + 0x100000
+ *   MMU0 interrupts  97, 127-150, 213-224, 347-377, 433-445   dts 81 SPIs, INTID = 32 + SPI
+ *   MMU1 window      0x03D40000 + 0x20000    dts arm,smmu-kgsl@3d40000 base, family length
+ *   MMU1 interrupts  261, 263, 396-403       dts 10 SPIs, INTID = 32 + SPI
  *
  * One id was inherited rather than checked, and Step 4.65 corrected it. URS0's
  * _HID read "QCOM0497" for several steps - bitra's, and bitra is family 04,
@@ -1719,8 +1723,10 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
         // gauguin's controllers sit behind it (iommus = <&apps_smmu 0x56 0> and
         // <&apps_smmu 0x4D6 0>, and phandle 0x17 is apps-smmu@15000000) and
         // every family _DEP that names the GPI DMA names MMU0 beside it, but
-        // the family's QGP nodes do not describe it and the node that would is
-        // MMU0, which this table does not have yet.
+        // the family's QGP nodes do not describe it. What would is MMU0, and
+        // this table has it as of Step 4.72, two nodes below; the engine _DEPs
+        // that want a GPI DMA and an SMMU together can now resolve that half of
+        // the reference, and still wait on the half that is PEP0.
         Device (QGP0)
         {
             Name (_HID, "QCOM0A88")  // _HID: Hardware ID
@@ -1772,6 +1778,526 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
                     }
                 })
                 Return (RBUF) /* \_SB_.QGP1._CRS.RBUF */
+            }
+        }
+
+        // The two SMMUs, and the first pair of nodes in this table whose form
+        // came from the driver set's own record of two instances rather than
+        // from a sibling table's single one.
+        //
+        // qcsmmu7280.inf claims one id - ACPI\QCOM0A09 - and hangs two
+        // per-instance registry sets off it, Parameters\0 and Parameters\1,
+        // with two different register layouts and two different client lists:
+        //
+        //   Parameters\0  OFFSETS 0x00 0x01 0x02 0x03 0x04 0xFF 0x80
+        //                 global 0, global 1, implementation defined 0, perf,
+        //                 SSD, implementation defined 1 (invalid), CB
+        //                 PREFETCHDETAILS clients  MDP, VFE, VIDEO
+        //   Parameters\1  OFFSETS 0x00 0x01 0x02 0x03 0xFF 0x06 0x10
+        //                 global 0, global 1, implementation defined 0, perf,
+        //                 SSD (invalid), implementation defined 1, CB
+        //                 PREFETCHDETAILS client   GPU
+        //
+        // The second instance is therefore the GPU's SMMU, and the board has
+        // exactly two IOMMU blocks: apps-smmu@15000000 and
+        // arm,smmu-kgsl@3d40000, whose name says which is which - and whose
+        // upstream compatible, qcom,adreno-smmu, says it a second time. Both
+        // are QCOM0A09 with _UID Zero and _UID One: 20 of the 66 tables in
+        // Silicium-ACPI carry that pair, every one of them with the same two
+        // _UIDs and the same one id, and no table anywhere carries a second id
+        // for a second SMMU. The driver's two layouts also say which _UID is
+        // which block, and the board agrees with them: the instance-0 CB page
+        // at 0x80 pages is 0x80000, inside MMU0's single 1 MB window, while the
+        // instance-1 CB page at 0x10 pages is 0x10000, which is what decides
+        // MMU1's length below.
+        //
+        // MMU0's resources are the board's, and the corpus agrees with them
+        // rather than supplying them. gauguin's apps-smmu@15000000 is
+        // qcom,qsmmu-v500 with reg = <0x15000000 0x100000>,
+        // #global-interrupts = 1 and #iommu-cells = 2; the kernel tree in
+        // Resources/DTBs describes the same block as qcom,sm6350-smmu-500 with
+        // the same 1 MB window and the same two counts; and 17 of the 20 tables
+        // write _CRS 0x15000000 + 0x100000. This is the one SMMU window in the
+        // family that does not move with the SoC - the other three are 0x7FFB8
+        // and 0x186000 twice - so here the corpus is a check and not a source.
+        //
+        // The interrupts are 81, in five runs: 97, 127-150, 213-224, 347-377
+        // and 433-445. #global-interrupts = 1, so the first of the board's 81
+        // specifiers is the global interrupt and the other 80 are one per
+        // context bank, in the board's order. The count is the board's and the
+        // ladder's shape is the family's, and neither is in conflict, because
+        // every table counts its own SoC: the runs opening at 0xD5 and 0x15B
+        // are in all 20 tables and lisa's 0xD5-0xE0 and 0x15B-0x178 sit inside
+        // gauguin's to the digit, while the count there is 65 and here 81, and
+        // across the corpus MMU0 declares 43 (caymanslm), 57, 58 (Kailua), 63,
+        // 65 (lisa, a52sxq, alioth, lemonade) or 71 (venus, vili). The first
+        // run is where the two come closest to meeting: lisa's opens at 0x80
+        // and gauguin's at 0x7F, one context bank further down the same ladder.
+        //
+        // The seven TBU pages under this node - anoc_1_tbu@15185000 through
+        // pcie_tbu@1519d000, each a 0x1000 page plus an 8-byte control register
+        // in the 0x15182200 page - stay outside the window. The board describes
+        // them as separate devices, no table in the corpus widens an SMMU
+        // window to reach a TBU, and the driver's instance-0 layout has
+        // everything it names below 0x81000.
+        //
+        // MMU1's base is the board's and its length is not. arm,smmu-kgsl@3d40000
+        // and qcom,kgsl-iommu@3d40000 - the kgsl stack's own view of the same
+        // registers - carry the same reg, <0x3d40000 0x10000>, and both the
+        // vendor tree and the kernel tree in Resources/DTBs agree on it. That
+        // 0x10000 is a register footprint and not the block's size:
+        // attach-impl-defs on this node reaches 0x6b68, which is the page the
+        // driver's instance 1 calls implementation defined 1 at 0x06 pages, and
+        // the instance-1 CB page is at 0x10 pages - exactly where a 0x10000
+        // window ends. So the window is the base the board gives and the 0x20000
+        // lisa and a52sxq give the same node, which is also the largest power of
+        // two that stops short of the GPU's next region at 0x3d61000. Eight of
+        // the 20 MMU1s write 0x10000, ten write 0x20000 and Kailua's two write
+        // 0x40000; the ten include gauguin's peers lisa and a52sxq, and the
+        // eight include the ones whose context ladder gauguin's matches, so the
+        // driver's own offsets are what decides between them here.
+        //
+        // MMU1's interrupts are 10: two globals, 261 and 263, with
+        // #global-interrupts = 2, and eight context banks at 396-403. The eight
+        // are the group three other families write - caymanslm, a52q and
+        // miatoll, and surya all declare 0x18C-0x193 for their MMU1 - while
+        // gauguin's peers lisa and a52sxq put their ten at 710-719. The count is
+        // the board's and the ladder is neither family's, which is what happened
+        // at wrapper 1 of the GPI DMA above: the numbering agrees between two
+        // SoCs where they instantiate the same block and not otherwise, and both
+        // numbers here are measured. The board's own ladder backs the eight:
+        // 0x18C-0x193 sits in the gap between MMU0's third run, which ends at
+        // 0x179, and its fourth, which opens at 0x1B1.
+        //
+        // Both nodes carry the trigger the board's own cells give - type 4,
+        // level, active high, on 81 of 81 and 10 of 10 - and this is the one
+        // place in this file where the corpus disagrees with the board about a
+        // trigger. All 1400 SMMU interrupt descriptors in the corpus say Edge,
+        // ActiveHigh, Exclusive, in every family and every table. The corpus is
+        // faithful elsewhere - its UFS0 and its QGP0 are Level, matching the
+        // type cells gauguin's dts carries for the same blocks - so the
+        // disagreement is specific to this block, and it is recorded rather than
+        // resolved. The board's cell is what the kernel programs that GIC line
+        // with; if the SMMU driver turns out never to fire, this is the cell to
+        // flip first.
+        //
+        // Three things every corpus SMMU carries are deliberately not here. The
+        // _DEP is {PEP0} in all 40 nodes, PEP0 is absent, and a one-entry _DEP
+        // is a shape no table has - the rule the QUP engines and the QGP nodes
+        // above already follow, and the one thing that changes for all of them
+        // on the day PEP0 lands. _STA is absent from 19 of the 20 MMU0s and
+        // from 9 of the 20 MMU1s; where it is present it is a board's decision -
+        // nine MMU1s return 0x0F, which says what leaving the method out says,
+        // and three nodes return Zero, alioth's MMU1 and vili's MMU0 and MMU1,
+        // which is a board hiding an SMMU from the OS rather than describing
+        // one. The GPU's SMMU is hardware this port means to drive, so this
+        // table takes the shorter form on both nodes. And every corpus SMMU
+        // aliases \_SB.SVMJ to _HRV; SVMJ is a Name (SVMJ, 0xFFFF) declared once
+        // under \_SB, 0xFFFF is what every released DSDT carries there rather
+        // than SM7225's silicon revision, and this table has no SVMJ at all, so
+        // adding it is its own measurement and not a side effect of this one.
+        //
+        // What this pair unblocks is the engine _DEPs: every family engine _DEP
+        // that names a GPI DMA names MMU0 beside it, and both halves of that
+        // reference now resolve. All four family shapes still need PEP0, which
+        // is why none of them is written yet.
+        Device (MMU0)
+        {
+            Name (_HID, "QCOM0A09")  // _HID: Hardware ID
+            Alias (^PSUB, _SUB)
+            Name (_UID, Zero)  // _UID: Unique ID
+            Method (_CRS, 0, NotSerialized)  // _CRS: Current Resource Settings
+            {
+                Name (RBUF, ResourceTemplate ()
+                {
+                    Memory32Fixed (ReadWrite,
+                        0x15000000,         // Address Base
+                        0x00100000,         // Address Length
+                        )
+                    Interrupt (ResourceConsumer, Level, ActiveHigh, Exclusive, ,, )
+                    {
+                        0x00000061,
+                    }
+                    Interrupt (ResourceConsumer, Level, ActiveHigh, Exclusive, ,, )
+                    {
+                        0x0000007F,
+                    }
+                    Interrupt (ResourceConsumer, Level, ActiveHigh, Exclusive, ,, )
+                    {
+                        0x00000080,
+                    }
+                    Interrupt (ResourceConsumer, Level, ActiveHigh, Exclusive, ,, )
+                    {
+                        0x00000081,
+                    }
+                    Interrupt (ResourceConsumer, Level, ActiveHigh, Exclusive, ,, )
+                    {
+                        0x00000082,
+                    }
+                    Interrupt (ResourceConsumer, Level, ActiveHigh, Exclusive, ,, )
+                    {
+                        0x00000083,
+                    }
+                    Interrupt (ResourceConsumer, Level, ActiveHigh, Exclusive, ,, )
+                    {
+                        0x00000084,
+                    }
+                    Interrupt (ResourceConsumer, Level, ActiveHigh, Exclusive, ,, )
+                    {
+                        0x00000085,
+                    }
+                    Interrupt (ResourceConsumer, Level, ActiveHigh, Exclusive, ,, )
+                    {
+                        0x00000086,
+                    }
+                    Interrupt (ResourceConsumer, Level, ActiveHigh, Exclusive, ,, )
+                    {
+                        0x00000087,
+                    }
+                    Interrupt (ResourceConsumer, Level, ActiveHigh, Exclusive, ,, )
+                    {
+                        0x00000088,
+                    }
+                    Interrupt (ResourceConsumer, Level, ActiveHigh, Exclusive, ,, )
+                    {
+                        0x00000089,
+                    }
+                    Interrupt (ResourceConsumer, Level, ActiveHigh, Exclusive, ,, )
+                    {
+                        0x0000008A,
+                    }
+                    Interrupt (ResourceConsumer, Level, ActiveHigh, Exclusive, ,, )
+                    {
+                        0x0000008B,
+                    }
+                    Interrupt (ResourceConsumer, Level, ActiveHigh, Exclusive, ,, )
+                    {
+                        0x0000008C,
+                    }
+                    Interrupt (ResourceConsumer, Level, ActiveHigh, Exclusive, ,, )
+                    {
+                        0x0000008D,
+                    }
+                    Interrupt (ResourceConsumer, Level, ActiveHigh, Exclusive, ,, )
+                    {
+                        0x0000008E,
+                    }
+                    Interrupt (ResourceConsumer, Level, ActiveHigh, Exclusive, ,, )
+                    {
+                        0x0000008F,
+                    }
+                    Interrupt (ResourceConsumer, Level, ActiveHigh, Exclusive, ,, )
+                    {
+                        0x00000090,
+                    }
+                    Interrupt (ResourceConsumer, Level, ActiveHigh, Exclusive, ,, )
+                    {
+                        0x00000091,
+                    }
+                    Interrupt (ResourceConsumer, Level, ActiveHigh, Exclusive, ,, )
+                    {
+                        0x00000092,
+                    }
+                    Interrupt (ResourceConsumer, Level, ActiveHigh, Exclusive, ,, )
+                    {
+                        0x00000093,
+                    }
+                    Interrupt (ResourceConsumer, Level, ActiveHigh, Exclusive, ,, )
+                    {
+                        0x00000094,
+                    }
+                    Interrupt (ResourceConsumer, Level, ActiveHigh, Exclusive, ,, )
+                    {
+                        0x00000095,
+                    }
+                    Interrupt (ResourceConsumer, Level, ActiveHigh, Exclusive, ,, )
+                    {
+                        0x00000096,
+                    }
+                    Interrupt (ResourceConsumer, Level, ActiveHigh, Exclusive, ,, )
+                    {
+                        0x000000D5,
+                    }
+                    Interrupt (ResourceConsumer, Level, ActiveHigh, Exclusive, ,, )
+                    {
+                        0x000000D6,
+                    }
+                    Interrupt (ResourceConsumer, Level, ActiveHigh, Exclusive, ,, )
+                    {
+                        0x000000D7,
+                    }
+                    Interrupt (ResourceConsumer, Level, ActiveHigh, Exclusive, ,, )
+                    {
+                        0x000000D8,
+                    }
+                    Interrupt (ResourceConsumer, Level, ActiveHigh, Exclusive, ,, )
+                    {
+                        0x000000D9,
+                    }
+                    Interrupt (ResourceConsumer, Level, ActiveHigh, Exclusive, ,, )
+                    {
+                        0x000000DA,
+                    }
+                    Interrupt (ResourceConsumer, Level, ActiveHigh, Exclusive, ,, )
+                    {
+                        0x000000DB,
+                    }
+                    Interrupt (ResourceConsumer, Level, ActiveHigh, Exclusive, ,, )
+                    {
+                        0x000000DC,
+                    }
+                    Interrupt (ResourceConsumer, Level, ActiveHigh, Exclusive, ,, )
+                    {
+                        0x000000DD,
+                    }
+                    Interrupt (ResourceConsumer, Level, ActiveHigh, Exclusive, ,, )
+                    {
+                        0x000000DE,
+                    }
+                    Interrupt (ResourceConsumer, Level, ActiveHigh, Exclusive, ,, )
+                    {
+                        0x000000DF,
+                    }
+                    Interrupt (ResourceConsumer, Level, ActiveHigh, Exclusive, ,, )
+                    {
+                        0x000000E0,
+                    }
+                    Interrupt (ResourceConsumer, Level, ActiveHigh, Exclusive, ,, )
+                    {
+                        0x0000015B,
+                    }
+                    Interrupt (ResourceConsumer, Level, ActiveHigh, Exclusive, ,, )
+                    {
+                        0x0000015C,
+                    }
+                    Interrupt (ResourceConsumer, Level, ActiveHigh, Exclusive, ,, )
+                    {
+                        0x0000015D,
+                    }
+                    Interrupt (ResourceConsumer, Level, ActiveHigh, Exclusive, ,, )
+                    {
+                        0x0000015E,
+                    }
+                    Interrupt (ResourceConsumer, Level, ActiveHigh, Exclusive, ,, )
+                    {
+                        0x0000015F,
+                    }
+                    Interrupt (ResourceConsumer, Level, ActiveHigh, Exclusive, ,, )
+                    {
+                        0x00000160,
+                    }
+                    Interrupt (ResourceConsumer, Level, ActiveHigh, Exclusive, ,, )
+                    {
+                        0x00000161,
+                    }
+                    Interrupt (ResourceConsumer, Level, ActiveHigh, Exclusive, ,, )
+                    {
+                        0x00000162,
+                    }
+                    Interrupt (ResourceConsumer, Level, ActiveHigh, Exclusive, ,, )
+                    {
+                        0x00000163,
+                    }
+                    Interrupt (ResourceConsumer, Level, ActiveHigh, Exclusive, ,, )
+                    {
+                        0x00000164,
+                    }
+                    Interrupt (ResourceConsumer, Level, ActiveHigh, Exclusive, ,, )
+                    {
+                        0x00000165,
+                    }
+                    Interrupt (ResourceConsumer, Level, ActiveHigh, Exclusive, ,, )
+                    {
+                        0x00000166,
+                    }
+                    Interrupt (ResourceConsumer, Level, ActiveHigh, Exclusive, ,, )
+                    {
+                        0x00000167,
+                    }
+                    Interrupt (ResourceConsumer, Level, ActiveHigh, Exclusive, ,, )
+                    {
+                        0x00000168,
+                    }
+                    Interrupt (ResourceConsumer, Level, ActiveHigh, Exclusive, ,, )
+                    {
+                        0x00000169,
+                    }
+                    Interrupt (ResourceConsumer, Level, ActiveHigh, Exclusive, ,, )
+                    {
+                        0x0000016A,
+                    }
+                    Interrupt (ResourceConsumer, Level, ActiveHigh, Exclusive, ,, )
+                    {
+                        0x0000016B,
+                    }
+                    Interrupt (ResourceConsumer, Level, ActiveHigh, Exclusive, ,, )
+                    {
+                        0x0000016C,
+                    }
+                    Interrupt (ResourceConsumer, Level, ActiveHigh, Exclusive, ,, )
+                    {
+                        0x0000016D,
+                    }
+                    Interrupt (ResourceConsumer, Level, ActiveHigh, Exclusive, ,, )
+                    {
+                        0x0000016E,
+                    }
+                    Interrupt (ResourceConsumer, Level, ActiveHigh, Exclusive, ,, )
+                    {
+                        0x0000016F,
+                    }
+                    Interrupt (ResourceConsumer, Level, ActiveHigh, Exclusive, ,, )
+                    {
+                        0x00000170,
+                    }
+                    Interrupt (ResourceConsumer, Level, ActiveHigh, Exclusive, ,, )
+                    {
+                        0x00000171,
+                    }
+                    Interrupt (ResourceConsumer, Level, ActiveHigh, Exclusive, ,, )
+                    {
+                        0x00000172,
+                    }
+                    Interrupt (ResourceConsumer, Level, ActiveHigh, Exclusive, ,, )
+                    {
+                        0x00000173,
+                    }
+                    Interrupt (ResourceConsumer, Level, ActiveHigh, Exclusive, ,, )
+                    {
+                        0x00000174,
+                    }
+                    Interrupt (ResourceConsumer, Level, ActiveHigh, Exclusive, ,, )
+                    {
+                        0x00000175,
+                    }
+                    Interrupt (ResourceConsumer, Level, ActiveHigh, Exclusive, ,, )
+                    {
+                        0x00000176,
+                    }
+                    Interrupt (ResourceConsumer, Level, ActiveHigh, Exclusive, ,, )
+                    {
+                        0x00000177,
+                    }
+                    Interrupt (ResourceConsumer, Level, ActiveHigh, Exclusive, ,, )
+                    {
+                        0x00000178,
+                    }
+                    Interrupt (ResourceConsumer, Level, ActiveHigh, Exclusive, ,, )
+                    {
+                        0x00000179,
+                    }
+                    Interrupt (ResourceConsumer, Level, ActiveHigh, Exclusive, ,, )
+                    {
+                        0x000001B1,
+                    }
+                    Interrupt (ResourceConsumer, Level, ActiveHigh, Exclusive, ,, )
+                    {
+                        0x000001B2,
+                    }
+                    Interrupt (ResourceConsumer, Level, ActiveHigh, Exclusive, ,, )
+                    {
+                        0x000001B3,
+                    }
+                    Interrupt (ResourceConsumer, Level, ActiveHigh, Exclusive, ,, )
+                    {
+                        0x000001B4,
+                    }
+                    Interrupt (ResourceConsumer, Level, ActiveHigh, Exclusive, ,, )
+                    {
+                        0x000001B5,
+                    }
+                    Interrupt (ResourceConsumer, Level, ActiveHigh, Exclusive, ,, )
+                    {
+                        0x000001B6,
+                    }
+                    Interrupt (ResourceConsumer, Level, ActiveHigh, Exclusive, ,, )
+                    {
+                        0x000001B7,
+                    }
+                    Interrupt (ResourceConsumer, Level, ActiveHigh, Exclusive, ,, )
+                    {
+                        0x000001B8,
+                    }
+                    Interrupt (ResourceConsumer, Level, ActiveHigh, Exclusive, ,, )
+                    {
+                        0x000001B9,
+                    }
+                    Interrupt (ResourceConsumer, Level, ActiveHigh, Exclusive, ,, )
+                    {
+                        0x000001BA,
+                    }
+                    Interrupt (ResourceConsumer, Level, ActiveHigh, Exclusive, ,, )
+                    {
+                        0x000001BB,
+                    }
+                    Interrupt (ResourceConsumer, Level, ActiveHigh, Exclusive, ,, )
+                    {
+                        0x000001BC,
+                    }
+                    Interrupt (ResourceConsumer, Level, ActiveHigh, Exclusive, ,, )
+                    {
+                        0x000001BD,
+                    }
+                })
+                Return (RBUF) /* \_SB_.MMU0._CRS.RBUF */
+            }
+        }
+
+        Device (MMU1)
+        {
+            Name (_HID, "QCOM0A09")  // _HID: Hardware ID
+            Alias (^PSUB, _SUB)
+            Name (_UID, One)  // _UID: Unique ID
+            Method (_CRS, 0, NotSerialized)  // _CRS: Current Resource Settings
+            {
+                Name (RBUF, ResourceTemplate ()
+                {
+                    Memory32Fixed (ReadWrite,
+                        0x03D40000,         // Address Base
+                        0x00020000,         // Address Length
+                        )
+                    Interrupt (ResourceConsumer, Level, ActiveHigh, Exclusive, ,, )
+                    {
+                        0x00000105,
+                    }
+                    Interrupt (ResourceConsumer, Level, ActiveHigh, Exclusive, ,, )
+                    {
+                        0x00000107,
+                    }
+                    Interrupt (ResourceConsumer, Level, ActiveHigh, Exclusive, ,, )
+                    {
+                        0x0000018C,
+                    }
+                    Interrupt (ResourceConsumer, Level, ActiveHigh, Exclusive, ,, )
+                    {
+                        0x0000018D,
+                    }
+                    Interrupt (ResourceConsumer, Level, ActiveHigh, Exclusive, ,, )
+                    {
+                        0x0000018E,
+                    }
+                    Interrupt (ResourceConsumer, Level, ActiveHigh, Exclusive, ,, )
+                    {
+                        0x0000018F,
+                    }
+                    Interrupt (ResourceConsumer, Level, ActiveHigh, Exclusive, ,, )
+                    {
+                        0x00000190,
+                    }
+                    Interrupt (ResourceConsumer, Level, ActiveHigh, Exclusive, ,, )
+                    {
+                        0x00000191,
+                    }
+                    Interrupt (ResourceConsumer, Level, ActiveHigh, Exclusive, ,, )
+                    {
+                        0x00000192,
+                    }
+                    Interrupt (ResourceConsumer, Level, ActiveHigh, Exclusive, ,, )
+                    {
+                        0x00000193,
+                    }
+                })
+                Return (RBUF) /* \_SB_.MMU1._CRS.RBUF */
             }
         }
 

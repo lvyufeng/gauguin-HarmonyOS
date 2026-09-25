@@ -12772,3 +12772,252 @@ what one engine is, in the two tables this table has been reading since Step 4.6
 right both times. `IC14` and `SP14` are the same slot with two protocols, which is the
 whole reason a device tree and a device tree disagreeing is a question about the board and
 not a fault in either the tree or the table.
+
+## Step 4.72 — the two SMMUs, and the first nodes whose form came from the driver's own record of two instances
+
+Step 4.71 wrote the two GPI DMA controllers and closed by naming the one node every engine
+`_DEP` that reaches a `QGP` reaches beside it: `MMU0`, the SMMU the controllers sit behind.
+The prior step had recorded that node as unbuildable, on the grounds that the board has
+exactly two IOMMU blocks and neither of them had the corpus `MMU0`'s shape. Reading both
+blocks again, and reading the driver's own description of the block beside the corpus's,
+reverses that: both SMMUs are derivable, and this step writes them. The pair is also the
+first in this file whose *form* — which resources go on which of two nodes sharing one id —
+came out of a driver's record of two instances rather than out of a sibling table's single
+one.
+
+### The driver describes two instances of one id, and names their clients
+
+`qcsmmu7280.inf` claims one id, `ACPI\QCOM0A09`, and hangs two per-instance registry sets
+off it. They are not two copies of one layout:
+
+| | `Parameters\0` | `Parameters\1` |
+|---|---|---|
+| GUID | `{36079AE4-78E8-452D-AF50-0CFF78B2F1CA}` | `{9833C712-3292-4FFB-B0F4-2BD20E1F7F66}` |
+| `OFFSETS` | `0x00, 0x01, 0x02, 0x03, 0x04, 0xFF, 0x80` | `0x00, 0x01, 0x02, 0x03, 0xFF, 0x06, 0x10` |
+| global 0 / global 1 / impl 0 / perf | present | present |
+| SSD | `0x04` | invalid |
+| implementation defined 1 | invalid (`0xFF`) | **`0x06`** |
+| context-bank page | **`0x80`** | **`0x10`** |
+| `PREFETCHDETAILS` clients | `MDP`, `VFE`, `VIDEO` | **`GPU`** |
+
+The file comments the second set as "GFX MMU version specific settings", and its only
+prefetch client is the GPU. So **instance 1 is the GPU's SMMU**, and the board has exactly
+two IOMMU blocks for the two instances to be: `apps-smmu@15000000` and
+`arm,smmu-kgsl@3d40000`, whose name says which is which before anything else is read.
+
+### Three independent sources agree on the identification
+
+| source | block at `0x15000000` | block at `0x03D40000` |
+|---|---|---|
+| board tree, `~/backup/gauguin/dt/soc/` | `compatible = "qcom,qsmmu-v500"`, `reg = <0x15000000 0x100000>`, `#global-interrupts = 1`, `#iommu-cells = 2`, 81 interrupt specifiers | `compatible = "qcom,smmu-v2"`, `name = "arm,smmu-kgsl"`, `reg = <0x3d40000 0x10000>`, `#global-interrupts = 2`, `#iommu-cells = 1`, 10 interrupt specifiers |
+| payload tree, `work/out/gauguin.dts` | `"qcom,sm6350-smmu-500", "arm,mmu-500"`, same 1 MB window, same two counts | `"qcom,sm6350-smmu-v2", "qcom,adreno-smmu", "qcom,smmu-v2"`, same window, same counts |
+| driver, `qcsmmu7280.inf` | instance 0, CB page `0x80` pages = `0x80000` | instance 1, CB page `0x10` pages = `0x10000` |
+
+The payload tree's second compatible is the decisive one — `qcom,adreno-smmu` names the
+GPU outright, from the third source, and the `attach-impl-defs` byte pattern on the vendor
+node ends at offset `0x6b68`, which is the page instance 1 calls implementation defined 1
+at `0x06` pages. Two of the three sources call the block a kgsl or Adreno SMMU; the
+driver calls its instance 1 the one with the GPU client; and `0x3d40000` is the only
+remaining IOMMU on the board.
+
+The corpus agrees about the id and the two `_UID`s and supplies neither: 20 of the 66
+tables carry the pair, every one of them under the single id `QCOM0A09`, every one with
+`_UID Zero` and `_UID One`, and no table in the corpus carries a second id for a second
+SMMU.
+
+### MMU0's window is the board's, so here the corpus is a check and not a source
+
+`0x15000000` is the only SMMU window in the family that does not move with the SoC —
+17 of the 20 tables write `+ 0x100000`, and the three that do not are `0x7FFB8` on
+caymanslm and `0x186000` twice on a52q and miatoll. gauguin's is the common one, the
+payload's kernel tree states it independently, and the driver's instance-0 layout has
+everything it names below `0x81000`, inside the single window. This is the one resource in
+the step where copying the family and deriving from the board give the same answer.
+
+The seven TBU children the vendor node carries — `anoc_1_tbu@15185000`,
+`anoc_2_tbu@15189000`, `mnoc_hf_0_tbu@1518d000`, `mnoc_sf_0_tbu@15191000`,
+`adsp_tbu@15195000`, `compute_dsp_0_tbu@15199000`, `pcie_tbu@1519d000`, each a `0x1000`
+page plus an 8-byte control register in the `0x15182200` page — stay outside the node.
+They are inside the window, no corpus table widens an SMMU window to reach a TBU, no
+driver binds them separately, and the instance-0 layout has nothing to say about them.
+
+### MMU0's 81 interrupts, in five runs
+
+| run | INTIDs | GSIs | count |
+|---|---|---|---|
+| global | 65 | **`0x61`** | 1 |
+| 1 | 95–118 | **`0x7F`–`0x96`** | 24 |
+| 2 | 181–192 | **`0xD5`–`0xE0`** | 12 |
+| 3 | 315–345 | **`0x15B`–`0x179`** | 31 |
+| 4 | 401–413 | **`0x1B1`–`0x1BD`** | 13 |
+
+`#global-interrupts = 1`, so the board's first specifier is the global interrupt and the
+other 80 are one per context bank, in the board's order. All 81 specifiers have first cell
+0 and type cell 4, and `INTID = N + 32` converts them the way Step 4.70 established.
+
+The count is the board's and the ladder's *shape* is the family's, and the two do not
+conflict, because every table counts its own SoC: the runs opening at `0xD5` and `0x15B`
+are in all 20 tables, and lisa's `0xD5`–`0xE0` and `0x15B`–`0x178` sit inside gauguin's to
+the digit while lisa's own count is 65 and this board's is 81. Across the corpus `MMU0`
+declares 43 (caymanslm), 57, 58 (Kailua), 63, 65 (lisa, a52sxq, alioth, lemonade, Cedros,
+Lahaina) or 71 (venus, vili) interrupts. The first run is the closest the two ever come:
+lisa's opens at `0x80` and gauguin's at `0x7F` — one context bank further down the same
+ladder.
+
+### MMU1's base is the board's and its length is not
+
+`arm,smmu-kgsl@3d40000` and `qcom,kgsl-iommu@3d40000` — the kgsl stack's own view of the
+same registers — both carry `reg = <0x3d40000 0x10000>`, and the vendor tree and the
+payload's kernel tree agree on it. That `0x10000` is a register footprint and not the
+block's size, and the driver's own page offsets say so: `attach-impl-defs` on this node
+reaches `0x6b68`, which is the page instance 1 calls implementation defined 1 at `0x06`
+pages, and the instance-1 context-bank page is at `0x10` pages — exactly where a `0x10000`
+window ends. So the node takes the base the board gives and the `0x20000` the family gives
+the same node, which is also the largest power of two that stops short of the GPU's next
+region at `0x3d61000`.
+
+Eight of the 20 corpus `MMU1`s write `0x10000`, ten write `0x20000` and Kailua's two write
+`0x40000`. The ten include gauguin's peers lisa and a52sxq; the eight include families
+whose context ladder gauguin's `MMU0` matches. So the split in the corpus does not decide
+it and the driver's own offsets do — the first time in this file that a *driver's* page
+arithmetic, rather than a sibling table's `_CRS`, has settled a window length.
+
+### MMU1's ten interrupts, and where the group comes from
+
+Two globals at `0x105` and `0x107` (`#global-interrupts = 2`), then eight context banks at
+`0x18C`–`0x193`. The eight are the group three other families write — `QCOM0212`,
+`QCOM0809` and `QCOM1409` all declare `0x18C`–`0x193` for their `MMU1`, and so do a52q,
+miatoll and surya — while gauguin's own family peers lisa and a52sxq put their ten at
+`0x2C6`–`0x2CF` (710–719). The count is the board's and the ladder is neither family's,
+which is what happened at wrapper 1 of the GPI DMA in the step before: the numbering agrees
+between two SoCs where they instantiate the same block and not otherwise. Both numbers here
+are measured. The board's own ladder backs the eight independently: `0x18C`–`0x193` sits in
+the gap between `MMU0`'s third run, which ends at `0x179`, and its fourth, which opens at
+`0x1B1`.
+
+### The one place in this file where the corpus disagrees with the board about a trigger
+
+All 1400 SMMU interrupt descriptors in the corpus — 40 nodes across 20 tables, in every
+family — say `Edge, ActiveHigh, Exclusive`. All 91 of gauguin's specifiers carry type cell
+4, which is level, active high; that is what the kernel programs those GIC lines with, and
+it is what both nodes here write. The corpus is faithful elsewhere: its `UFS0` and its
+`QGP0` are Level, matching the type cells gauguin's device tree carries for the same
+blocks. So the disagreement is specific to this block, and it is **recorded rather than
+resolved** — there is no second measurement here that says which is right, and inventing
+one would be a different kind of claim from omitting it. If the SMMU driver turns out never
+to fire, this cell is the first thing to flip.
+
+### Three things every corpus SMMU carries are deliberately not here
+
+- **`_DEP`, which is `{PEP0}` in all 40 nodes.** `PEP0` is absent from this table, and a
+  one-entry `_DEP` is a shape no table in the family has — the same rule the QUP engines
+  and the QGP nodes already follow. It is also the single thing that changes for all of
+  them on the day `PEP0` lands.
+- **`_STA`, absent from 19 of the 20 `MMU0`s and 9 of the 20 `MMU1`s.** Where it is
+  present it is a board's decision: nine `MMU1`s return `0x0F`, which says what leaving the
+  method out says, and three return `Zero` — alioth's `MMU1`, vili's `MMU0` and `MMU1` —
+  which is a board hiding an SMMU from the OS rather than describing one. The GPU's SMMU is
+  hardware this port means to drive, so both nodes take the shorter form.
+- **`Alias (\_SB.SVMJ, _HRV)`, which every corpus SMMU carries.** `SVMJ` is a single
+  `Name (SVMJ, 0xFFFF)` under `\_SB`, declared once, and `0xFFFF` is what every released
+  DSDT carries there rather than SM7225's silicon revision. This table has no `SVMJ` at
+  all, so adding it is its own measurement and not a side effect of this one.
+
+### What was written
+
+| device | `_HID` | `_UID` | window | interrupts |
+|---|---|---|---|---|
+| `MMU0` | `QCOM0A09` | `Zero` | `0x15000000` + `0x100000` | 81 — `0x61`, `0x7F`–`0x96`, `0xD5`–`0xE0`, `0x15B`–`0x179`, `0x1B1`–`0x1BD` |
+| `MMU1` | `QCOM0A09` | `One` | `0x03D40000` + `0x00020000` | 10 — `0x105`, `0x107`, `0x18C`–`0x193` |
+
+Both take the family's shape: `_HID`, `_SUB` aliased from `^PSUB`, `_UID`, one
+`Memory32Fixed`, and the interrupts; no `_STR`, no `_STA`, no `_DEP`, no `_CCA`. The
+`Name (RBUF, …)` + `Return (RBUF)` form is this file's own and is used deliberately — the
+corpus's `MMU` nodes return an inline `ResourceTemplate ()` and no corpus SMMU names its
+buffer, so the form is house consistency and not a copy.
+
+The table goes from 24 devices to 26, and the engine `_DEP`s that name a GPI DMA and an
+SMMU beside it now have **both halves resolvable** — for the first time since Step 4.71
+identified the dependency. Every family form still needs `PEP0`, which is why none of them
+is written yet.
+
+### Read back from the artifact
+
+| | 4.71 | 4.72 |
+|---|---|---|
+| devices in the DSDT | 24 | **26** |
+| `DSDT.aml` size | 3,027 | **3,997** |
+| `DSDT.aml` sha256 | `fd760ef74f093d5d65d7959702f668af26f2f09daf9cb32af1f92cd6385939f3` | **`47d7dc0acda977e79b48aa9c1d4efc64020704045302a6c048f3ea26bbf1545e`** |
+| DSDT checksum | `0xCC` | **`0xBC`** |
+| AML opcodes / named objects | 196 / 181 | **198 / 193** |
+| `SSDT` `APIC` `FACP` `FACS` `GTDT` | — | byte-identical sha256 for sha256 |
+| `FVMAIN` free | 3,344 | **2,376** |
+| `FVMAIN_COMPACT` used | 1,092,832 | **1,088,935** |
+| declarations in the census | 24 | **26** |
+| distinct ids | 14 | **15** |
+| devices whose id a driver in the set claims | 11 | **13** |
+| id not claimed | `QCOM0A8B`, `QCOM24A5` | the same two |
+
+Disassembling both tables and diffing them gives two changed lines and 400 added ones —
+the two being `Length 0x00000BD3` → `0x00000F9D` and `Checksum 0xCC` → `0xBC` — and the
+400 being MMU0's 341 lines, MMU1's 57 and two blank separators. Nothing else moved, no
+line was removed from any node body, and the device-name set gains exactly `MMU0` and
+`MMU1`. The `+2` opcodes are the two `Device` declarations; the `+12` named objects are
+each node's six — the device name, `_HID`, `_SUB`, `_UID`, `_CRS` and `RBUF`.
+
+Two checks that the comparison is against the artifact and not a memory of it: the DSDT
+extracted from `work/out/p2-4.71/` at the same FVMAIN offset still hashes
+`fd760ef7…f5939f3` with checksum `0xCC`, and the DSDT extracted from this step's payload
+at `0x0054d4c8` hashes the same as the build tree's `DSDT.aml` byte for byte.
+
+Payload artifacts, `work/out/p2-4.72/`:
+
+| image | bytes | sha256 |
+|---|---|---|
+| `Mu-gauguin-silicon-gzip.img` | 1,142,784 | `e4d28b04b95fdef911ca655b43895de09bb0665a5f8761d8fee9625317040f9f` |
+| `Mu-gauguin-stock-gzip.img` | 1,150,976 | `c50bdd8a878e3fc91e4dd20893ff9ee9bf1fd084151f1636e55f5471e539423f` |
+| `Mu-gauguin-stock-none.img` | 3,248,128 | `c34cc6b9fb81d8bd3536d025a6c2a6c31f208143047689b010d777fa640f9ca4` |
+
+All three match GenFv's map at 123 offsets and GUIDs with zero mismatches, and
+`tools/probe-fingerprint.py --expect P2FreeWhy` returns rc=0 with all ten instruments
+present.
+
+### Honest limitations
+
+- **Nothing was fixed on the device, again.** Two nodes were written and no hardware works
+  that did not work before. `p2-variants` is still the payload in `boot`, its panel reading
+  is still owed, and the rule is unchanged: **先读屏，再刷下一次**.
+- **The trigger type is a recorded disagreement, not a settled one.** The board's cells say
+  level and all 1400 corpus descriptors say edge. The node follows the board because the
+  board's cell is what programs the GIC line, and that is the whole of the argument.
+- **`MMU1`'s window length is a derivation from the driver's page offsets.** `0x10000` and
+  `0x20000` both appear in the corpus and both are defensible from the board; what breaks
+  the tie is the instance-1 context-bank page landing exactly at the end of a `0x10000`
+  window. If the driver never touches an offset past `0x10000`, the larger window is
+  harmless; if it does, it needs the larger window and this is why.
+- **`MMU1`'s eight context-bank GSIs come from another family's group.** They are backed by
+  the board's own ladder, lying in the gap between two of `MMU0`'s runs, but they are not
+  gauguin's peers' numbers and nothing here explains the difference.
+- **No `_DEP` on either node, so device start order is unstated.** `qcsmmu7280.inf` is in
+  the driver set, so on a Windows built from it both SMMUs get drivers, and nothing in this
+  table orders them ahead of the engines that sit behind them.
+- **The charger slave is still unidentified.** Unchanged since Step 4.69 and not touched
+  here: the CRD's `IC11` `Scope` addresses I2C `0x76` and nothing on gauguin's `i2c@990000`
+  is at `0x76`.
+- **`SVMJ` is still absent**, and every corpus SMMU references it. Nothing in this table
+  has needed it so far; the corpus's single declaration is `0xFFFF` and not a measured
+  silicon revision, so writing it is a decision rather than a copy.
+
+### What this step was
+
+The step opened on a negative result from the one before — `MMU0` could not be found,
+because the corpus's shape did not match either of the board's two IOMMU blocks — and
+closed with both nodes written, so the finding was that the search had been looking for
+the wrong thing: the corpus stated what the two `_UID`s are, and the board and the driver
+stated which block each `_UID` is. The two `Parameters\N` layouts in a single `.inf` are
+the first resource description in this file that resolved a pair of nodes rather than a
+single one, and one of them also settled a window length that the corpus contradicted
+itself about. The part worth carrying forward is not the nodes: it is that a driver's
+per-instance registry layout is a *source* for ACPI resource derivation, the same way a
+sibling table's `_CRS` is, and in this step it was the only source that could tell two
+otherwise identical instances apart.
