@@ -14065,3 +14065,183 @@ per-board resource that this board does not have.
   both empty — so nothing here is a hardware reading. The payload in `boot` is still
   the **4.74** set and its panel reading is **still owed** under 先读屏，再刷下一次.
   Step 4.77 changes the payload in `work/out/p2-4.77` and not the one on the device.
+
+## Step 4.78 — an id the OS supplies, and the forward reference that made the corpus's order load-bearing
+
+### What this step was
+
+`PRTC` is the Time and Alarm Device, and Step 4.77 named it as the one thing `PMAP`
+unblocked. The dependency was one entry, `\_SB.PMAP`, and `PMAP` landed in 4.77, so the
+package could be written and the node with it. The step turned out to be about three
+things: an id that is not a QCOM id and therefore has no driver to be claimed by; a
+spelling question that the local evidence answers wrongly; and a one-line ACPI rule
+about namespace build order that the corpus's device ordering has been obeying all
+along without this session noticing.
+
+### An id the OS supplies, and a rule that has nothing to say
+
+Every node this file has written since Step 4.63 was decided by the same rule: the id
+belongs to the driver set, so the driver set's claim on it decides. `PRTC` is the first
+node where that rule cannot run. Its `_HID` is `ACPI000E`, which is the standard
+Time and Alarm Device class id — ACPI's own, from the specification, not Qualcomm's —
+and **0 of the 112 `.inf` files mention it.** The census counts it beside the eight
+`ACPI0007` CPUs as "standard id - the OS supplies the driver", which is the honest
+description: nothing in the 7280 driver set will ever bind this node, because Windows
+itself does.
+
+That makes the id unwitnessed by the claim check, and the corpus's evidence is uniform
+rather than decisive: all 20 declarations carry `ACPI000E`, so there is no vote to take.
+The node went in on the shape argument instead — the `_DEP`, the `_GRT`/`_SRT` pair,
+the `Field` on `ABD` — and the id was copied because it is the specification's and
+because copying it is what every table does.
+
+### The spelling, decided by counting 3,058 entries instead of 20
+
+The `_DEP` is one entry naming `\_SB.PMAP`, and the corpus writes it two ways: 19 tables
+as the **string** `"\\_SB.PMAP"`, one — `Waipio` — as the **path** `\_SB.PMAP`. Read
+locally, that is a 19-to-1 vote for the string, and a step that stopped there would have
+written the string.
+
+This step counted the corpus instead. Across the 66 tables there are **1,416 `_DEP`
+packages holding 3,058 entries**. Of those, **3,039 are name references** — 3,038
+absolute plus `alioth`'s relative `I2C9` — and **19 are strings**. Those 19 strings are
+exactly one per table, and every one of them is on `PRTC`. So the string form is not a
+family habit that `PRTC` follows; it is a thing `PRTC` does and nothing else does. The
+19-to-1 majority inside the node is 19 of 3,058 everywhere else, and the path form is
+what is written.
+
+The general lesson is the one 4.75 already learned about `_DEP` and states again here
+from the other side: a statistic taken inside the node you are writing measures the
+node, not the family. The `_DEP` rule was corrected in 4.75 by widening the sample; the
+`_DEP` spelling was corrected in 4.78 by widening it again.
+
+### The write that reads back
+
+`_SRT` does not just write the time. It builds a 50-byte local, clears `ACT1` and
+`ACW1`, sets `TME1` from the argument, and then executes
+
+    BUFF = FLD0 = BUFF
+
+which reads the same buffer back out through the region it just wrote, and returns `One`
+only if the `STAT` byte at offset zero came back nonzero. `_GRT` is the read half: a
+26-byte local with `TME1` at bit `0x10`, and it returns `TME1` rather than the buffer.
+
+Both are copied rather than invented, and both are the reason the node needs a real
+`Field` and a real `OperationRegion` behind it — a stub returning a constant would
+compile and would be wrong. The region is `\_SB.ABD.ROP1`, which is why `ABD` exists at
+all in this table, and it is the same channel `PRTC`'s sibling nodes use.
+
+### `_GCP`'s `0x04`, recorded open
+
+`_GCP` returns `0x04` and that value is copied from all 20 tables. What `0x04` means is
+**not** established here, and the step records that rather than guessing. The reason is
+checkable: the alarm half of the Time and Alarm Device interface is `_GWS`, `_STW` and
+`_STV`, and those three methods appear in **0 of the 66 tables**. So `0x04` cannot be
+advertising an alarm that no table implements, and the decode is left open in the
+comment with the measurement that closed it off written beside it.
+
+### The forward reference that moved a node
+
+The first build of this step failed:
+
+    Error 6142 - Illegal forward reference (\_SB.ABD.ROP1)
+
+`PRTC`'s `Field` names `\_SB.ABD.ROP1`, and `PRTC` was written at the position the
+corpus puts it — right after `PMAP` — while `ABD` sat much further down the file. ACPI
+does not allow a `Field` to reference an `OperationRegion` declared later in the
+namespace, so iasl refused it and emitted no AML at all.
+
+The fix was to move the whole 131-line `ABD` block — comment and node — up to just
+before `Device (PMIC)`. That is also where the corpus puts it, and the measurement is
+independent of the compiler: `ABD` immediately precedes `PMIC` in **21 of 21** tables,
+is immediately preceded by `SDC2` in **18** and by `UFS0` in the other **3**, and so
+sits at ordinal position 2–5 in every table in the corpus. This file has no `SDC1` and
+no `SDC2`, which leaves its slot between `SPMI` and `PMIC` — the same place the
+compiler forced.
+
+The observation worth keeping is that the corpus's device order is **load-bearing**, not
+stylistic. Everything this session has said about placement — `ABD` before `PMIC`,
+`PM01` → `PMAP` → `PRTC` unbroken in 20 of 20 — has been treated as evidence of
+authorial intent. Here it turned out to be a constraint: a table that put these nodes in
+a different order would not compile. What looked like a convention is partly ACPI
+namespace build order.
+
+The move left three stale cross-references behind, all now fixed: the `SCM0` comment
+still called `ABD` "the node above"; the `UCS0` comment called `GIO0` "the PMIC-GPIO
+node above" when `GIO0` is below it; and the `MMU0` comment pointed at "the `ABD` node
+below for the reading" when `ABD` had moved above it.
+
+### The ROP1 inventory, and two errors it corrected
+
+`PRTC` is the second node in this table to sit on `ROP1`, so the channel-and-field
+table in the `ABD` comment was re-measured in full — **all 53 fields** across the
+corpus, extracted with brace matching rather than a regex, because the earlier regex
+pass had produced two wrong answers.
+
+| channel | field descriptor | field | bits | tables |
+|---|---|---|---|---|
+| `0x0001` | `PEP0` `AttribRawBytes (0x15)` | `FLD0` | 168 | 18 |
+| `0x0001` | `PEP0` `AttribRawBytes (0x1A)` | **`FLD1`** | **40** | 2 (`Kailua` ×2) |
+| `0x0002` | `PRTC` `AttribRawBytes (0x18)` | `FLD0` | 192 | 19 |
+| `0x0003` | `PMGK` `AttribRawBytes (0x30)` | **`UCSI`** | 384 | 11 |
+| `0x0004` | `PMGK` `AttribRawBytes (0x40)` | **`GOEM`** | 512 | 3 (`Kailua` ×2, `Waipio`) |
+
+Two corrections came out of it. The `Kailua` pair's odd entry is **`FLD1` at 40 bits**,
+a different field on the same channel, not a mis-sized `FLD0` as the earlier pass had
+it. And `PMGK`'s fields are **named** — `UCSI` and `GOEM` — which the earlier pass had
+recorded as unnamed. The field name is the client's own, so it differs per client and
+carries no information about the protocol; it does mean the `PMGK` channel is not
+described by the same four characters as the others, and a reader comparing the two
+nodes' `Field` blocks should not read that as a discrepancy.
+
+### `caymanslm`, and why the corpus is 19 and not 20
+
+`PRTC` has 20 declarations, but `caymanslm`'s is broken. It declares no `Field` at all
+and reads a bare `FLD0`, which resolves to `\_SB.PEP0.FLD0` — a name that does not exist
+in that table — so iasl emits `External (FLD0, IntObj)` and the table only compiles
+because of it. That is not a variant spelling; it is a declaration that cannot work. The
+count that matters for every body comparison in this step is therefore **19**, and the
+20th is `Waipio`, the only genuine variant: path instead of string, `Name (_GCP, 0x04)`
+instead of a method, and `_STA` returning `0x0F` written out rather than left out.
+
+### What was verified
+
+- The ASL is `63a86962a41c3c6d0ac62bd568f590cf`, 3,308 lines, and the same md5 on all
+  three copies — the source, the git-tracked generated copy under `uefi/`, and the
+  installed one under `work/`.
+- `iasl` compiles it to **5,843 bytes, 260 opcodes, 374 named objects**, checksum byte
+  `0xf2`, length field `0x16d3`, `0 Errors, 24 Warnings, 53 Remarks, 115 Optimizations`.
+  The warnings and remarks are unchanged from 4.77.
+- sha256 `25c09e85445a1e4c013d3514c1974be6de7cdc22a2de64e216ff4b6b63ab1f08`, and the
+  DSDT read back out of the payload at `0x0054d4c8` — **eighth step at the same
+  offset** — is 5,843 bytes and hashes identically.
+- The disassembly diff against 4.77 is **exactly one added `Device (PRTC)`**, 27 → 28
+  device blocks, **0 changed bodies**, 0 removed, `added: {'PRTC'} removed: set()`.
+- `DeviceOp` 30 → 31 and `ThermalZoneOp` 13 in both, giving **43 → 44** on the
+  device-plus-thermal-zone convention this session settled in 4.77.
+- **`SSDT`, `APIC`, `FACP`, `FACS` and `GTDT` content-identical to 4.77's, a tenth
+  consecutive step.** `SSDT` `b388c764d05d5f96` (61), `APIC` `93bafa3b9318910e` (724),
+  `FACP` `f8fa4839f1cbac2a` (276), `FACS` `8a2f3c6d08a63700` (64), `GTDT`
+  `723f7568abd1aa7e` (156).
+- `FVMAIN.Fv` is still `0x704000` (`7,356,416`), sha256
+  `b7ea91b1a3c5690b43af20ef5c5ff84b1cc3338e6675d11489a117ce7d83aa8c`. `FVMAIN_COMPACT`
+  is at 1,093,512 of its `0x300000` cap, 160 bytes more than 4.77's 1,093,352 for 298
+  more bytes of AML. The same caveat 4.76 and 4.77 recorded applies and is repeated
+  rather than re-derived: this is the compressor responding to a changed input
+  everywhere downstream of the edit, not a measurement of the delta.
+- The three payloads are `7c2f7284…` (silicon/gzip), `1ce18003…` (stock/gzip) and
+  `7400b7a6…` (stock/none). All three match GenFv's map at **123 offsets and GUIDs, zero
+  mismatches**, all three carry the full ten-instrument ladder and return rc=0 from
+  `probe-fingerprint.py --expect P2FreeWhy`, and they are archived in
+  `work/out/p2-4.78`.
+- `work/out/p2-variants` **still holds the 4.74 set** — `90b21643…`, `e693e1a0…`,
+  `26919861…`. Fourth step running, and the control now survives four builds.
+- The census: **44 `_HID`/`_CID` declarations and 30 distinct, 28 claimed**. The
+  declarations grew by one and the distinct count by one, because `ACPI000E` is new to
+  the set; the claimed count grew by one for the same reason, since it is counted as a
+  standard id the OS supplies rather than as an unclaimed QCOM one. The same two remain
+  unclaimed as every step since 4.70 — `QCOM0A8B` (`URS0`) and `QCOM24A5` (`UFS0`).
+- The device is absent from this host throughout — `adb devices` and `fastboot devices`
+  both empty — so nothing here is a hardware reading. The payload in `boot` is still the
+  **4.74** set and its panel reading is **still owed** under 先读屏，再刷下一次.
+  Step 4.78 changes the payload in `work/out/p2-4.78` and not the one on the device.

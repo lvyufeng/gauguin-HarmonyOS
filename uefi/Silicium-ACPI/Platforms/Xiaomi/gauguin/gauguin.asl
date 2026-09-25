@@ -241,7 +241,7 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
          * and five accessors.
          *
          * `_HID` is "QCOM0AA4" and the family byte is what settles it, the
-         * same way it settled the PMIC-GPIO node above. The suffix is not
+         * same way it settled GIO0's, the PMIC-GPIO node below. The suffix is not
          * fixed across blocks and generations - it is 17 for the PEP, 0C for
          * the TLMM, 8B for the URS controller and A4 for this one, and A4 is
          * not even constant for this block: the Atoll and SM7325 tables spell
@@ -939,6 +939,168 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
             }
         }
 
+        // ABD - the ACPI Bridge Device: the second of the two nodes PEP0's own
+        // text names. PEP0's _DEP names IPCC and its single Field names this
+        // device's region, so the two are read together and are placed
+        // together; after this step neither reference is missing from this
+        // table.
+        //
+        // What it is comes from the driver's own description rather than from
+        // the three letters: qcabd.inf calls itself the INF file for "the
+        // Driver Frameworks ABD Driver" and gives ABD.DeviceDesc as
+        // "Qualcomm(R) ACPI Bridge Device". It installs qcabd.sys as a KMDF
+        // 1.33 kernel service, SERVICE_DEMAND_START, class System, and claims
+        // exactly one hardware id - ACPI\QCOM0427, the only claim of any ABD id
+        // among the 112 .inf files in this set.
+        //
+        // The id's family byte is authored and not silicon, and this is the
+        // second time a whole block has turned out that way. The same node is
+        // QCOM0427 in ten tables (lisa and a52sxq among them), QCOM0527 in
+        // eight, QCOM1427 in surya and QCOM0242 in caymanslm, where even the
+        // index moves; and the corpus splits inside one SoC, because venus and
+        // vili are SM8350 and write 0527 while Lahaina is SM8350 and writes
+        // 0427. Step 4.73 met the same thing from the other end, when a52q -
+        // Bitra like gauguin - wrote family 08 for its thermal zones and no
+        // driver in this set claimed any of those ids. So gauguin takes
+        // QCOM0427 because a shipped driver claims it and for no other reason,
+        // and the byte differing from the one PEP0 will carry (0A, as lisa's
+        // does) is not a problem to be resolved: lisa's table holds QCOM0A17
+        // and QCOM0427 at once, so the mixed pair is attested in the closest
+        // sibling rather than invented here.
+        //
+        // The shape is the corpus's and it is 19 nodes of 21 identical:
+        // Name (_UID, Zero), Alias (\_SB.PSUB, _SUB), an
+        // OperationRegion (ROP1, GenericSerialBus, Zero, 0x0100) whose line is
+        // byte-for-byte the same in all 21 tables, Name (AVBL, Zero), and a
+        // _REG that sets AVBL when Arg0 is 0x09 - the GenericSerialBus address
+        // space id, so the method is this device recording whether the OS has
+        // opened its region. Two tables differ: vili adds Method (_STA)
+        // returning 0x0F, and Waipio replaces the Alias with a _SUB method
+        // returning \_SB.PSUB, drops the _DEP, and adds the same _STA.
+        //
+        // The _DEP is withheld, on the rule that has governed since the SMMUs:
+        // PEP0 is not in this table, and a _DEP entry is a namespace path the
+        // OS resolves when it loads the device - an entry that does not
+        // resolve is not a hint, it is a failure. 19 of the 21 tables write
+        // exactly Name (_DEP, Package (One) { \_SB.PEP0 }), and the exception
+        // is the one that matters: Waipio is the only table in the corpus with
+        // no PEP0 anywhere in it, and its ABD carries no _DEP either. That is
+        // this table's situation, so what is written here is the form a
+        // shipped table writes when the dependency is absent.
+        //
+        //   A correction, because the comment above the SMMUs gives that rule
+        //   a justification that is not true. It says "a one-entry _DEP is a
+        //   shape no table has". ABD's is one entry in 19 tables, and PRTC's is
+        //   one entry naming \_SB.PMAP. The shape is common; what makes an
+        //   entry un-writable is that it names a node this table has not got.
+        //   The rule lands in the same place either way and the reason does
+        //   not, and a reason that is wrong is worse than a short one.
+        //
+        // _STA is written, returning 0x0F, because the two corpus tables that
+        // carry one both return 0x0F while the nineteen that omit it are
+        // present by ACPI's default - so the two forms describe the same
+        // device, and this file's convention on the devices it defines is to
+        // say it outright.
+        //
+        // ROP1 is not private to PEP0, which is the part worth knowing before
+        // the clients arrive. The address in each client's Connection is a
+        // channel, and the corpus is consistent about which device owns which.
+        // All 53 fields in the corpus, measured by channel:
+        //
+        //   0x0001  PEP0   AttribRawBytes (0x15)  FLD0, 168 bits  (18 tables)
+        //   0x0001  PEP0   AttribRawBytes (0x1A)  FLD1,  40 bits  (both Kailua)
+        //   0x0002  PRTC   AttribRawBytes (0x18)  FLD0, 192 bits  (19 tables)
+        //   0x0003  PMGK   AttribRawBytes (0x30)  UCSI, 384 bits  (11 tables)
+        //   0x0004  PMGK   AttribRawBytes (0x40)  GOEM, 512 bits  (Kailua x2, Waipio)
+        //
+        // Two things in that table are corrections to what this comment said
+        // before Step 4.78 measured all 53 fields instead of the sixteen it had
+        // read. The field name is the client's own and is not always FLD0: PMGK
+        // names its two channels UCSI and GOEM, and UCSI is a name that means
+        // something - the USB Type-C Connector System Software Interface - so
+        // the name is data and not a formality. And Kailua's odd entry is odder
+        // than it looked: it is not 0x15 spelled as 0x1A on the same field, it
+        // is a different field - FLD1 at 40 bits where the other 18 tables
+        // declare FLD0 at 168 - so Kailua's PEP0 reads a fifth of the payload
+        // from the same channel, and asks the bus for 26 bytes to get it. Both
+        // halves are recorded rather than resolved: PEP0 is not written yet, and
+        // when it is, 0x15 with FLD0 at 168 bits is this board's declaration, on
+        // the rule that the field's length is the one number of the two with a
+        // reason behind it.
+        //
+        // PRTC is the one that matters most, and it is a device Windows already
+        // has a driver for: its _HID is ACPI000E, the standard Time and Alarm
+        // Device, and its _GRT and _SRT read and write the real time over
+        // channel 0x0002. All 20 corpus PRTCs carry that _HID, and every one of
+        // them carries a one-entry _DEP naming \_SB.PMAP - 19 as the string
+        // "\\_SB.PMAP" and one, Waipio, as the path - so PMAP was PRTC's only
+        // dependency. Step 4.77 wrote PMAP, which made that entry writable, and
+        // Step 4.78 wrote PRTC on it. The spelling was settled by counting every
+        // _DEP entry in the corpus rather than the twenty here, and the count
+        // inverts the vote: 1,416 packages hold 3,058 entries, 3,039 of them are
+        // name references and 19 are strings, and the 19 strings are these. So
+        // the form 19 tables prefer is a form no other device in the corpus uses,
+        // and Waipio's is the form the other 65 tables use. See the PRTC node.
+        // Of the other two clients, PMGK is QCOM0A8E and no .inf in this set
+        // claims it, and PEP0 is the remaining large node.
+        //
+        // Position, which in this file is now a derivation rather than a copy.
+        // ABD stood near the end until Step 4.78 and that was wrong in a way the
+        // compiler caught: PRTC's Field names \_SB.ABD.ROP1, a Field cannot
+        // reference an OperationRegion that has not been declared yet, and iasl
+        // rejected it as Error 6142, illegal forward reference. The rule is
+        // ACPI's and not the compiler's - the namespace is built in declaration
+        // order, so the region has to exist before the field is created - and it
+        // is why the corpus's own order is load-bearing rather than stylistic:
+        // ABD precedes PRTC in all 20 tables that carry both, as it precedes
+        // PMAP, and its position is measured too. It is immediately followed by
+        // PMIC in all 21 tables, and immediately preceded by SDC2 in 18 of them
+        // and UFS0 in the other 3, which puts it third, fourth or fifth in every
+        // table. THIS file has no SDC1 or SDC2 node, so its slot is between SPMI
+        // and PMIC, and the whole node was moved there. The run continues in the
+        // corpus's own order behind it: PMIC, then PM01 - with PML0 between them
+        // in the 11 tables that have one - then PMAP, then PRTC, and PM01 ->
+        // PMAP -> PRTC is unbroken in 20 of 20.
+        //
+        // AVBL is read by nothing in this table, and could not be: in the
+        // corpus its readers are the cameras (CAMS, CAMF, CAMI, CAMT, CAMU),
+        // TSC1, NFCD and - in venus alone - PCI0 and PCI1, each as
+        // If (\_SB.ABD.AVBL) inside a block keyed on PGID. Step 4.70 recorded
+        // that the cameras are one of the two things this port cannot drive.
+        // The name and the method are written anyway, because all 21 tables
+        // carry them and because _REG is the OS's own handshake: leaving it out
+        // would be this table deciding it knows better than the driver about
+        // how its region gets opened.
+        //
+        // No _CRS, which is the corpus's answer and not an omission - none of
+        // the 21 ABD nodes has one. The numbers 0x0001, 0x0002 and 0x0003 in
+        // the clients' Connections are channels, and the resource source in
+        // each is "\\_SB.ABD" itself: this device is the bus and not a device
+        // on one, which is why the table has no window to give it and why the
+        // driver that binds it is one whose entire description is "ACPI Bridge
+        // Device".
+        Device (ABD)
+        {
+            Method (_STA, 0, NotSerialized)  // _STA: Status
+            {
+                Return (0x0F)
+            }
+
+            Name (_HID, "QCOM0427")  // _HID: Hardware ID
+            Alias (^PSUB, _SUB)  // _SUB: Subsystem ID
+            Name (_UID, Zero)  // _UID: Unique ID
+
+            OperationRegion (ROP1, GenericSerialBus, Zero, 0x0100)
+            Name (AVBL, Zero)
+            Method (_REG, 2, NotSerialized)  // _REG: Region Availability
+            {
+                If ((Arg0 == 0x09))
+                {
+                    AVBL = Arg1
+                }
+            }
+        }
+
         Device (PMIC)
         {
             Method (_STA, 0, NotSerialized)  // _STA: Status
@@ -1256,6 +1418,168 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
                      0x79, 0x00                                       // y.
                 })
                 Return (RBUF) /* \_SB_.PMAP._CRS.RBUF */
+            }
+        }
+
+        // The Time and Alarm Device - the first node in this table whose _HID is
+        // not a QCOM id. ACPI000E is the standard id for a real-time clock, and
+        // Windows supplies its driver rather than a vendor: none of the 112 .inf
+        // files extracted from this board's driver package mentions ACPI000E,
+        // which is what an OS-supplied id looks like from inside a vendor set.
+        //
+        // It is written now because PMAP landed in Step 4.77 and PMAP is the
+        // only thing PRTC depends on: all 20 corpus PRTCs carry a one-entry
+        // _DEP, with no exception, and every one of them names \_SB.PMAP.
+        //
+        // The _DEP is written as a namespace path rather than as a string, and
+        // that is a measurement rather than a preference. 19 of the 20 tables
+        // spell the entry as the string "\\_SB.PMAP" and Waipio spells it
+        // \_SB.PMAP, so counting votes inside this one device gives 19 to 1 for
+        // the string. Counting every _DEP entry in the whole corpus inverts it:
+        // 1,416 _DEP packages across the 66 tables hold 3,058 entries, of which
+        // 3,039 are name references - 3,038 absolute plus alioth's relative I2C9
+        // - and 19 are strings. Those 19 strings are exactly these, one per
+        // table, on this one device; no other device in any table spells a _DEP
+        // entry as a string. So the form that wins a vote within PRTC is the
+        // only form of its kind in the corpus, and the form Waipio uses alone is
+        // the form everything else in the corpus uses. ACPI reads a _DEP entry
+        // as a device object reference, which is what the 3,039 are, and the
+        // string is a vendor habit this one node inherited. Waipio is the odd
+        // table everywhere else in this family - it is the only table in the
+        // corpus with no PEP0, it writes _SUB as a method, it spells _GCP as a
+        // Name - and here it is the one table that writes the entry the way the
+        // other 65 tables write theirs.
+        //
+        // The position is measured the same way PMAP's was: PMAP is followed
+        // immediately by PRTC in all 20 tables that carry both, and PRTC is
+        // immediately preceded by PMAP in all 20, so PM01 -> PMAP -> PRTC is a
+        // three-node run and this node goes directly after PMAP. What follows
+        // PRTC is not fixed - PMBM in 10 tables, PEXT in 6, BAT1 in 2, PMBT and
+        // PMGK in 1 each - so the run has an end and the corpus says where it is.
+        //
+        // The Field is the device's only resource and it is declared on
+        // \_SB.ABD.ROP1, which is why ABD is written: PRTC has no _CRS in any of
+        // the 20 tables and no MMIO window, and reads its clock by opening a
+        // field on ABD's GenericSerialBus operation region. The channel is
+        // 0x0002, which is the same triple the ABD comment above records from
+        // the producer's side - AttribRawBytes (0x18), FLD0 at 192 bits - and
+        // the number in I2cSerialBusV2 is that same channel byte, so the channel
+        // index is the slave address on the bus ABD presents. The resource
+        // source is "\\_SB.ABD" itself, as in every client's Connection: this is
+        // the family's one device that is a bus, which is what its driver's
+        // description - "ACPI Bridge Device" - says it is.
+        //
+        // 19 of the 20 tables declare that field and the twentieth is the
+        // exception that is not a variant. caymanslm's PRTC has no Field at all:
+        // it reads and writes FLD0 as a bare name, which ACPI resolves outward
+        // through \_SB.PRTC, then \_SB, then \ - and the only FLD0 in that table
+        // is \_SB.PEP0.FLD0, declared on PEP0's channel. A field unit is not
+        // reachable sideways, so that reference does not resolve, and the
+        // disassembler says so: iasl emits External (FLD0, IntObj) at the top of
+        // that table. A PRTC whose clock reads PEP0's channel data, and whose
+        // _SRT stores a 50-byte buffer into a 168-bit field, is a broken
+        // declaration and not a second shape. The effective corpus for this node
+        // is therefore 19 tables, and all 19 are byte-identical inside the
+        // device.
+        //
+        // _GRT and _SRT are the ACPI-defined read and write of the real time and
+        // the arithmetic in them is the part worth reading before the sizes are
+        // copied. _GRT builds a 26-byte local, lays a 16-byte TME1 at bit 0x10 -
+        // byte 2 - and returns TME1, so bytes 2..17 of the buffer are the time
+        // structure ACPI defines for _GRT and the first two bytes are the
+        // channel's own status. The field is 24 bytes, so the local is two bytes
+        // longer than the region it is filled from: BUFF = FLD0 stores 24 bytes
+        // and leaves bytes 24 and 25 at zero, which is past the end of TME1 and
+        // harmless. _SRT is 50 bytes for the same reason and one more: it stores
+        // BUFF into FLD0 and then stores the result back into BUFF, chained as
+        // BUFF = FLD0 = BUFF, and what the second store is for is the status the
+        // bus writes into byte 0 on completion - the method then tests it and
+        // returns One if it is non-zero. So the region is a write-then-readback
+        // whose first byte is a reply code, which also explains why the 50-byte
+        // local is allowed to be truncated to 24 on the way out: everything past
+        // byte 23 is ACT1 and ACW1 tail, and both are set to zero immediately
+        // before the store, so the truncation drops nothing that was not zero.
+        //
+        // _GCP returns 0x04, in all 20 tables, 19 as a method and Waipio as
+        // Name (_GCP, 0x04). What bit 2 of that capability mask means is not
+        // established here: ACPI000E's driver is the OS's own, nothing in the
+        // 112 .inf files or the five driver trees mentions the method, and no
+        // table comments it. One constraint does come out of the corpus and it
+        // rules out the obvious reading - _GWS, _STW and _STV appear in none of
+        // the 66 tables, so the alarm half of the device is implemented nowhere
+        // and 0x04 cannot be advertising it. The value is copied and the decode
+        // is recorded as open rather than guessed at.
+        //
+        // _STA returning 0x0F is this file's convention, and the corpus's answer
+        // here is the same shape as PMAP's: 16 of the 20 leave the method out,
+        // Waipio writes 0x0F, and the three that write 0x0B - present, enabled
+        // and working, but not shown in Device Manager - are a52q, miatoll and
+        // surya. Those are the same three tables that write 0x0B on PMAP, which
+        // makes 0x0B a habit of those boards and not a statement about either
+        // device: families 08, 08 and 14, the pre-0A families, and the same
+        // table named as the counterexample in Steps 4.73, 4.76 and 4.77 among
+        // them. gauguin's family is 0A and the method says 0x0F.
+        //
+        // No _UID and no _CRS, both because all 20 tables omit them. The device
+        // has no resources of its own to describe - the Connection inside the
+        // Field is the whole of its allocation - and nothing in the family needs
+        // a second instance.
+        Device (PRTC)
+        {
+            Name (_HID, "ACPI000E")  // _HID: Hardware ID
+            Name (_DEP, Package (0x01)  // _DEP: Dependencies
+            {
+                \_SB.PMAP
+            })
+            Method (_STA, 0, NotSerialized)  // _STA: Status
+            {
+                Return (0x0F)
+            }
+
+            Method (_GCP, 0, NotSerialized)  // _GCP: Get Capabilities
+            {
+                Return (0x04)
+            }
+
+            Field (\_SB.ABD.ROP1, BufferAcc, NoLock, Preserve)
+            {
+                Connection (
+                    I2cSerialBusV2 (0x0002, ControllerInitiated, 0x00000000,
+                        AddressingMode7Bit, "\\_SB.ABD",
+                        0x00, ResourceConsumer, , Exclusive,
+                        )
+                ),
+                AccessAs (BufferAcc, AttribRawBytes (0x18)),
+                FLD0,   192
+            }
+
+            Method (_GRT, 0, NotSerialized)  // _GRT: Get Real Time
+            {
+                Name (BUFF, Buffer (0x1A){})
+                CreateField (BUFF, 0x10, 0x80, TME1)
+                CreateField (BUFF, 0x90, 0x20, ACT1)
+                CreateField (BUFF, 0xB0, 0x20, ACW1)
+                BUFF = FLD0 /* \_SB_.PRTC.FLD0 */
+                Return (TME1) /* \_SB_.PRTC._GRT.TME1 */
+            }
+
+            Method (_SRT, 1, NotSerialized)  // _SRT: Set Real Time
+            {
+                Name (BUFF, Buffer (0x32){})
+                CreateByteField (BUFF, Zero, STAT)
+                CreateField (BUFF, 0x10, 0x80, TME1)
+                CreateField (BUFF, 0x90, 0x20, ACT1)
+                CreateField (BUFF, 0xB0, 0x20, ACW1)
+                ACT1 = Zero
+                TME1 = Arg0
+                ACW1 = Zero
+                BUFF = FLD0 = BUFF /* \_SB_.PRTC._SRT.BUFF */
+                If ((STAT != Zero))
+                {
+                    Return (One)
+                }
+
+                Return (Zero)
             }
         }
 
@@ -2079,7 +2403,7 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
         // _DEP at one entry in 19 of 21 tables and PRTC's at one entry naming
         // \_SB.PMAP as a string. The conclusion is unchanged and the reason was
         // wrong - size is not what makes an entry un-writable, the missing
-        // referent is. See the ABD node below for the reading.) _STA is absent from 19 of the 20 MMU0s and
+        // referent is. See the ABD node above for the reading.) _STA is absent from 19 of the 20 MMU0s and
         // from 9 of the 20 MMU1s; where it is present it is a board's decision -
         // nine MMU1s return 0x0F, which says what leaving the method out says,
         // and three nodes return Zero, alioth's MMU1 and vili's MMU0 and MMU1,
@@ -2495,146 +2819,20 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
             }
         }
 
-        // ABD - the ACPI Bridge Device: the second of the two nodes PEP0's own
-        // text names. PEP0's _DEP names IPCC and its single Field names this
-        // device's region, so the two are read together and are placed
-        // together; after this step neither reference is missing from this
-        // table.
-        //
-        // What it is comes from the driver's own description rather than from
-        // the three letters: qcabd.inf calls itself the INF file for "the
-        // Driver Frameworks ABD Driver" and gives ABD.DeviceDesc as
-        // "Qualcomm(R) ACPI Bridge Device". It installs qcabd.sys as a KMDF
-        // 1.33 kernel service, SERVICE_DEMAND_START, class System, and claims
-        // exactly one hardware id - ACPI\QCOM0427, the only claim of any ABD id
-        // among the 112 .inf files in this set.
-        //
-        // The id's family byte is authored and not silicon, and this is the
-        // second time a whole block has turned out that way. The same node is
-        // QCOM0427 in ten tables (lisa and a52sxq among them), QCOM0527 in
-        // eight, QCOM1427 in surya and QCOM0242 in caymanslm, where even the
-        // index moves; and the corpus splits inside one SoC, because venus and
-        // vili are SM8350 and write 0527 while Lahaina is SM8350 and writes
-        // 0427. Step 4.73 met the same thing from the other end, when a52q -
-        // Bitra like gauguin - wrote family 08 for its thermal zones and no
-        // driver in this set claimed any of those ids. So gauguin takes
-        // QCOM0427 because a shipped driver claims it and for no other reason,
-        // and the byte differing from the one PEP0 will carry (0A, as lisa's
-        // does) is not a problem to be resolved: lisa's table holds QCOM0A17
-        // and QCOM0427 at once, so the mixed pair is attested in the closest
-        // sibling rather than invented here.
-        //
-        // The shape is the corpus's and it is 19 nodes of 21 identical:
-        // Name (_UID, Zero), Alias (\_SB.PSUB, _SUB), an
-        // OperationRegion (ROP1, GenericSerialBus, Zero, 0x0100) whose line is
-        // byte-for-byte the same in all 21 tables, Name (AVBL, Zero), and a
-        // _REG that sets AVBL when Arg0 is 0x09 - the GenericSerialBus address
-        // space id, so the method is this device recording whether the OS has
-        // opened its region. Two tables differ: vili adds Method (_STA)
-        // returning 0x0F, and Waipio replaces the Alias with a _SUB method
-        // returning \_SB.PSUB, drops the _DEP, and adds the same _STA.
-        //
-        // The _DEP is withheld, on the rule that has governed since the SMMUs:
-        // PEP0 is not in this table, and a _DEP entry is a namespace path the
-        // OS resolves when it loads the device - an entry that does not
-        // resolve is not a hint, it is a failure. 19 of the 21 tables write
-        // exactly Name (_DEP, Package (One) { \_SB.PEP0 }), and the exception
-        // is the one that matters: Waipio is the only table in the corpus with
-        // no PEP0 anywhere in it, and its ABD carries no _DEP either. That is
-        // this table's situation, so what is written here is the form a
-        // shipped table writes when the dependency is absent.
-        //
-        //   A correction, because the comment above the SMMUs gives that rule
-        //   a justification that is not true. It says "a one-entry _DEP is a
-        //   shape no table has". ABD's is one entry in 19 tables, and PRTC's is
-        //   one entry naming \_SB.PMAP. The shape is common; what makes an
-        //   entry un-writable is that it names a node this table has not got.
-        //   The rule lands in the same place either way and the reason does
-        //   not, and a reason that is wrong is worse than a short one.
-        //
-        // _STA is written, returning 0x0F, because the two corpus tables that
-        // carry one both return 0x0F while the nineteen that omit it are
-        // present by ACPI's default - so the two forms describe the same
-        // device, and this file's convention on the devices it defines is to
-        // say it outright.
-        //
-        // ROP1 is not private to PEP0, which is the part worth knowing before
-        // the clients arrive. The address in each client's Connection is a
-        // channel, and the corpus is consistent about which device owns which:
-        //
-        //   0x0001  PEP0   AttribRawBytes (0x15)  FLD0, 168 bits
-        //   0x0002  PRTC   AttribRawBytes (0x18)  FLD0, 192 bits
-        //   0x0003  PMGK   AttribRawBytes (0x30)
-        //   0x0004  PMGK   AttribRawBytes (0x40)  (Kailua and Waipio only)
-        //
-        // PRTC is the one that matters most, and it is a device Windows already
-        // has a driver for: its _HID is ACPI000E, the standard Time and Alarm
-        // Device, and its _GRT and _SRT read and write the real time over
-        // channel 0x0002. All 20 corpus PRTCs carry that _HID, and every one of
-        // them carries a one-entry _DEP naming \_SB.PMAP - 19 as the string
-        // "\\_SB.PMAP" and one as the path - so PMAP was PRTC's only
-        // dependency. Step 4.77 wrote PMAP, which makes PRTC's _DEP writable
-        // now, and PRTC the next node of this family rather than a blocked one.
-        // Of the other two clients, PMGK is QCOM0A8E and no .inf in this set
-        // claims it, and PEP0 is the remaining large node - so what this step
-        // unblocked was the reference, and the client is one step nearer.
-        //
-        // The one table that differs on PEP0's channel is Kailua, which writes
-        // AttribRawBytes (0x1A) - 26 bytes - against the same 168-bit field the
-        // other 20 write as 0x15, 21 bytes. 0x15 is the count that matches the
-        // field exactly and Kailua's field is 168 bits too, so its 26 is a
-        // fetch that reads past what the field exposes. Recorded rather than
-        // resolved, because PEP0 is not written yet; when it is, 0x15 is this
-        // board's count, on the rule that the field's length is the only number
-        // of the two with a reason behind it.
-        //
-        // AVBL is read by nothing in this table, and could not be: in the
-        // corpus its readers are the cameras (CAMS, CAMF, CAMI, CAMT, CAMU),
-        // TSC1, NFCD and - in venus alone - PCI0 and PCI1, each as
-        // If (\_SB.ABD.AVBL) inside a block keyed on PGID. Step 4.70 recorded
-        // that the cameras are one of the two things this port cannot drive.
-        // The name and the method are written anyway, because all 21 tables
-        // carry them and because _REG is the OS's own handshake: leaving it out
-        // would be this table deciding it knows better than the driver about
-        // how its region gets opened.
-        //
-        // No _CRS, which is the corpus's answer and not an omission - none of
-        // the 21 ABD nodes has one. The numbers 0x0001, 0x0002 and 0x0003 in
-        // the clients' Connections are channels, and the resource source in
-        // each is "\\_SB.ABD" itself: this device is the bus and not a device
-        // on one, which is why the table has no window to give it and why the
-        // driver that binds it is one whose entire description is "ACPI Bridge
-        // Device".
-        Device (ABD)
-        {
-            Method (_STA, 0, NotSerialized)  // _STA: Status
-            {
-                Return (0x0F)
-            }
-
-            Name (_HID, "QCOM0427")  // _HID: Hardware ID
-            Alias (^PSUB, _SUB)  // _SUB: Subsystem ID
-            Name (_UID, Zero)  // _UID: Unique ID
-
-            OperationRegion (ROP1, GenericSerialBus, Zero, 0x0100)
-            Name (AVBL, Zero)
-            Method (_REG, 2, NotSerialized)  // _REG: Region Availability
-            {
-                If ((Arg0 == 0x09))
-                {
-                    AVBL = Arg1
-                }
-            }
-        }
-
         // SCM0 - the Secure Channel Manager, the firmware-call interface that
         // sits on no bus and has no window, and the node PMAP's _DEP names
         // beside PMIC and ABD. It was written here, and a step before PMAP,
         // because it is the third of PMAP's three dependencies and the last one
-        // this table was missing: PMIC is Step 4.63's, ABD is the node above,
-        // and until this one landed a _DEP for PMAP had an entry it could not
+        // this table was missing: PMIC is Step 4.63's, ABD is Step 4.75's, and
+        // until this one landed a _DEP for PMAP had an entry it could not
         // write. PMAP followed in Step 4.77 and sits where the corpus puts it,
         // immediately after PM01, so the two are not adjacent in this file.
+        // ABD is not adjacent either, and no longer: it was written directly
+        // above this node and Step 4.78 moved it up to its corpus slot before
+        // PMIC, because PRTC's Field on \_SB.ABD.ROP1 cannot be declared after
+        // the region it names. Nothing about SCM0 changed; the reference is
+        // kept here so the sentence above does not read as a claim about
+        // position.
         // It is also wider than PMAP: across the corpus \_SB.SCM0 is named by
         // PMAP in 20 tables, MON0 in 19 and ARPC in 19, plus NSPM twice and
         // VFE0 twice, so this is a hub and not a leaf, and the reason to write
