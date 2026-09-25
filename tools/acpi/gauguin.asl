@@ -16,6 +16,10 @@
  *   USB core irq     165 (0xA5)             dts usb@a600000  SPI 133, INTID = 32 + 133
  *   USB pwr_event    162 (0xA2)             dts interrupts-extended  SPI 130
  *   USB hs_phy_irq   163 (0xA3)             dts interrupts-extended  SPI 131
+ *   QGP0 window      0x00804000 + 0x50000   dts gpi-dma@800000 0x800000 + 0x60000, "gpi-top"
+ *   QGP0 interrupt   276 (0x114)            dts interrupts <0x00 0xF4 0x04>, INTID = 32 + 244
+ *   QGP1 window      0x00904000 + 0x50000   dts gpi-dma@900000 0x900000 + 0x60000, "gpi-top"
+ *   QGP1 interrupt   677 (0x2A5)            dts interrupts <0x00 0x285 0x04>, INTID = 32 + 645
  *
  * One id was inherited rather than checked, and Step 4.65 corrected it. URS0's
  * _HID read "QCOM0497" for several steps - bitra's, and bitra is family 04,
@@ -1595,6 +1599,179 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
                     }
                 })
                 Return (RBUF) /* \_SB_.IC13._CRS.RBUF */
+            }
+        }
+
+        // QGP0 and QGP1 are the two GPI DMA controllers, and they are here
+        // because the QUP engines above are not self-driving. Two independent
+        // sources say so. The corpus: lisa's SP14 and a52sxq's IC14 each carry
+        // a three-entry _DEP of \_SB.PEP0, \_SB.QGP1 and \_SB.MMU0 - engine,
+        // its own wrapper's GPI DMA controller, and the SMMU in front of it.
+        // The board: every live engine in gauguin's tree names one in its dmas
+        //
+        //   spi@880000   dmas <0x186 0 0 1 0x40 0>, <0x186 1 0 1 0x40 0>
+        //   i2c@984000   dmas <0x190 0 1 3 0x40 0>, <0x190 1 1 3 0x40 0>
+        //   i2c@988000   dmas <0x190 0 2 3 0x40 0>, <0x190 1 2 3 0x40 0>
+        //   spi@98c000   dmas <0x190 0 3 1 0x40 0>, <0x190 1 3 1 0x40 0>
+        //   i2c@990000   dmas <0x190 0 4 3 0x40 0>, <0x190 1 4 3 0x40 0>
+        //
+        // - and the phandle is the wrapper's, not the engine's: 0x186 is
+        // qcom,gpi-dma@800000 and every wrapper-1 engine names 0x190,
+        // qcom,gpi-dma@900000. Each engine's two specifiers are tx and rx in
+        // the order its dma-names gives, and they differ in exactly one cell,
+        // the first, 0 then 1 - so the cells after the phandle read <tx/rx, SE
+        // index, code, 0x40, 0> and the list above quotes the tx one. The
+        // second cell is the engine's SE index in all five - 0, 1, 2, 3, 4 for
+        // wrapper 0's SPI0 and the four wrapper-1 buses - another measurement
+        // of the numbering the IC nodes above were built on, from a property
+        // that had no part in deriving it. The third cell is constant per
+        // protocol - 1 on the two SPI engines and 3 on the three I2C engines -
+        // which is one more statement of which protocol sits at each slot, and
+        // it is read here and not decoded. The fourth and fifth are 0x40 and 0
+        // in all ten specifiers. The UART has no dmas property at all; it is
+        // the console and runs in FIFO mode.
+        //
+        // Those two _DEPs are also the corpus's cleanest statement of the rule
+        // this table has been built on, and it is worth the four lines. lisa's
+        // SP14 and a52sxq's IC14 are the same engine: 0x00A94000 + 0x4000,
+        // _UID 0x0E, _STR "QUP_1_SE_5", INTID 0x186, the same _DEP - and the
+        // two tables differ in exactly two lines, the _HID and the name. lisa
+        // calls it QCOM0A0E, an SPI engine, and names it SP14; a52sxq calls the
+        // same slot QCOM0A10, an I2C engine, and names it IC14. So the slot
+        // identifies the engine and the protocol is the board's, which is
+        // exactly what Step 4.70 found on gauguin when the board's tree and the
+        // payload's disagreed about two addresses - except that here two
+        // shipping boards disagree about one, and the family has been doing
+        // this all along. It is also why the letter in an engine's name is the
+        // protocol and not the slot: gauguin's two live SPI engines are slots 1
+        // and 12 and would be SP1 and SP12, and lisa's SP14 is a52sxq's IC14.
+        //
+        // The id is QCOM0A88, and the family evidence is broad rather than a
+        // pair for once: 20 of the 66 tables declare a QGP device, under nine
+        // distinct ids, and the same block is indexed 88 in five families (09,
+        // 0A, 0C, 1A, 25), 93 in three (05, 08, 14) and F4 in one (02) - so
+        // the index is a property of the family generation and not a constant,
+        // and 0A sits in the 88 group. It is claimed outright:
+        //
+        //   qcgpi7280.inf -> %QCGPI.DeviceDesc%=QCGPI_Device, ACPI\QCOM0A88
+        //
+        // The resources are the derivation and not a copy, which is why the
+        // family's exact numbers are correct here. The board gives each
+        // controller a 0x60000 region named "gpi-top" - reg = <0x800000
+        // 0x60000> and <0x900000 0x60000> - and the corpus's _CRS is that
+        // region less its first 0x4000: 0x50000 long from base + 0x4000, on
+        // lisa and on a52sxq alike. Both of gauguin's regions are 0x60000, so
+        // the same subtraction gives the same window, and the GPI TOP block
+        // the family steps over is the first 0x4000 of a region whose name
+        // says it is there.
+        //
+        // The interrupts do not transfer, and this is the one place in the
+        // block where the corpus's values would have been wrong. Each board
+        // declares the controller ten interrupt lines - qcom,max-num-gpii = 10
+        // on both - and gauguin's are 0x114 through 0x11D on wrapper 0 and
+        // 0x2A5 through 0x2AE on wrapper 1. The family declares two of them on
+        // both its controllers, and at wrapper 0 those two are gauguin's first
+        // two to the digit, 0x114 and 0x115, which is why the family's count is
+        // kept and only its numbers are replaced. At wrapper 1 lisa's two are
+        // its own lines, 0x137 and 0x138, and gauguin's are 0x2A5 and 0x2A6:
+        // the numbering agrees between the two SoCs for the whole wrapper-0
+        // ladder and disagrees completely at wrapper 1, and nothing here
+        // explains the split, so both numbers are measured rather than argued.
+        // qcom,gpii-mask says how many of the ten are instantiated on this
+        // board - 0x1F, five, on wrapper 0 and 0x3F, six, on wrapper 1 - and
+        // the two the family declares are inside both masks.
+        //
+        // Neither node carries _DEP: the family's QGP nodes have none, and the
+        // dependency runs the other way, from a QUP engine to its GPI DMA. The
+        // family's record of that direction is real but not uniform. Three
+        // engines per table carry it, and the controller each names is its own
+        // wrapper's - the same pairing gauguin's dmas show:
+        //
+        //   lisa    I2C2 (slot 2)  _DEP {PEP0, QGP0, MMU0}
+        //           I2C5 (slot 5)  _DEP {PEP0, QGP0}
+        //           SP14 (slot 14) _DEP {PEP0, QGP1, MMU0}
+        //
+        //   a52sxq  I2C2 (slot 2)  _DEP {PEP0, QGP0, MMU0}
+        //           I2C4 (slot 4)  _DEP {PEP0, QGP0}
+        //           IC14 (slot 14) _DEP {PEP0, QGP1, MMU0}
+        //
+        // - and the third entry, MMU0, is on two of the three and not on the
+        // third in both tables, so the family's _DEP is not a uniform statement
+        // about this hardware and is not a complete one either: gauguin's dmas
+        // put all five live engines on a controller where the family records
+        // three. The family attaches a third kind of entry to the UART - both
+        // tables' UARD carries {PEP0, GIO0}, the GPIO controller the console's
+        // two pins live on - so an engine's _DEP in this family can name three
+        // different things for three different reasons. This table therefore
+        // writes no engine _DEP at all, for the same reason the IC nodes above
+        // do not: every family shape here needs PEP0, which is absent, and
+        // GIO0, the one reference this table could resolve, is not written
+        // alone because a one-entry _DEP is a shape no table in the family has.
+        // The consequence is worth stating rather than hiding - qci2c7280.inf
+        // and qcgpi7280.inf are both in the Windows driver set, so once those
+        // two bind, nothing in this table orders the GPI DMA ahead of the
+        // engines that DMA for it. Engine _DEPs wait on PEP0, and when it lands
+        // all four shapes can be written in the family's own form at once.
+        // Neither QGP node carries _STA either; both nodes in the board's tree
+        // are ok and a52sxq's QGP0 and QGP1 are literally byte-identical in the
+        // two tables of that family, so there is nothing about this block for a
+        // _STA to disagree with. What is deliberately not here is the SMMU:
+        // gauguin's controllers sit behind it (iommus = <&apps_smmu 0x56 0> and
+        // <&apps_smmu 0x4D6 0>, and phandle 0x17 is apps-smmu@15000000) and
+        // every family _DEP that names the GPI DMA names MMU0 beside it, but
+        // the family's QGP nodes do not describe it and the node that would is
+        // MMU0, which this table does not have yet.
+        Device (QGP0)
+        {
+            Name (_HID, "QCOM0A88")  // _HID: Hardware ID
+            Alias (^PSUB, _SUB)
+            Name (_UID, Zero)  // _UID: Unique ID
+            Name (_CCA, Zero)  // _CCA: Cache Coherency Attribute
+            Method (_CRS, 0, NotSerialized)  // _CRS: Current Resource Settings
+            {
+                Name (RBUF, ResourceTemplate ()
+                {
+                    Memory32Fixed (ReadWrite,
+                        0x00804000,         // Address Base
+                        0x00050000,         // Address Length
+                        )
+                    Interrupt (ResourceConsumer, Level, ActiveHigh, Exclusive, ,, )
+                    {
+                        0x00000114,
+                    }
+                    Interrupt (ResourceConsumer, Level, ActiveHigh, Exclusive, ,, )
+                    {
+                        0x00000115,
+                    }
+                })
+                Return (RBUF) /* \_SB_.QGP0._CRS.RBUF */
+            }
+        }
+
+        Device (QGP1)
+        {
+            Name (_HID, "QCOM0A88")  // _HID: Hardware ID
+            Alias (^PSUB, _SUB)
+            Name (_UID, One)  // _UID: Unique ID
+            Name (_CCA, Zero)  // _CCA: Cache Coherency Attribute
+            Method (_CRS, 0, NotSerialized)  // _CRS: Current Resource Settings
+            {
+                Name (RBUF, ResourceTemplate ()
+                {
+                    Memory32Fixed (ReadWrite,
+                        0x00904000,         // Address Base
+                        0x00050000,         // Address Length
+                        )
+                    Interrupt (ResourceConsumer, Level, ActiveHigh, Exclusive, ,, )
+                    {
+                        0x000002A5,
+                    }
+                    Interrupt (ResourceConsumer, Level, ActiveHigh, Exclusive, ,, )
+                    {
+                        0x000002A6,
+                    }
+                })
+                Return (RBUF) /* \_SB_.QGP1._CRS.RBUF */
             }
         }
 

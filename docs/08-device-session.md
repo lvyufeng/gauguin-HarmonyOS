@@ -12458,3 +12458,317 @@ nodes: it is that the board's own tree answers the questions this repo had been 
 from the corpus — the GSI ladder, the engine index, the protocol of each engine, and which
 of two trees to believe — and that the only question left on this path, the charger
 slave's identity, is one the board's tree is not going to answer either.
+
+---
+
+## Step 4.71 — the two controllers every live engine is wired to, and the corpus's proof that a slot is not a protocol
+
+Step 4.70 wrote three engines and recorded that the touch, the NFC controller, the audio
+amplifiers and the charger cluster all still want drivers. What it did not write is the
+thing those engines are wired to: gauguin's five live QUP engines do not DMA for
+themselves, they hand their transfers to one of two GPI DMA controllers, and neither
+controller was in the table. This step adds both, and on the way it found the corpus's
+cleanest statement of the rule the last four steps have been built on.
+
+### Two independent sources say the engines need these, and they agree on the pairing
+
+The corpus states the dependency in `_DEP`, and the board states it in `dmas`. They are
+different properties computed by different people, and they name the same pairing.
+
+The board's, read out of `~/backup/gauguin/dt/soc/` — each engine's `dmas` is a list of
+`<phandle, c0..c4>` specifiers, because `#dma-cells = 5`:
+
+| engine | wrapper | SE | `dmas` tx specifier | SE cell | code cell |
+|---|---|---|---|---|---|
+| `spi@880000` | 0 | 0 | `0x186 0 0 1 0x40 0` | 0 | 1 |
+| `qcom,qup_uart@884000` | 0 | 1 | *(no `dmas` at all)* | — | — |
+| `i2c@984000` | 1 | 1 | `0x190 0 1 3 0x40 0` | 1 | 3 |
+| `i2c@988000` | 1 | 2 | `0x190 0 2 3 0x40 0` | 2 | 3 |
+| `spi@98c000` | 1 | 3 | `0x190 0 3 1 0x40 0` | 3 | 1 |
+| `i2c@990000` | 1 | 4 | `0x190 0 4 3 0x40 0` | 4 | 3 |
+
+`0x186` is `qcom,gpi-dma@800000` and `0x190` is `qcom,gpi-dma@900000`, from their own
+`linux,phandle` properties. So **the controller an engine names is its own wrapper's**, and
+none of them crosses over.
+
+Each engine has two of these specifiers, `tx` then `rx` in the order its `dma-names` gives,
+and the two differ in exactly one cell — the first, 0 for `tx` and 1 for `rx`. So the five
+cells after the phandle read `<tx/rx, SE index, code, 0x40, 0>`, and the table above quotes
+the `tx` one. The second cell is the engine's SE index in all five — another independent
+measurement of the numbering the I2C nodes were built on, taken from a property that played
+no part in deriving it. The third is constant per protocol: 1 on the two SPI engines and 3
+on the three I2C engines — one more statement of which protocol sits at each slot, from yet
+another property, recorded as a measurement rather than decoded, because the encoding is not
+something this table claims to know. The fourth and fifth cells are `0x40` and `0` in all
+ten specifiers across the five engines — constants carried along and noted, not interpreted.
+And the UART has no `dmas` property at all: it is the console and runs in FIFO mode, which
+is why it is the one engine in the list with nothing to DMA through.
+
+The corpus's, which is the same pairing asserted the other way round — see the `_DEP`
+table below. And the two sources agree the controllers are live: `qcom,gpi-dma@800000` and
+`qcom,gpi-dma@900000` are each `status = "ok"` in the board's tree.
+
+### The corpus's own proof that the slot identifies the engine and the board identifies the protocol
+
+lisa's `SP14` and a52sxq's `IC14` are the same engine. Diffing the two devices gives
+exactly two changed lines out of twenty-seven:
+
+| field | lisa `SP14` | a52sxq `IC14` |
+|---|---|---|
+| `_HID` | `QCOM0A0E` | **`QCOM0A10`** |
+| device name | `SP14` | **`IC14`** |
+| `_UID` | `0x0E` | `0x0E` |
+| `_STR` | `"QUP_1_SE_5"` | `"QUP_1_SE_5"` |
+| `_CRS` memory | `0x00A94000` + `0x4000` | `0x00A94000` + `0x4000` |
+| `_CRS` interrupt | `0x186` | `0x186` |
+| `_DEP` | `PEP0`, `QGP1`, `MMU0` | `PEP0`, `QGP1`, `MMU0` |
+| `Return` comment | `\_SB_.SP14._CRS.RBUF` | `\_SB_.IC14._CRS.RBUF` |
+
+The only two lines that differ are the ones that say what the engine *is*. Same address,
+same slot, same description string, same interrupt, same dependencies — and one board
+declares it an SPI engine with id `QCOM0A0E` and names it `SP14`, while the other declares
+it an I2C engine with id `QCOM0A10` and names it `IC14`.
+
+That is the principle this table has been applying since Step 4.65, stated by the corpus
+about itself: **the slot identifies the engine; the protocol — and with it the `_HID`
+block index and the letter in the device name — is a property of the board's wiring.**
+Step 4.70 found gauguin's board tree and the payload's tree disagreeing about exactly this
+at two addresses and resolved it in the board's favour after the fact. Here two shipping
+boards disagree about one address, in the firmware the family ships, and neither is wrong:
+they are wired differently. It also explains why Step 4.70's corpus name census turned up
+both `IC14` and `SP14` and did not treat that as a contradiction, and it is the reason the
+two live SPI engines on gauguin would be `SP1` and `SP12` — the letter follows the
+protocol the board gives the slot, not the slot.
+
+### The id, and what 20 tables say about the block index
+
+`QGP` is the family's device name for the GPI DMA, and it is declared by 20 of the 66
+tables, under nine distinct ids:
+
+| id | family | block index | tables |
+|---|---|---|---|
+| `QCOM02F4` | 02 | `F4` | caymanslm |
+| `QCOM0593` | 05 | `93` | cepheus, mh2, nabu, pipa, vayu |
+| `QCOM0893` | 08 | `93` | a52q, miatoll |
+| `QCOM0988` | 09 | `88` | renoir, Cedros IDP |
+| **`QCOM0A88`** | **0A** | **`88`** | **a52sxq, lisa** |
+| `QCOM0C88` | 0C | `88` | Waipio MTP and QRD |
+| `QCOM1493` | 14 | `93` | surya |
+| `QCOM1A88` | 1A | `88` | lemonade, venus MTP |
+| `QCOM2588` | 25 | `88` | alioth |
+
+So the block index is not a constant across the corpus — it is `88` in five families, `93`
+in three and `F4` in one, which makes it a property of the family generation exactly as
+the thermal zones' `04` family byte turned out to be in Step 4.66. `0A` is in the `88`
+group, and the driver set agrees: `qcgpi7280.inf` carries the line
+
+```
+%QCGPI.DeviceDesc%=QCGPI_Device, ACPI\QCOM0A88
+```
+
+and nothing else. This is also the broadest family corroboration any id in this table has
+had — the block that Step 4.70 could only find in lisa and a52sxq is named by four other
+families and three other SoC lines.
+
+### The window is the region minus the GPI TOP block, so the family's numbers are a derivation
+
+gauguin's controllers each own a `0x60000` region, both named `gpi-top`:
+
+```
+qcom,gpi-dma@800000  reg = <0x00800000 0x60000>  reg-names = "gpi-top"
+qcom,gpi-dma@900000  reg = <0x00900000 0x60000>  reg-names = "gpi-top"
+```
+
+and the corpus's `_CRS` for both `QGP0` and `QGP1` is `base + 0x4000`, `0x50000` long. That
+is the region less its first `0x4000` — the GPI TOP block the region's own name says is
+there — and since gauguin's regions are also `0x60000`, the same subtraction gives the same
+window here. This is the half of the block where copying the family's numbers and deriving
+them from the board give the same answer, which is worth saying explicitly because the
+other half is the opposite case.
+
+Two properties corroborate the region's shape without being used in the node:
+`reg-names` is singular, so the whole `0x60000` is one named block and not a list;
+`qcom,max-num-gpii` is `10` on both controllers.
+
+### The interrupts are the one thing the corpus would have got wrong
+
+Each board declares **ten** interrupt lines, one per GPII — `qcom,max-num-gpii = 10` — and
+gauguin's are contiguous:
+
+| controller | device tree `interrupts` | INTIDs | ACPI GSIs |
+|---|---|---|---|
+| `qcom,gpi-dma@800000` | `<0 0xF4 4>` … `<0 0xFD 4>` | 244…253 | **`0x114` … `0x11D`** |
+| `qcom,gpi-dma@900000` | `<0 0x285 4>` … `<0 0x28E 4>` | 645…654 | **`0x2A5` … `0x2AE`** |
+
+`INTID = N + 32`, the same conversion Step 4.70 established for the engines. The family
+declares **two** of the ten on both of its controllers, and the two halves of that number
+behave completely differently:
+
+- **At wrapper 0 the family's two are gauguin's two, to the digit.** lisa's `QGP0` and
+  a52sxq's `QGP0` both declare `0x114` and `0x115`, which are the first two of gauguin's
+  ten. The count is the family's and the values are the board's and they agree.
+- **At wrapper 1 they do not.** lisa's `QGP1` declares `0x137` and `0x138`; gauguin's first
+  two are `0x2A5` and `0x2A6`. Same IP block, same relative position in the block, a
+  number 374 apart.
+
+Nothing here explains the split, and it is recorded as a measurement rather than a theory.
+What it decides is which number goes in the node: the family's count, because the same
+`.inf` binds both and `qcgpi7280.inf` is written against a device that has two interrupts,
+and gauguin's values, because the whole wrapper-0 ladder agreeing and wrapper 1 not is not
+something to paper over.
+
+`qcom,gpii-mask` says how many of the ten are instantiated on this board — `0x1F`, five, on
+wrapper 0 and `0x3F`, six, on wrapper 1 — and the two the family declares are inside both
+masks. The two declared GSIs are therefore a subset of a subset, which is the honest
+description: the node describes two lines of the ten the IP has and the five or six the
+board wires, and says so here rather than in the node.
+
+### The family's `_DEP` on these engines has three shapes, and none of them can be written yet
+
+The GPI DMA nodes themselves carry no `_DEP` in any family table — the dependency runs the
+other way, from an engine to its controller — and the family's record of it is neither
+uniform nor complete:
+
+| table | engine | its wrapper | `_DEP` |
+|---|---|---|---|
+| lisa | `I2C2` (slot 2) | 0 | `PEP0`, **`QGP0`**, `MMU0` |
+| lisa | `I2C5` (slot 5) | 0 | `PEP0`, **`QGP0`** |
+| lisa | `SP14` (slot 14) | 1 | `PEP0`, **`QGP1`**, `MMU0` |
+| a52sxq | `I2C2` (slot 2) | 0 | `PEP0`, **`QGP0`**, `MMU0` |
+| a52sxq | `I2C4` (slot 4) | 0 | `PEP0`, **`QGP0`** |
+| a52sxq | `IC14` (slot 14) | 1 | `PEP0`, **`QGP1`**, `MMU0` |
+| both | `UARD` (slot 6) | 0 | `PEP0`, **`GIO0`** |
+
+Three readings come out of it, and all three are load-bearing for what is *not* written:
+
+1. **The controller named is the engine's own wrapper's**, in all six engine rows — the
+   same pairing the board's `dmas` show. So the corpus and the board agree twice over.
+2. **`MMU0` is on two of the three and not on the third, in both tables**, so the family's
+   `_DEP` is not a uniform statement about the hardware — and it is not a complete one
+   either, since gauguin's `dmas` put five live engines on a controller where the family
+   records three.
+3. **The UART's `_DEP` names `GIO0`, not a GPI DMA** — the GPIO controller the console's two
+   pins live on. So an engine's `_DEP` in this family can name three different things for
+   three different reasons.
+
+This table writes no engine `_DEP` at all, and the reason is a shape argument rather than a
+preference: every family form above contains `PEP0`, which this table does not have, so the
+family's package cannot be written as it stands. `GIO0` is the one reference that *would*
+resolve today — `UARD`'s family dependency is `{PEP0, GIO0}` and `GIO0` is in the table —
+and it is still not written, because a one-entry `_DEP` is a shape no table in the family
+has and inventing one is a different kind of claim from omitting an unresolvable name.
+What that costs is worth stating plainly: `qci2c7280.inf` and `qcgpi7280.inf` are both in
+the driver set, so on a Windows built from it both the I2C engines and the GPI DMA get
+drivers, and **nothing in this table orders the controller ahead of the engines that DMA
+through it.** When `PEP0` lands, all four shapes can be written at once in the family's own
+form.
+
+### What was written
+
+| device | `_HID` | `_UID` | window | interrupts |
+|---|---|---|---|---|
+| `QGP0` | `QCOM0A88` | `Zero` | `0x00804000` + `0x50000` | `0x114`, `0x115` |
+| `QGP1` | `QCOM0A88` | `One` | `0x00904000` + `0x50000` | `0x2A5`, `0x2A6` |
+
+Both take the family's shape: `_HID`, `_SUB` aliased from `^PSUB`, `_UID`, `_CCA = Zero`, a
+single `Memory32Fixed`, two `Interrupt` resources, no `_STR`, no `_STA`, no `_DEP`. The
+table goes from 22 devices to 24 and every one of gauguin's six live engines now has the
+controller it transfers through in the table beside it.
+
+Deliberately still absent, and each for a stated reason: **`MMU0`**, the SMMU the
+controllers sit behind — `iommus = <&apps_smmu 0x56 0>` and `<&apps_smmu 0x4D6 0>`, and
+phandle `0x17` in the board's tree is `apps-smmu@15000000` — which every family `_DEP` that
+names a `QGP` names beside it, and which is the last node those `_DEP`s are waiting on.
+**`SP1` and `SP12`**, unchanged from Step 4.70: `QCOM0A0E` is claimed by no `.inf` in any of
+the five driver trees on this host. What this step adds to that decision is that the id is
+no longer merely unclaimed — lisa ships it, so the block is one driver away and the
+withholding is a trade rather than a gap. The trade is explicit: this table already carries
+two nodes whose id the set does not claim (`UFS0`, `URS0`), and those were written because
+UFS and USB are required; what the two SPI engines carry on gauguin is an IR blaster and a
+`touch_spi@0` with no interrupt, no reset and no supply, neither of which the P3 gate or the
+measured touch path needs.
+
+### Read back from the artifact
+
+| | 4.70 | 4.71 |
+|---|---|---|
+| devices in the DSDT | 22 | **24** |
+| `DSDT.aml` size | 2,833 | **3,027** |
+| `DSDT.aml` sha256 | `a98c1a98…f5af5b` | **`fd760ef74f093d5d65d7959702f668af26f2f09daf9cb32af1f92cd6385939f3`** |
+| DSDT checksum | `0x3C` | **`0xCC`** |
+| AML opcodes / named objects | 194 / 167 | **196 / 181** |
+| `SSDT` `APIC` `FACP` `FACS` `GTDT` | — | byte-identical sha256 for sha256 |
+| `FVMAIN` free | 3,536 | **3,344** |
+| `FVMAIN_COMPACT` used | 1,092,864 | 1,092,832 |
+| declarations in the census | 22 | **24** |
+| distinct ids | 13 | **14** |
+| devices whose id a driver in the set claims | 9 | **11** |
+| id not claimed | `QCOM0A8B`, `QCOM24A5` | the same two |
+
+Disassembling both tables and diffing them gives three changed lines and 57 added ones —
+the three being the disassembly header's filename, `Length 0x00000B11` → `0x00000BD3` and
+`Checksum 0x3C` → `0xCC`, and the 57 being the two node bodies. Nothing else moved. The
+device-name set gains exactly `QGP0` and `QGP1`. Each node's seven named objects —
+`DEV0`-style device, `_HID`, `_SUB`, `_UID`, `_CCA`, `_CRS`, `RBUF` — account for the 14
+named objects the two tables differ by.
+
+Two checks that the arithmetic is the same one Step 4.70 recorded: recompiling the
+committed Step 4.70 ASL gives `2,833` bytes and `a98c1a98…f5af5b` byte-for-byte, so the
+comparison is against the artifact and not against a memory of it; and the comment block
+above the node went through two rewrites during this step, each of which was followed by
+regenerating, syncing and rehashing `DSDT.aml` — which stayed at `fd760ef7…` both times.
+Comments cannot change AML, and the check is what makes that a fact rather than a belief.
+
+Payload artifacts, `work/out/p2-4.71/`:
+
+| image | bytes | sha256 |
+|---|---|---|
+| `Mu-gauguin-silicon-gzip.img` | 1,142,784 | `025c0e349f6ea2706d21df1a07d3205221b2c94a25301edd725d00ed05ec1fc2` |
+| `Mu-gauguin-stock-gzip.img` | 1,150,976 | `da0ff32a2c6596babfe2ef0711c9d06c2e8f259fc40f8a3701b68f35b3a17e04` |
+| `Mu-gauguin-stock-none.img` | 3,248,128 | `e7c2d7eb25d8583ef67f8e8eefe391b90c19eafa972cbcebfcb93afc5019f7ed` |
+
+All three match GenFv's map at 123 offsets and GUIDs with zero mismatches, and
+`tools/probe-fingerprint.py --expect P2FreeWhy` returns rc=0 with all ten instruments
+present.
+
+### Honest limitations
+
+- **Nothing was fixed on the device, again.** Two nodes were written and no hardware works
+  that did not work before. `p2-variants` is still the payload in `boot`, its panel reading
+  is still owed, and the rule is unchanged: **先读屏，再刷下一次**.
+- **No SPI engine has a driver, so the IR blaster cannot work yet.** The two live SPI
+  engines are measured, their ids are attested by the family, and the block is one `.inf`
+  away. On a Windows built from this set the IR blaster and the touch SPI stub are absent
+  from Device Manager.
+- **The GPI DMA's two interrupts are a documented subset.** Ten lines exist, five or six are
+  wired per the board's mask, two are declared. If the Windows driver turns out to need
+  more than two, the extra GSIs are already measured above and the change is additive.
+- **The wrapper-1 GSI disagreement is unexplained.** Wrapper 0's GPI DMA lines agree with
+  lisa's exactly and wrapper 1's do not, and this step records that rather than guessing at
+  a reason. It is the kind of thing that would be settled by one more SM7325 table.
+- **No engine `_DEP`, so device start order is unstated.** The risk is written into the
+  comment block rather than left implicit: two drivers in the set bind devices whose order
+  nothing in the table constrains.
+- **`MMU0` is still absent, and it is now the node with the most dependants.** Every family
+  engine `_DEP` that names a `QGP` names `MMU0` too, and both family `GPI DMA`s sit behind
+  `apps-smmu@15000000` on the board.
+- **The charger slave is still unidentified.** Unchanged since Step 4.69 and not touched
+  here: the CRD's `IC11` `Scope` addresses I2C `0x76` and nothing on gauguin's `i2c@990000`
+  is at `0x76`.
+- **The two-tree disagreement is still recorded rather than repaired.** `work/out/gauguin.dts`
+  says `i2c@880000` and `serial@98c000` where the board says `spi@880000` and `spi@98c000`,
+  and nothing in this repo owns that file.
+
+### What this step was
+
+The engines were in the table and the thing they transfer through was not, so the block
+that finishes the QUP path is the one that carries no data of its own. Two of the three
+family conventions transferred intact and one did not: the window is a derivation that
+happens to reproduce the family's numbers exactly because both SoCs give the region the
+same size, the id is the family's and the family is six tables wide, and the interrupts are
+the board's alone — half matching a sibling to the digit and half not matching at all. The
+part worth carrying forward is neither node: it is that the corpus contradicts itself about
+what one engine is, in the two tables this table has been reading since Step 4.65, and is
+right both times. `IC14` and `SP14` are the same slot with two protocols, which is the
+whole reason a device tree and a device tree disagreeing is a question about the board and
+not a fault in either the tree or the table.
