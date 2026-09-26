@@ -22334,3 +22334,242 @@ is the three files' 172,478 B less 446 B of section padding, and the old candida
   the gate passable, and the eight absent architectural protocols and the two unschedulable
   USB drivers are what stand between the two.
 
+## Step 4.113 — the six files the record promotes before it can read a disk, and the one protocol its volume carries no producer for
+
+### What this step is
+
+The P3 gate has two clauses — *a Windows 11 ARM64 installer boots off a USB stick* and *it
+sees the internal UFS* — and every step since 4.103 has been about the first. This step
+reads the second clause off the same payloads, in the same currency the census uses: the
+a-priori index of a file, whether it carries a `DXE_DEPEX` section at all, and whether a
+protocol's sixteen bytes are present anywhere in the volume.
+
+It is host-only and **read-only**. No payload was built this step; `tools/depex-census.py`,
+`tools/apriori-order.py` and `tools/fv-inventory.py` were used as they stand, and the byte
+searches below run on the decompressed inner firmware volume rather than on the FFS bytes.
+Nothing was flashed; `userdata`, the partition table and the firmware LUN were not touched.
+
+The answer comes apart into two halves that fail in different places, which is the finding.
+One of them has no obstacle of its own at all.
+
+All a-priori positions below are **1-based**, which is the convention the census's
+`producer_index` uses and the one the panel's `P2 SEQ` positions are counted in. It is not
+the convention `tools/apriori-order.py` prints: its listing is 0-based, with `DxeCore` at
+`0`, so the same file reads `DiskIoDxe` `24` there and `25` here. Both numbers are in this
+document, and the difference is the off-by-one that a reader comparing them will otherwise
+have to find for themselves.
+
+### The disk half is a contiguous a-priori run, and that is the only reason it is schedulable
+
+Six files read out of `work/out/p2-4.94/Mu-gauguin-silicon-gzip.img`, in the order the
+a-priori file puts them in:
+
+| a-priori | file | PE32 size | `DXE_DEPEX` in the FFS | `[Depex]` in the file that produced it |
+|---|---|---|---|---|
+| 25 | `DiskIoDxe` | 30,260 B | none | none |
+| 26 | `PartitionDxe` | 37,946 B | none | none |
+| 27 | `EnglishDxe` | 20,534 B | none | none |
+| 28 | `SdccDxe` | 106,544 B | none | none |
+| 29 | `UFSDxe` | 114,734 B | none | none |
+| 30 | `Fat` | 55,336 B | none | none |
+
+`Fat` is `FatPkg/EnhancedFatDxe/Fat.inf`, FILE_GUID `961578FE-B6B7-44C3-AF35-6BC705CD2B1F`,
+and `EnglishDxe` is the Unicode collation driver, `CD3BAFB6-50FB-4FE8-8E4E-AB74D2C1A600`.
+The whole chain the gate's second clause needs — `UFSDxe` → `DiskIoDxe` → `PartitionDxe` →
+`Fat` — is inside a **six-entry contiguous run at 25–30** of the 70-entry array, and not one
+of the six carries a depex section in the volume or a `[Depex]` line in its own INF.
+`UFSDxe.inf`, `SdccDxe.inf` and `EnglishDxe.inf` are binary-only stubs that declare a
+`PE32` binary and nothing else; `DiskIoDxe.inf`, `PartitionDxe.inf` and `Fat.inf` are
+source INFs with no `[Depex]` section at all. Six for six, and verified on both sides of
+the build rather than on one.
+
+That matters because a missing depex is not the absence of a constraint — it is the
+strongest one. `Dispatcher.c:893-895` sets `Depex = NULL; Dependent = TRUE`, and
+`CoreIsSchedulable` answers a NULL depex through `CoreAllEfiServicesAvailable ()`
+(`Dependency.c:225`), which requires **all thirteen** architectural protocols. This image
+has five drivers in exactly that position *without* an a-priori entry —
+`BootGraphicsResourceTableDxe`, `FeatureEnablerDxe`, `MacDxe`, `PwrUtilsDxe`, `VcsDxe` —
+and with eight of the thirteen missing on this platform, none of them can run. The six disk
+files are the same kind of file.
+
+The only thing separating them from those five is their position in `APRIORI.inc`. **That
+run is load-bearing and not a convenience**: strike `UFSDxe`, `DiskIoDxe`, `PartitionDxe`
+and `Fat` from that file and the internal UFS becomes as invisible as the USB host
+controller is now, by the same mechanism and for the same reason. There is no depex in the
+chain for a later step to satisfy and no absent producer for a later step to add; the disk
+stack is already complete and already promoted, and what the gate waits on is elsewhere.
+
+The order is also coherent by construction rather than by luck: `DiskIoDxe` (25) before
+`PartitionDxe` (26), both before the two block providers `SdccDxe` (28) and `UFSDxe` (29),
+and `Fat` (30) last — the filesystem driver promoted after the volumes it binds to. Because
+the dispatcher drains the promoted queue first-in-first-out, the array is the order their
+entry points run in, so this is an ordering claim and not a listing.
+
+### The other half: the record contains a USB host controller's consumer and no producer
+
+Same volume, same method, on `EFI_USB2_HC_PROTOCOL`:
+
+| payload | files in the volume carrying `3E745226-9818-45B6-A2AC-D7CD0E8BA2BC` |
+|---|---|
+| record `p2-4.94` | `UsbBusDxe` |
+| candidate `usb-host` | `UsbBusDxe`, `XhciDxe` |
+| old candidate `usb-host-0925` | `UsbBusDxe`, `XhciDxe` |
+
+Which of the two is which is not an inference from bytes — the next section is about why it
+cannot be — but it is written in the INFs. `Mu_Basecore/MdeModulePkg/Bus/Usb/UsbBusDxe/UsbBusDxe.inf:54`
+marks `gEfiUsb2HcProtocolGuid ## TO_START`, and
+`Mu_Basecore/MdeModulePkg/Bus/Pci/XhciDxe/XhciDxe.inf:57` marks the same GUID `## BY_START`.
+`TO_START` is the consumer's annotation and `BY_START` the producer's, in EDK2's own
+notation. So the record's single carrier is the consumer of a protocol that nothing in the
+record installs.
+
+The USB upper stack is a contiguous a-priori run as well — `UsbfnDwc3Dxe` 52, `UsbBusDxe`
+53, `UsbKbDxe` 54, `UsbMassStorageDxe` 55, `UsbMsdDxe` 56, `UsbDeviceDxe` 57, `UsbConfigDxe`
+58 — and every one of the six consumers is depex-less and promoted unconditionally. That is
+the same fact as the disk run, with the same consequence: **the mass-storage class driver is
+already scheduled in the record and has nothing to bind to.** The gate's first clause,
+stated as a measurement, is that the record boots the consumer of a USB host controller and
+does not contain one. The candidate's contribution is the producer, `XhciDxe`, which arrives
+with no depex and no a-priori entry and is therefore unschedulable for the reason Step 4.108
+gave.
+
+### A control that failed first, and why the empty list was not evidence
+
+The first run of that measurement reported the record's carrier set as **empty**, and the
+empty set was wrong. The needle had been assembled from memory as `…D7CD0E8B0ABC`;
+`Mu_Basecore/MdePkg/Include/Protocol/Usb2HostController.h:19` says
+`{0xa2, 0xac, 0xd7, 0xcd, 0xe, 0x8b, 0xa2, 0xbc}` — the fifteenth byte is `0xa2`, not
+`0x0a`. One byte.
+
+What caught it was a positive control run before the result was believed:
+`Binaries/*/QcomPkg/Drivers/XhciDxe/XhciDxe.efi` carries the corrected GUID in **39 of
+39** copies and `UsbBusDxe.efi` in **38 of 38**. A byte search whose positive control has
+not been run does not report the absence of a thing; it reports the absence of a *string*,
+and the two are indistinguishable in a table cell that reads "none". This is the offline
+form of 对照的那张必须在覆盖之前读: the control is not there to confirm what you expect to
+find, it is there so that what you fail to find means something. The wrong result and its
+correction are recorded together, because a step that only printed the second run would
+have made the first one invisible while leaving its cause in the method.
+
+There is a live instance of the same trap in this very step, which is why the a-priori
+convention is stated above: `DiskIoDxe` is `24` in `tools/apriori-order.py`'s own output and
+`25` in the census, and neither tool is wrong.
+
+### `E722B03F` is a file in the tree, which is why no header defines it
+
+Step 4.95 closed with `UsbInitDxe` in a bucket of its own — *the depex names a protocol no
+header defines (1)* — and left the reason as Step 4.50's "Qualcomm's own GUID, carried by
+nine blobs in the tree". The reason is better than that, and it is a file:
+
+`Binaries/*/QcomPkg/Drivers/UsbInitDxe/UsbInitDxe.depex` exists in 42 platform directories,
+and all 42 copies hash to **one** sha256, `ac68645cdf6f47e6…`, 18 bytes:
+`02 3fb022e750b2ce428ebd5bd51812d037 08`, that is `PUSH E722B03F-B250-42CE-8EBD-5BD51812D037`
+`END`. The `DXE_DEPEX` section inside the candidate's `UsbInitDxe` FFS file is **those same
+18 bytes**, sha256 `ac68645cdf6f47e6…`. The depex was not built from a header because there
+is no header: it is a shipped binary file copied into a section, which is also why the
+census could find no header to name it against. The same shape holds for the other new
+blob — `XhciPciEmulationDxe.depex`, 39 copies, one digest `6e3f02198c4fa8c8…`, equal to the
+234-byte section in the candidate.
+
+That also settles what the shipped `UsbInitDxe.inf` means, and it is the pattern Step 4.50
+already recorded for `XhciPciEmulationDxe.inf`: the INF's `[Depex]` section says `TRUE`,
+the `[Binaries.AARCH64]` block names `DXE_DEPEX|UsbInitDxe.depex|*`, and the named file is
+what ships — the `[Depex]` section describes a build from source, which is not what this
+module is. Two instances of the same pattern, and now measurable at byte level rather than
+noticed in prose: one digest, 42 copies, equal to the section.
+
+### What the file settles about the publisher, and what stays open
+
+`UsbInitDxe.depex` proves `UsbInitDxe` is a **consumer** — a driver that published the
+protocol it also waits on would never run — so the question is who publishes it. The
+record's two carriers are `UsbfnDwc3Dxe` (a-priori 52) and `UsbConfigDxe` (58); both are
+depex-less and promoted in the first round, so if either installs `E722B03F` it installs it
+during that round. `UsbInitDxe` is not a-priori and does carry a depex, so it is judged in
+the second round. The ordering therefore closes in the affirmative — not *the publisher runs
+too late to satisfy the wait*, but *if the wait is satisfied at all it is satisfied in time*.
+What remains open is the one thing the image cannot answer: whether either candidate
+installs it.
+
+Byte containment cannot separate a publisher from a consumer, and the tree is its own proof
+of that: `UsbInitDxe.efi` carries the sixteen bytes and is provably a consumer. So Step
+4.50's "a publisher may well exist" stands as written, narrowed from an unstated set to two
+named files that are already in the record and already promoted.
+
+### Step 4.50's nine, and a noun wider than its number
+
+Step 4.50's paragraph is scoped and says so: "scanning all 127 `.efi` files under
+`Binaries/gauguin/QcomPkg/Drivers` and `Binaries/bitra/QcomPkg/Drivers` for its 16 bytes
+finds nine files carrying it" (`:8565-8567`). The sentence carrying that number forward into
+Step 4.95 reads "carried by nine blobs in the tree" (`:9325`). Measured tree-wide — 75
+platform directories, 11,813 `.efi` and `.depex` blobs — **377 carry it, across 12 distinct
+module names**:
+
+| module | platform directories |
+|---|---|
+| `UsbConfigDxe.efi` | 74 |
+| `UsbfnDwc3Dxe.efi` | 74 |
+| `UsbConfigDxe.patched.efi` | 56 |
+| `UsbInitDxe.efi` | 42 |
+| `UsbInitDxe.depex` | 42 |
+| `XhciDxe.efi` | 39 |
+| `XhciPciEmulationDxe.efi` | 39 |
+| `UsbBusDxe.efi` | 6 |
+| `UsbfnDwc3Dxe.mh2lm.efi` | 2 |
+| `UsbConfigDxeWp.efi`, `UsbConfigDxe.hostmode.efi`, `UsbConfigDxe.dualrole.efi` | 1 each |
+
+Nine is the right number for two platform directories and the wrong noun for the tree. It is
+also the third correction in this run of steps with the same shape — a measurement accurate
+where it was taken and broad where it was quoted, after Step 4.103's base and Step 4.112's
+`AcpiTables` — and the smallest of the three, which is not the same as the least likely to
+mislead: a reader taking "nine blobs in the tree" at its word would conclude the GUID is a
+local peculiarity of two platforms, and the tree's answer is that it is in essentially all
+of them. 74 of the 75 platform directories carry both `UsbConfigDxe.efi` and
+`UsbfnDwc3Dxe.efi`.
+
+### What this does not change
+
+- **The P3 gate.** Still unmet. What this step fixes is *where* each clause fails, and the
+  two fail in different places. The storage half has no obstacle of its own in this image:
+  its producers are all in the volume, its consumers are all promoted unconditionally in the
+  first round, and no depex anywhere in the chain is ever evaluated. It does not pass
+  anyway, because the wall is upstream of it — `ASSERT_EFI_ERROR (Status)` at
+  `DxeMain.c:593` fires before `gBds->Entry (gBds)` at `:606`, so nothing bound to a block
+  device is reached, correct and complete disk stack or not.
+- **Step 4.103's conclusion about the USB stack.** Two of the three added drivers cannot be
+  scheduled on the record's driver set and the third waits on the same thirteen
+  architectural protocols the P2 assert is about. The producer is now present, and the
+  producer cannot run.
+- **The record.** `work/out/p2-4.94/Mu-gauguin-silicon-gzip.img` is untouched, 1,144,832 B,
+  `d621f732f4763a303e980c5af04451479c2ace31801e796993a258f226c177a5`.
+- **What the panel would have said.** Nothing here is measured on the device, and the owed
+  reading on the payload in `boot` remains owed.
+
+### What was written, and what was not
+
+- `docs/08-device-session.md` — this section and nothing else. No tool was changed, no
+  payload was built, and `work/out/usb-host/` still holds the candidate Step 4.112 built:
+  `f1a7106b76f98e11…`, 1,171,456 B, unflashed.
+- The first measurement of this step was **wrong and is recorded as wrong** — the `0x0a`
+  needle and the empty carrier set it produced — because the failure mode it nearly reached
+  is the one this document is arranged against: an absence that is an artifact of the probe
+  reading exactly like an absence that is real.
+- Read at byte level this step: `Mu_Basecore/MdePkg/Include/Protocol/Usb2HostController.h:19`;
+  `Mu_Basecore/MdeModulePkg/Bus/Usb/UsbBusDxe/UsbBusDxe.inf:54`;
+  `Mu_Basecore/MdeModulePkg/Bus/Pci/XhciDxe/XhciDxe.inf:57`;
+  `Binaries/gauguin/QcomPkg/Drivers/SdccDxe/SdccDxe.inf`;
+  `Binaries/bitra/MdeModulePkg/Universal/Disk/UnicodeCollation/EnglishDxe/EnglishDxe.inf`;
+  `Binaries/9707f/QcomPkg/Drivers/UsbInitDxe/UsbInitDxe.inf`; and the six `[Depex]`-less
+  disk INFs.
+- **No partition was written.** `boot` still holds `work/out/p2-variants/Mu-gauguin-silicon-gzip.img`,
+  1,142,784 B, `90b21643e3450c326fb3d24baf64d58d4692a5d155c36b76d2e020ff04a96b59` — rung 7260,
+  thirtieth step running.
+- **The device is absent from this host throughout**, so the owed reading under
+  先读屏，再刷下一次 remains owed, and the rebuilt candidate is still not the payload in
+  `boot` and must not take its place.
+- Standing rules unchanged: `userdata`, the partition table and the firmware LUN are
+  untouched; writes go to `boot` only; the control image is read before anything is
+  overwritten; and the screen is read before the next flash.
+- **The P3 gate remains unmet.** This step removes the last way the storage half could have
+  been the obstacle — it is not, and it never was — and leaves the gate exactly where Step
+  4.108 and Step 4.109 put it: eighteen loads, then a wall at `DxeMain.c:593`.
+

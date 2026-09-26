@@ -335,6 +335,15 @@ Work:
 > `DSDT` is 12,341 bytes, not 2,369), and **the gate is still unmet** — two of the three new
 > drivers' dependency expressions cannot evaluate on this driver set, and eight architectural
 > protocols the P2 assert is about are still absent. No USB stick can be seen yet.
+>
+> **Step 4.113 measured the gate's *other* half and found no obstacle of its own.** The storage
+> chain the second clause needs — `UFSDxe`, `DiskIoDxe`, `PartitionDxe`, `Fat`, with `SdccDxe`
+> and `EnglishDxe` — sits at Apriori **25–30** as one contiguous run, and not one of the six
+> carries a depex, so the disk stack is promoted unconditionally and awaits nothing: its
+> producers are all in the volume and its consumers all run in the first round. It still does
+> not pass, because what the gate waits on is upstream of it — the `ASSERT_EFI_ERROR` at
+> `DxeMain.c:593` that Step 4.108 and Step 4.109 located, which fires before BDS is entered.
+> So "item 1 is done for UFS" below is true of the firmware and not yet true of the device.
 
 **Status (2026-09-25): item 1 is done for UFS, USB, the PMIC family, the GPIO controller,
 the Type-C controller and I2C, and every one of those nodes answers a shipped driver — it is
