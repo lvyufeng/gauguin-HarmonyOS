@@ -109,7 +109,10 @@
  * run that carries those rows carries them because of values this file invented.
  * Every capture made under this instrument records which of the two it was,
  * because a reader who takes an unseeded run for a seeded one, or the reverse,
- * will read the log backwards.
+ * will read the log backwards. A third switch, SEED_AOP, is off by default and
+ * separate for the same reason: it writes a value the model has no AOP to supply,
+ * so a run with it on is one more thing than a run with it off, and a log that
+ * does not say which it was cannot be read either way.
  *
  * It is loaded at EL3_LOAD and branches to PAYLOAD, which is where the real
  * payload would have been loaded. Both are build-time symbols so that the stub
@@ -120,11 +123,17 @@
  *       --defsym ZERO_MEM=1 --defsym SEED_SMEM=1 --defsym SEED_SMEM_BLOCK=0x40c00000 \
  *       --defsym SEED_SMEM_IPA=0x01FD4000 --defsym SEED_SMEM_BASE=0x80900000 \
  *       --defsym SEED_SMEM_SIZE=0x200000 \
+ *       --defsym SEED_AOP=1 --defsym SEED_AOP_BLOCK=0x42a00000 \
+ *       --defsym SEED_AOP_IPA=0x0C3F000C --defsym SEED_AOP_STATE=1 \
+ *       --defsym SEED_AOP_MAGIC=0x0C0330DB \
  *       -I <dir with s2_l2.inc> -o stub.o stub.S
  *   aarch64-linux-gnu-objcopy -O binary stub.o stub.bin
  *
  * `tools/qemu-panel-read.py --el3-stub --el3-zero-mem --el3-seed-smem` does
- * exactly this and passes the addresses through, so the numbers have one home.
+ * exactly this and passes the addresses through, so the numbers have one home;
+ * `--el3-seed-aop` is the third switch and adds the mailbox triple - with the
+ * word's address and the two values it points at decoded out of the driver's own
+ * instructions, which is why they appear in this line and not only in the source.
  */
 
     /*
@@ -276,6 +285,367 @@
      */
     .equ  SEED_SMEM_FLAG_OFF, 0xC0
     .equ  SEED_SMEM_FLAG, 1
+
+    /*
+     * The rung above the flag, and the one step 4.126 designed and step 4.127
+     * reads: SMEM's partition table. The flag at +0xC0 gets `smem_init` past its
+     * own check; it does not give SMEM a single readable item, and the first
+     * seeded runs said so in SMEM's own words - `smem_get_addr: SMEM get addr
+     * failed! smem_type=402` from EnvDxe's own start, and `smem_alloc: SMEM
+     * allocation failed! smem_type=404, buf_size=8192` nine Apriori entries
+     * later. Both are one absence, and the disassembly says which.
+     *
+     * `smem_partition_init` (EnvDxe RVA 0x9160, and the strings it asserts with
+     * name `smem_partition.c`) does not find SMEM's heap by looking for a heap:
+     * it takes the last page of the region `SEED_SMEM_BASE`/`_SIZE` name and
+     * looks for the 32-bit tag `$TOC` there (`0x434F5424`, `mov w9,#0x5424;
+     * movk w9,#0x434f,lsl#16` at RVA 0x91B8). With that page zero it returns
+     * *silently* - RVA 0x91C8 branches to the routine's epilogue at 0x9310, and
+     * there is no print and no assert on that path, which is why a seeded run
+     * says nothing about the TOC and its absence has to be read out of the code.
+     * What it would have filled is the eleven 0x30-byte item descriptors at
+     * `.data + 0x830`, one per tag 0..10, and those stay zero instead.
+     *
+     * Then the failure itself. `smem_get_addr` arrives at the legacy get-addr
+     * (RVA 0x8B2C), which hands the shared body at 0x8DE0 a tag of 0xFFFF - a
+     * tag that body resolves to descriptor slot 0 (`cmp w8,#0xffff; csel x20,
+     * x11, x12, eq`) - and 0x8E24 returns `0xFFFFFFFC`, "not populated", the
+     * moment the descriptor's size word is zero. One zero where a TOC should be,
+     * eleven dead descriptors, and every SMEM item the firmware asks for
+     * reported missing by whichever consumer asks first.
+     *
+     * So this rung writes four structures, each the minimum the code reading it
+     * accepts. Where they go is the board's arithmetic and not this file's: the
+     * TOC is at `base + size - 0x1000` because that is where `smem_partition.c`
+     * computes it from the region the platform's map declares, and the partition
+     * is at +0x1000 because an entry's offset must be page-aligned and non-zero
+     * (the asserts at `smem_partition.c` +976 and +978).
+     *
+     *   1. the TOC: `$TOC`, version 1 (+922 asserts on anything else), one entry
+     *      (+923 allows up to SMEM_MAX_PARTITIONS = 0x14).
+     *   2. the entry at TOC+0x20: offset 0x1000, size 0x100000, and host0 and
+     *      host1 - the two halfwords of +0x0C and +0x0E, which is what the
+     *      routine at RVA 0x9208 reads to choose the descriptor slot - both
+     *      0xFFFE, which is its "any host" value and the one that selects slot 0,
+     *      the slot `smem_get_addr` reaches. Zero is not that value: zero
+     *      resolves to 0xFFFF, which the routine treats as *skip this entry*.
+     *      Its +0x10 word is 0x1000, the divisor the allocator divides by at RVA
+     *      0x8F14. That value is the seed's own - nothing in the tree says what
+     *      the device's TOC holds - but it is not a second answer to the
+     *      driver's arithmetic: the driver reads the divisor out of the entry the
+     *      seed wrote, so the number the seed divides by and the number the
+     *      driver divides by are the same word, and changing it moves both ends
+     *      together.
+     *   3. the partition header at +0x1000: `$PRT` (`0x54525024`,
+     *      `SMEM_PARTITION_HEADER_ID`, asserted at +977), with its size word at
+     *      +8 equal to the entry's size - the routine compares the two and prints
+     *      `Invalid partition size` at RVA 0x9288 when they differ - and the data
+     *      area described by +0x0C and +0x10.
+     *   4. the item itself, at the address the allocator's own arithmetic hands
+     *      back: a heap block whose first halfword is `0xA5A5` (the tag its block
+     *      walker checks at RVA 0x9030) with the memory partition table ten bytes
+     *      into it - the two magics `0x9DA5E0A8` and `0xAF9EC4E2` that EnvDxe's
+     *      own parse compares at RVA 0x52A8, and a count at +8.
+     *
+     * (4)'s address is the part worth arguing about, because it is not written
+     * here as a number. RVA 0x8F04..0x8F30 computes
+     * `partition_base + size - (((div + 0xF) / div) * div + 0xFFF0 & 0xFFFF) - 0x10`,
+     * so the assembler evaluates that expression out of the symbols below and the
+     * block lands where the code will look - one derivation, two readers. If this
+     * file's reading of that routine is wrong, the guest reads the address the
+     * arithmetic really produced, which is RAM holding zero, and what the parse
+     * then says is a plain failure and not a silent mismatch. The seed's first
+     * answer here was 0x10000 low - it left out the partition's offset and the
+     * truncation - and `tools/qemu-panel-read.py` now checks the address the stub
+     * recorded against this expression rather than trusting that the two agree.
+     *
+     * What it costs, and this is the largest lie in the file. SMEM is no longer
+     * four words in an otherwise empty region: it is five nested structures -
+     * TOC, entry, partition header, heap block, partition table - every one of
+     * them this file's invention, standing in for values XBL wrote on the device
+     * and that nothing in this tree records. A driver downstream of SMEM is now
+     * reading a mirror of a structure rather than a structure, and a run that
+     * behaves differently from the device there can be differing because of any
+     * of the five. The table's own *contents* are not fabricated and are not
+     * either: the count is 1 and the entries are absent, so a consumer that
+     * walks it reads zeros for its first entry. That is the flag's trade one
+     * level deeper, and it is why the run this rung produces is read for one
+     * thing: whether `K 17`'s `SU` moves.
+     */
+    .equ  SEED_SMEM_TOC_MAGIC, 0x434F5424       /* "$TOC" */
+    .equ  SEED_SMEM_TOC_VERSION, 1
+    .equ  SEED_SMEM_PART_MAGIC, 0x54525024      /* "$PRT" */
+    .equ  SEED_SMEM_PART_OFF, 0x1000
+    .equ  SEED_SMEM_PART_SIZE, 0x00100000
+    .equ  SEED_SMEM_PART_HEADER, 0x20           /* where the partition's data area starts */
+    .equ  SEED_SMEM_PART_DATA, 0x000F0000
+    .equ  SEED_SMEM_ENTRY_DIV, 0x1000           /* the TOC entry's +0x10 word */
+    /*
+     * The TOC entry's host0 and host1 - the two halfwords at +0x0C and +0x0E -
+     * and this is the other correction step 4.127 carries. They were written as
+     * zero, on the reading that slot 0 is the slot nothing selects. The routine
+     * at RVA 0x9160 says otherwise, and it says it in four instructions:
+     *
+     *     9208: ldrh w4, [x13, #0xc]      ; host0
+     *     920c: ldrh w5, [x13, #0xe]      ; host1
+     *     9210: cmp  w4, w28              ; w28 = 0xFFFE
+     *     9214: ccmp w5, w28, #0x0, eq
+     *     9218: b.eq 0x9238               ; both 0xFFFE -> w20 = 0
+     *     ...
+     *     921c: cmp  w5, #0x0
+     *     9220: csel w10, w4, w19, eq     ; w19 = 0xFFFF
+     *     9224: cmp  w4, #0x0
+     *     9228: csel w20, w5, w10, eq
+     *     922c: cmp  w20, #0xa
+     *     9230: b.ls 0x923c
+     *     9234: b    0x9300               ; -> the next entry
+     *     ...
+     *     923c: cmp  w20, w19
+     *     9240: b.eq 0x9300               ; slot 0xFFFF -> the next entry
+     *
+     * So 0xFFFE in both fields means slot 0 (`mov w20, wzr`), a zero field means
+     * the other field decides, both zero means 0xFFFF - which is *skip*, not slot
+     * 0 - and a slot above 10 (SMEM_MAX_PARTITIONS is 0x14 but the descriptors
+     * are eleven) is skipped too. With the fields at zero the seed's entry was
+     * therefore not installed at all: every descriptor stayed zero, and the
+     * `smem_type=402` and `smem_type=404` failures the first seeded runs printed
+     * are the driver reporting the absence this line created.
+     */
+    .equ  SEED_SMEM_ENTRY_HOST, 0xFFFE          /* "any host", both halves */
+    /*
+     * The heap block, and each of these three is a field a routine reads rather
+     * than a filler. `SEED_SMEM_BLOCK_TAG` is not decoration and not a magic in
+     * the "is this ours" sense: the routine at RVA 0x901C does
+     *
+     *     9034: ldrh w8, [x3]                ; x3 is the candidate block
+     *     9038: cmp  w8, #0xa5a5
+     *     903c: b.ne <print "Invalid SMEM canary 0x%X at location 0x%...",  return 0>
+     *
+     * so the tag is a canary, and a block without it is skipped and the scan
+     * continues rather than stopping. `SEED_SMEM_BLOCK_SIZE` goes at +4 and is
+     * compared with the partition's own size at 0x9040-0x9050: the block is taken
+     * down the normal path when it is at or below that size, which is how a heap
+     * carved out of the partition is meant to look, and down an
+     * "Invalid SMEM item size:%d, Partition size:%d" print when it is larger. The
+     * +2 halfword is read at 0x9048 and handed back in `w4`, and the routine's
+     * caller compares it at 0x90C0 against `[x19+4]` - an id from the caller's own
+     * descriptor - so the two have to agree for the block to be accepted. Nothing
+     * in the tree says what that id is, and this file writes zero there: if the
+     * scan reaches the block and is rejected at 0x90C0, this field is where to
+     * look, and the word is a second missing value of the same kind as the AOP
+     * pointer rather than something a longer read of the image would settle.
+     */
+    .equ  SEED_SMEM_BLOCK_TAG, 0xA5A5
+    .equ  SEED_SMEM_BLOCK_SIZE, 0x000F0000
+    .equ  SEED_SMEM_PTABLE_MAGIC0, 0x9DA5E0A8
+    .equ  SEED_SMEM_PTABLE_MAGIC1, 0xAF9EC4E2
+    .equ  SEED_SMEM_PTABLE_ENTRIES, 1
+
+    /*
+     * Where inside SMEM the allocator's arithmetic puts the item, from the
+     * routine at RVA 0x8F04 and not from a number copied out of a run. Read
+     * literally, that routine is
+     *
+     *     8f04: ldp  w14, w12, [x20, #0x8]   ; w14 = the partition's size,
+     *                                        ; w12 = the descriptor's +0xC word
+     *     8f08: orr  w15, wzr, #0xfff0
+     *     8f10: add  x13, x12, #0xf
+     *     8f14: udiv x8, x13, x12            ; (w12 + 0xF) / w12
+     *     8f18: ldr  w13, [x20]              ; the partition's base
+     *     8f1c: madd w21, w8, w12, w15       ; ... * w12 + 0xFFF0
+     *     8f20: add  w10, w14, w13           ; base + size
+     *     8f28: sub  w14, w10, w21, uxth     ; ... - (w21 & 0xFFFF)
+     *     8f2c: sub  x9, w14, #0x10          ; ... - 0x10
+     *
+     * and it is `uxth` - the truncation to sixteen bits - that the expression
+     * below has to reproduce, because it is what makes the answer land where the
+     * routine looks rather than where a reader would first guess.
+     *
+     * This is the correction step 4.127 carries, and the old expression was 0x10000
+     * low. Without the `& 0xFFFF` it measured back over 0x10FF0 where the routine
+     * measures back over 0xFF0, and the difference is one 16-bit carry. With this
+     * file's own numbers - size 0x100000, divisor 0x1000, partition base 0x80901000
+     * - the routine's w21 is 1 * 0x1000 + 0xFFF0 = 0x10FF0, `uxth` keeps its low
+     * sixteen bits and so measures back over 0xFF0, and `base + size - 0xFF0 - 0x10`
+     * is 0x80A00000. The un-truncated 0x10FF0 gives 0x809F0000, and the seeded runs
+     * said so in the driver's voice: `smem_get_addr: SMEM get addr failed!
+     * smem_type=402` and `smem_alloc: SMEM allocation failed! smem_type=404` are what
+     * a heap whose item is not where the allocator looks reports, and this line is
+     * part of why they were there. Both are now the seed's own arithmetic to answer
+     * for.
+     *
+     * The value below is measured from the *partition's* base, because that is
+     * what the line that uses it adds: `base + SEED_SMEM_PART_OFF +
+     * SEED_SMEM_TABLE_REL`. So the partition's size is what is counted back over,
+     * and the partition's offset appears once, in the sum where it belongs. It is
+     * not a coincidence that the result is SMEM's base plus one PART_SIZE: the
+     * partition runs from base + 0x1000 to base + 0x101000, and the item the
+     * allocator hands out is the last 0x1000-aligned block inside it.
+     *
+     * The 0xFFF0 is `orr w15,wzr,#0xfff0` at 0x8F08 and the 0x10 is the item
+     * header the address is measured back over.
+     */
+    .equ  SEED_SMEM_TABLE_REL, ((SEED_SMEM_PART_SIZE - ((((SEED_SMEM_ENTRY_DIV + 0xF) / SEED_SMEM_ENTRY_DIV) * SEED_SMEM_ENTRY_DIV + 0xFFF0) & 0xFFFF)) - 0x10)
+
+    /*
+     * ------------------------------------------------------------------------
+     * The second seed, and the one this rung exists for: the AOP mailbox word
+     * that CmdDbDxe's own entry gate reads, at 0x0C3F000C.
+     *
+     * What the gate is, from the driver's bytes and not from a pattern. CmdDbDxe
+     * is Apriori 17 and its entry is 0x1000 -> 0x1150 -> 0x123c -> 0x19a0 ->
+     * 0x1398 (a bare `b 0x13a4`) -> 0x13a4 -> 0x2540, and 0x2540 is:
+     *
+     *     2550: bl   0x45c0
+     *     2558: str  x0, [x20, #0x100]      ; x20 = 0x6000, the cache slot
+     *     255c: cbz  x0, 0x2594             ; -> the failure epilogue
+     *     2564: ldr  x8, [x20, #0x100]      ; x8 = the word that was read
+     *     2568: ldr  w9, [x8]               ; and it is a *pointer*
+     *     256c: cmp  w9, #0x1
+     *     2570: b.ne 0x2594
+     *     2574: ldr  w10, [x8, #0x4]
+     *     2578: mov  w11, #0x30db
+     *     257c: movk w11, #0xc03, lsl #16   ; w11 = 0x0C0330DB
+     *     2580: cmp  w10, w11
+     *     2584: b.ne 0x2594
+     *
+     * and 0x45c0 is the read itself, three instructions and a static store:
+     *
+     *     45c0: mov  w8, #0xc
+     *     45c4: movk w8, #0xc3f, lsl #16    ; w8 = 0x0C3F000C
+     *     45cc: ldr  w0, [x8]               ; not [x20+...]: an absolute read
+     *
+     * `ldr w0` zero-extends, so x0 is a 32-bit address. The gate is therefore
+     * `p = *(u32 *)0x0C3F000C; p != 0 && p[0] == 1 && p[1] == 0x0C0330DB`, and
+     * the two values the driver is asking for are at the pointer and the pointer
+     * plus four - *not* at 0x0C3F0010, which nothing in any image reads. When the
+     * gate fails, 0x2594 sets w19 = 1 and 0x263c returns it; 0x13b4 turns that
+     * into `mov x0, #0x8000000000000003`, which is EFI_UNSUPPORTED, and EFI_
+     * UNSUPPORTED is the `U` the panel prints for tick 17.
+     *
+     * There is no other way out of the driver and no other source of that
+     * refusal: the entry's *other* guard, at 0x116c, reads `ImageBase + 0x46b4`
+     * and returns EFI_ABORTED - `O` on the panel, not `U` - and the word it reads
+     * is zero in the image and written by nothing in it, so that guard is inert
+     * here and on the device alike. The `U` is this gate and only this gate.
+     *
+     * The same gate, twice more in the tree, and both agree that the word is a
+     * pointer. `part-aop.img` carries the AOP's own copy of it at 0x29318 - Thumb
+     * code this tree cannot assemble but can read - and it is the same three
+     * comparisons in the same order:
+     *
+     *     2931a: bl   0x294ac            ; its own read of the mailbox
+     *     29322: str  r0, [r1]           ; r1 = a global at 0x0E43D8
+     *     29324: beq  0x29338            ; p == 0 -> failure
+     *     29326: ldr  r2, [r0]           ; *p
+     *     29328: cmp  r2, #0x1
+     *     2932a: bne  0x29338
+     *     2932c: ldr  r0, [r0, #0x4]     ; *(p + 4)
+     *     2932e: ldr  r2, [pc, #0x14]    ; the literal at 0x29344
+     *     29330: cmp  r0, r2             ; 0x0C0330DB
+     *     29332: bne  0x29338
+     *
+     * So the AOP tests the published record exactly as the driver does, and the
+     * 0x0C0330DB at 0x29344 is *that* compare's literal - one of the two the AOP
+     * image was found to carry, the other being the same constant in a second
+     * function's pool at 0x294a8. The producer and the consumer are reading one
+     * structure through one pointer.
+     *
+     * Why the model reads zero there. 0x0C3F000C is inside `AOP_SS_MSG_RAM`,
+     * 0x0C300000 for 0x00100000, which this board's own memory map declares
+     * (MemoryMapLib.c line 40), so --el3-zero-mem gives that 2 MB block back as
+     * untouched RAM and the read succeeds and returns zero. On the device the
+     * word is not the firmware's and not XBL's: it is the AOP's. This instrument
+     * has no AOP - nothing in the payload boots one, and part-aop.img is not a
+     * participant in the run - so the mirror is a machine whose application
+     * processor is absent, and the driver is right about the machine it is
+     * running on. Exactly the shape of the SMEM flag at +0xC0, one region over.
+     *
+     * Why the *values* are not invented. Three independent things say what the
+     * record holds, and they agree:
+     *
+     *   - the phone's own capture. `docs/08-device-session.md` step 4.12 has the
+     *     device's `P2 SEQ`, 46 characters, and index 16 of it - Apriori 17,
+     *     CmdDbDxe - is `s`. The dispatcher prints that letter from the status the
+     *     driver's entry *returned*, so on the device the entry passed this gate,
+     *     and passing it means the record held (1, 0x0C0330DB) at that moment.
+     *     The values are read off a photograph of the device, not chosen.
+     *   - the driver's own compare, which is where the magic first came from -
+     *     the `movk w11,#0xc03,lsl #16` above - and its own literal for the state.
+     *   - the AOP firmware's own image, whose copy of the gate is quoted above. The
+     *     same handshake's address appears in three other firmware components that
+     *     read it - `part-hyp.img` at 0x2fa50 and `part-tz.img` at 0x9dd94 and
+     *     0xcddd0 - while neither the address nor the magic appears in
+     *     part-xbl.img, part-abl.img, part-devinfo.img or part-cdt.img. So the
+     *     producer is the AOP and the consumers are hyp, TZ and this driver.
+     *
+     * What is invented is the *pointer*, and only the pointer: nothing in the tree
+     * records the address the device's publisher used, and both ends of the
+     * handshake only dereference it, so the one thing the seed's choice has to
+     * satisfy is that the record it names is readable by the guest. The record is
+     * therefore placed inside the same 2 MB block as the mailbox word itself,
+     * SEED_AOP_REC_OFF bytes further on: the block is already declared by the
+     * board's map and already redirected by --el3-zero-mem, so the guest's read of
+     * the pointer lands on the bytes this file wrote - and the launcher reads them
+     * back out of the pool and says whether that held.
+     *
+     * What it costs, and it is a smaller lie than the container above. The
+     * container is a structure this file builds; this is three words put back into
+     * a mailbox the SoC's own map declares and that a processor this instrument
+     * does not model would have filled. What it does *not* model is everything
+     * behind them: the driver, once past the gate, builds a command-DB lookup out
+     * of the AOP resource names `"MC0"`, `"mss.lvl"` and `"cx.lvl"` (RVAs 0x54f9,
+     * 0x54fd, 0x5505) by reading the AOP command DB at 0x80860000, which under
+     * this instrument is RAM holding zero - and 0x80860000 is itself a constant
+     * the AOP image carries, beside its copy of the magic. A run that gets past
+     * the gate therefore says the gate opened and says nothing about whether the
+     * driver got what it came for - if it fails further in, that failure is the
+     * absent command DB and not the seed.
+     *
+     * And it is observable only with SEED_SMEM on: without it EnvDxe asserts at
+     * Apriori slot 2 and nothing ever reaches Apriori 17. So a run with SEED_AOP
+     * and not SEED_SMEM writes a word no reader of the log will see read - the
+     * launcher refuses that combination rather than making the run.
+     */
+    .ifndef SEED_AOP
+    .equ  SEED_AOP, 0
+    .endif
+
+    /*
+     * The word and its address. The address is a `--defsym` for the same reason
+     * every other address here is: `tools/qemu-panel-read.py` reads it out of the
+     * driver's own `mov`/`movk` pair, works out which pool block stands in for it,
+     * and passes both in - so the block the seed writes into and the address the
+     * guest reads are one number with one home. The three values below are passed
+     * in for the same reason turned around: the launcher decodes them out of the
+     * driver's own instructions, so the numbers the seed writes are the numbers
+     * the driver compares against, and this file's copies are the standalone
+     * fallback rather than a second opinion.
+     */
+    .ifndef SEED_AOP_IPA
+    .equ  SEED_AOP_IPA, 0x0C3F000C     /* `movk w8, #0xc3f, lsl #16` at 0x45c4 */
+    .endif
+
+    /* `cmp w9, #1` at RVA 0x256c: the state at *the pointer*. */
+    .ifndef SEED_AOP_STATE
+    .equ  SEED_AOP_STATE, 1
+    .endif
+
+    /* `cmp w10, w11` at RVA 0x2580 against 0x0C0330DB, set at 0x2578. */
+    .ifndef SEED_AOP_MAGIC
+    .equ  SEED_AOP_MAGIC, 0x0C0330DB
+    .endif
+
+    /*
+     * How far past the mailbox word the record it points at goes. This is the one
+     * number here that is the file's own: the device's publisher chose its own
+     * address and nothing in the tree records it, so the seed's pointer has to
+     * name something, and eight bytes on in the same block is the choice - far
+     * enough not to overwrite the mailbox word itself, close enough that both land
+     * in the one 2 MB block the redirect covers. The launcher reads it back out of
+     * this file's symbol table rather than repeating it.
+     */
+    .equ  SEED_AOP_REC_OFF, 8
 
     /*
      * Where the two translation tables go, inside the stub's own 64 KB. `.org`
@@ -521,14 +891,118 @@ _start:
     mov   w8, #SEED_SMEM_FLAG
     str   w8, [x7, #SEED_SMEM_FLAG_OFF]
 
+    /*
+     * And the four structures of the rung above it, in the order the driver
+     * meets them: the TOC in the region's last page, the entry inside the TOC,
+     * the partition header the entry's offset names, and the item the allocator
+     * will hand to whoever asks for smem_type 402. The header above has the
+     * argument for each field; what is here is only where it goes.
+     *
+     * `x9` is the TOC page and `x16` is the item, and both are kept: they are
+     * the two of the four that the launcher cannot find by a symbol of its own
+     * - they live in SMEM rather than in this stub - so they go into the record
+     * at the end of this block and the read-back fetches them by address.
+     */
+    ldr   x9, =SEED_SMEM_BASE
+    ldr   x10, =SEED_SMEM_SIZE
+    add   x9, x9, x10
+    sub   x9, x9, #0x1000                  /* base + size - 0x1000: the TOC page */
+
+    mov   w11, #0x5424
+    movk  w11, #0x434f, lsl #16            /* "$TOC" */
+    str   w11, [x9]
+    mov   w11, #SEED_SMEM_TOC_VERSION
+    str   w11, [x9, #4]
+    mov   w11, #1                          /* one entry; +923 allows 0x14 */
+    str   w11, [x9, #8]
+
+    mov   w12, #SEED_SMEM_PART_OFF
+    mov   w13, #SEED_SMEM_PART_SIZE
+    lsl   x13, x13, #32
+    orr   x13, x13, x12                    /* entry+0: offset, entry+4: size */
+    str   x13, [x9, #0x20]
+    str   wzr, [x9, #0x28]                 /* entry+8: the TOC's own four bytes */
+    mov   w12, #SEED_SMEM_ENTRY_HOST
+    movk  w12, #SEED_SMEM_ENTRY_HOST, lsl #16
+    str   w12, [x9, #0x2c]                 /* entry+0xC/+0xE: host0 and host1 */
+    mov   w14, #SEED_SMEM_ENTRY_DIV
+    str   x14, [x9, #0x30]                 /* entry+0x10: the allocator's divisor */
+
+    ldr   x15, =SEED_SMEM_BASE
+    add   x15, x15, #SEED_SMEM_PART_OFF
+    mov   w11, #0x5024
+    movk  w11, #0x5452, lsl #16            /* "$PRT" */
+    str   w11, [x15]
+    str   wzr, [x15, #4]
+    mov   w11, #SEED_SMEM_PART_SIZE
+    str   w11, [x15, #8]
+    mov   w11, #SEED_SMEM_PART_HEADER
+    str   w11, [x15, #0xc]
+    mov   w11, #SEED_SMEM_PART_DATA
+    str   w11, [x15, #0x10]
+
+    ldr   x16, =SEED_SMEM_BASE
+    add   x16, x16, #(SEED_SMEM_PART_OFF + SEED_SMEM_TABLE_REL)
+    mov   w11, #SEED_SMEM_BLOCK_TAG
+    strh  w11, [x16]                       /* the heap block's 0xA5A5 tag */
+    mov   w11, #SEED_SMEM_BLOCK_SIZE
+    str   w11, [x16, #4]
+    mov   w11, #0xe0a8
+    movk  w11, #0x9da5, lsl #16            /* the partition table, ten bytes in */
+    str   w11, [x16, #0x10]
+    mov   w11, #0xc4e2
+    movk  w11, #0xaf9e, lsl #16
+    str   w11, [x16, #0x14]
+    mov   w11, #SEED_SMEM_PTABLE_ENTRIES
+    str   w11, [x16, #0x18]
+
+    /*
+     * The AOP mailbox, and it is the same kind of write as the one above and not
+     * the same kind as the container: three words put back into a window the
+     * board's own memory map declares and that a processor this instrument does
+     * not run would have filled. The header above carries the argument for the
+     * values; what is here is where they go - the pointer at the mailbox word, and
+     * the record's two words at the pointer. `x17` is left at zero when the switch
+     * is off, so the record below has one form and the launcher can tell "not
+     * asked for" from "asked for" by remembering which it asked.
+     */
+    mov   x17, xzr
+.if SEED_AOP
+    ldr   x17, =SEED_AOP_BLOCK
+    /*
+     * Two adds and not one, and the reason is a fact about the encoding rather
+     * than about the address: an ADD's immediate field is twelve bits, and the
+     * assembler will only fold the rest into the `lsl #12` form when the value is
+     * a multiple of 0x1000 (which is how the line above reaches 0x01FD4000). This
+     * address's offset within its 2 MB block is 0x1F000C, and 0xC is not a
+     * multiple of anything - so it comes in as the page part and the remainder.
+     */
+    add   x17, x17, #(SEED_AOP_IPA & (S2_MOVED_BLOCK - 1) & ~0xFFF)
+    add   x17, x17, #(SEED_AOP_IPA & 0xFFF)
+    ldr   w11, =SEED_AOP_IPA            /* the value the guest will dereference */
+    add   w11, w11, #SEED_AOP_REC_OFF
+    str   w11, [x17]                    /* the mailbox word: a pointer, not a state */
+    mov   w11, #SEED_AOP_STATE
+    str   w11, [x17, #SEED_AOP_REC_OFF]           /* *p */
+    mov   w11, #(SEED_AOP_MAGIC & 0xFFFF)
+    movk  w11, #(SEED_AOP_MAGIC >> 16), lsl #16
+    str   w11, [x17, #(SEED_AOP_REC_OFF + 4)]     /* *(p + 4) */
+.endif
+
     /* A record, so the launcher can read the seed back out of the machine's own
      * memory rather than out of the arguments it passed: what was written and
      * what was meant to be written are different claims, and only the first is a
      * run. Every field is a value this code computed and not a symbol it was
-     * given, so the record is evidence rather than an echo. */
+     * given, so the record is evidence rather than an echo - and the middle two
+     * are the two addresses in SMEM itself, which is where the rung above the
+     * flag put the only things the launcher cannot find by one of this file's
+     * own symbols. The last is the pool address of the AOP pair, which is the
+     * same kind of thing for the second seed, and zero when that seed is off. */
     adr   x4, seed_diag
     stp   x0, x3, [x4]
     stp   x1, x5, [x4, #16]
+    stp   x9, x16, [x4, #32]
+    stp   x17, xzr, [x4, #48]
 .endif
 
     /* No FP or SIMD trapping anywhere below. */
@@ -615,17 +1089,22 @@ s2_diag:
     /*
      * What SEED_SMEM actually wrote: the two pool addresses, the pointer as the
      * guest will read it, the structure's first qword as this file recorded
-     * writing it - and nothing about the word at SMEM + 0xC0, because that one
+     * writing it - and, since the TOC rung, the two addresses of the structures
+     * it wrote into SMEM itself, which are the ones no symbol of this file can
+     * name. Nothing about the word at SMEM + 0xC0, because that one
      * is not in this stub's memory for a record to be taken from. The launcher
      * fetches it by its address in SMEM instead, which is the one read that would
-     * still be right if this file were wrong about where it wrote. Read back out
+     * still be right if this file were wrong about where it wrote. The seventh
+     * qword is SEED_AOP's mailbox address in the pool, zero when that seed is off,
+     * and the eighth is left zero so that the record has a whole number of pairs
+     * and a reader who counts them cannot land on a half-written one. Read back out
      * of the machine after the run; placed with `.org` for the same reason the
      * tables are - the launcher finds it by symbol and the offset is in one file.
      */
     .globl seed_diag
     .org  SEED_DIAG_OFF
 seed_diag:
-    .space 32
+    .space 80
 
     .globl s2_l1
     .org  S2_L1_OFF

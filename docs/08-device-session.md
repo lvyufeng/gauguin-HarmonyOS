@@ -25416,3 +25416,338 @@ regular files under `work/`.
 | corrects | that the phone's `L` at Apriori 19 and the mirror's stop at Apriori 19 are the same failure: they are one entry index reached by two mechanisms, a failed load there and a loaded driver asserting inside itself here, and the coincidence of index is not corroboration; and the reading of the `Error: … start failed` row as the core's decision, which it is not |
 | does not close | whether the seed or the build is why `CmdDbDxe` returns `EFI_UNSUPPORTED` — the two are confounded in every capture here and the payload that would separate them is absent; the P3 gate and the owed panel reading of the flashed 4.74 set; `SO`'s value, which needs `P2 WHAT`; and everything from Apriori 19 on, which neither record reaches by the same route |
 | not an action | nothing was built, nothing was flashed, no partition was written, and the stub was not modified — the seed extension is designed here and not built |
+
+## Step 4.127 — The AOP seed turns `K 17 SU` into `K 17 Ss`, and the SMEM seed's two corrections turn the `404` row off without moving that one
+
+Step 4.126 ended holding a defect in its own instrument and an experiment it could not decide.
+The defect was in the AOP seed's read-back: the mailbox word and the record it points at did
+not agree, so the seed was not known to be written where the driver looks. The experiment was
+the one thing that could separate the seed from the build as the cause of `CmdDbDxe`'s
+`EFI_UNSUPPORTED`, and 4.126 could not run it because the phone's payload is on no disk here.
+
+This step closes the first, runs the second, and reports both. The read-back was reading the
+wrong bytes — the seed had been written correctly all along — and the four-rung ladder that
+follows from it shows that the `U` was the absent AOP record and not the build and not SMEM's
+heap: on the rung that also gets the AOP record, Apriori 17's row changes from
+`K 17 SU 16/69` to `K 17 Ss 17/69` and the payload's own
+`Error: Image at 0009C565000 start failed: Unsupported` row is not in the capture at all.
+The step also carries two corrections to the SMEM seed that were written since 4.126 and are
+run here for the first time, and the ladder is what measures them: one of the two SMEM rows
+4.126 was reading disappears and the other does not. And the run past Apriori 17 stops in
+exactly the two rows the seeded run 4.126 already had, so the step's second result is a
+correction of this document rather than a fact about the firmware.
+
+### The seed was written right, and the read-back compared the pointer with what it points at
+
+`CmdDbDxe`'s entry gate does not read a state word at the mailbox. It reads a **pointer** and
+then reads the two values it compares at that address and four bytes past it. The gate is
+`p = *(u32 *)0x0C3F000C; p != 0 && p[0] == 1 && p[1] == 0x0C0330DB`, decoded out of the
+driver's own instructions — `mov w8,#0xc` / `movk w8,#0xc3f,lsl #16` at RVA `0x45c0` for the
+address, `ldr w9,[x8]` / `cmp w9,#0x1` at RVA `0x2568-0x2570`, and the `mov`/`movk` pair at
+`0x2578` for the magic. The stub writes all three words and always did:
+
+```
+ldr   w11, =SEED_AOP_IPA            /* the value the guest will dereference */
+add   w11, w11, #SEED_AOP_REC_OFF
+str   w11, [x17]                    /* the mailbox word: a pointer, not a state */
+mov   w11, #SEED_AOP_STATE
+str   w11, [x17, #SEED_AOP_REC_OFF]           /* *p */
+mov   w11, #(SEED_AOP_MAGIC & 0xFFFF)
+movk  w11, #(SEED_AOP_MAGIC >> 16), lsl #16
+str   w11, [x17, #(SEED_AOP_REC_OFF + 4)]     /* *(p + 4) */
+```
+
+so the three values sit at `+0`, `+8` and `+12` of the mailbox word. The launcher's check
+unpacked `"<III"` from offset zero of the dump, which reads `+0`, `+4` and `+8` — the pointer,
+the padding the seed never writes, and the state. It compared `0x0c3f0014` with `0x00000001`
+and reported that the machine did not hold what the header described. **That is the signature
+of a correct write, not of a wrong one**: a read-back that unpacks three consecutive words from
+zero will call this seed wrong every time, because the first word is an address and not a value
+to compare against a state.
+
+The fix is in the read and not in the seed. One function now owns the unpacking:
+
+```python
+def aop_words(aop_bytes, rec):
+    """`(word, state_got, magic_got)` out of the raw AOP read, or None if short.
+
+    The record is unpacked at `rec` and not at zero because that is where the
+    driver reads it: the word at the gate is a pointer, and the two values its
+    entry gate compares are at the pointer and four bytes past it. A read-back
+    that unpacked three consecutive words from zero would compare the pointer with
+    the state it points at, call the pair disagreeing, and be wrong about which of
+    the two had moved - which is exactly what the first run of this seed printed.
+    """
+    if len(aop_bytes) < rec + 8:
+        return None
+    word = struct.unpack_from("<I", aop_bytes, 0)[0]
+    state_got, magic_got = struct.unpack_from("<II", aop_bytes, rec)
+    return word, state_got, magic_got
+```
+
+The `len(aop_bytes) < rec + 8` guard is why the dump was widened to cover the record: the
+record lives `SEED_AOP_REC_OFF` bytes past the word, so a dump of the word alone could never
+contain it, and the old read's failure would have been indistinguishable from a short read. The
+same fact is now a requirement the header checks rather than assumes — the word at
+`(ipa & (STAGE2_BLOCK - 1))` plus `rec + 8` has to fit inside one 2 MB block, and the launcher
+refuses the run rather than writing a record across a block boundary. With that read in place,
+the fourth rung prints:
+
+```
+aop seed FABRICATED record for CmdDbDxe's gate, read back out of the machine: 0x42bf000c
+holds 0x0c3f0014, and the record 0x8 past it 0x00000001 0x0c0330db - the word should point at
+0xc3f0014 and the two values there should be 0x1 and 0xc0330db - consistent
+```
+
+`0x0c3f0014` is `0x0C3F000C + 8`, the state is `1` and the magic is `0x0C0330DB`.
+
+### The pool address was right, and the arithmetic that called it wrong was not a lookup
+
+Where the seed's bytes land on the machine is a lookup in `l2_plan`'s dictionary and not an
+arithmetic beside it, and `block_for_ipa`'s docstring says why:
+
+> One lookup, and it is a lookup rather than an arithmetic of this file's own because the pool
+> is assigned densely and out of order - block 15 of the low gigabyte is the 6th block
+> `l2_plan` handed out, not the 16th - so the address is a fact about the plan and not something
+> to be recomputed beside it.
+
+The plan is `{blk: ZERO_MEM_POOL_BASE + i * STAGE2_BLOCK}` over the sorted set of 2 MB blocks
+the platform's declared regions occupy, which on this board is the run's own line — `57
+region(s) below 0x40000000 … 55 2 MB block(s) redirected to 0x40000000..0x46e00000`.
+`CmdDbDxe`'s window is IPA block `0x61` and that block is the 22nd the plan hands out, so
+`plan[0x61] = 0x42A00000` and the mailbox word lands at
+`0x42A00000 + (0x0C3F000C & 0x1FFFFF) = 0x42BF000C`, which is what the launcher printed and
+what the read-back found. The hand computation that produced `0x42DF000C` assumed the pool index
+equalled the block number, and `l2_plan`'s docstring says why it must not: the pool has to stay
+below the payload, so the two indices are deliberately not made to agree.
+
+The same dictionary answers for the SMEM seed and is the independent check on it: the word
+EnvDxe reads is at IPA block 15, that block is the 6th the plan hands out, and the structure the
+pointer names reads back at `0x40C00000 + 0x1D4000 = 0x40DD4000`. Two lookups in one
+dictionary agree with each other and with the machine; the arithmetic that disagreed with both
+is not part of the instrument.
+
+### The SMEM seed this step runs is not the one seed 5 ran
+
+Two values in the SMEM seed were wrong, and both were wrong in the rung 4.125 and 4.126 read.
+They are written up in the stub's own comment block, which is the design record for this seed,
+and the two the ladder measures are:
+
+- **The TOC entry's host fields.** They were written as zero, on the reading that slot 0 is the
+  slot nothing selects. The routine at RVA `0x9208` says otherwise: `ldrh w4,[x13,#0xc]` /
+  `ldrh w5,[x13,#0xe]` / `cmp w4,w28` (`w28 = 0xFFFE`) / `ccmp w5,w28,#0x0,eq` /
+  `b.eq 0x9238` — both `0xFFFE` means slot 0 — while `csel w10,w4,w19,eq` with `w19 =
+  0xFFFF` and the `cmp w20,#0xa` / `b.ls` pair make a zero field fall through to the other
+  field and both-zero resolve to `0xFFFF`, which the routine treats as **skip this entry**. With
+  the fields at zero the seed's entry was not installed at all, so every descriptor stayed zero.
+- **The heap item's address.** The routine at RVA `0x8F04` computes
+  `partition_base + size - (((div + 0xF) / div) * div + 0xFFF0 & 0xFFFF) - 0x10`, and the
+  `uxth` — the truncation to sixteen bits — is the part the stub's expression was missing.
+  Without it the expression measured back over `0x10FF0` where the routine measures back over
+  `0xFF0`, and the seed's item landed at `0x809F0000` instead of `0x80A00000`: one 16-bit carry,
+  `0x10000` low. With this board's numbers the routine's `w21` is `1 * 0x1000 + 0xFFF0` and
+  `uxth` keeps `0xFF0`, so the item is at `base + 0x1000 + 0xFF000` — the address the read-back
+  now confirms, and the last `0x1000`-aligned block inside the partition.
+
+Both are the stub's, not the launcher's, and both change the assembled bytes, which is why the
+ladder's stub is not the stub seed 5 ran: seed 5's is `5d3f2929…` and this step's rungs are
+`f567b832…` and `a082b796…` (plus `c1795b87…` and `be98d7aa…` for the two control rungs). The
+stub's own comment predicts the consequence of the two corrections — "every descriptor stayed
+zero, and the `smem_type=402` and `smem_type=404` failures the first seeded runs printed are the
+driver reporting the absence this line created" — and the ladder shows that prediction is
+**half right**, which is the next section but one.
+
+What the seed does not fix, and the stub says so in the same breath, is the block's `+2`
+halfword: the routine at RVA `0x901C` reads it and hands it back, and its caller compares it at
+`0x90C0` against `[x19+4]`, an id from the caller's own descriptor that nothing in the tree
+supplies. That field is written as zero, and the stub names it as "a second missing value of the
+same kind as the AOP pointer".
+
+### The ladder: one payload, four rungs, one row
+
+The four rungs are the same payload under the stub with one more switch each, and the payload
+is the same in all four — `sha256 0dcfbd6a…`, md5 `0e5226c0…`, 3,145,840 bytes — which is the
+point of running them as a ladder: the only thing that differs between two adjacent rungs is
+the seed.
+
+| rung | the stub's switches | stub sha256 | where it stops |
+|---|---|---|---|
+| 1 | neither | `c1795b87…` | the EL3 exception path, `ASSERT [DxeCore] DefaultExceptionHandler.c(339)` |
+| 2 | `--el3-zero-mem` | `be98d7aa…` | `SMEM Target info addr=0x00000000 memory mapping failed.` + `ASSERT smem_target.c +435`, at `K 1` |
+| 3 | `+ --el3-seed-smem` | `f567b832…` | `K 17 SU 16/69`, then the `CB29F4D1-…` assert |
+| 4 | `+ --el3-seed-aop` | `a082b796…` | `K 17 Ss 17/69`, `K 18 Ss 18/69`, then the same assert |
+
+Rungs 1 and 2 are controls for the machine rather than for the question: the stub without the
+stage-2 redirect lets a physical address `virt` does not decode reach the guest's own exception
+handler, and the stub with the redirect but without the SMEM seed leaves the word EnvDxe reads
+as the address of the SMEM target-info structure at zero, which is the assert the seed exists to
+remove. Rung 3 is the control for the question — it is 4.126's own seeded configuration, with
+this step's two SMEM corrections added — and it reaches Apriori 17 and prints, in order:
+
+```
+K 16 Ss 16/69 free=1024 ACDF8D8E-CA32-51D8-9273-B92BF2CF019C
+Error: Image at 0009C565000 start failed: Unsupported
+K 17 SU 16/69 free=1024 D461A719-F2EC-5C77-A7AF-045F17ED012C
+K 18 Ss 17/69 free=1024 40256211-624E-580B-97ED-3011FB3CB9A3
+```
+
+Rung 4 adds the AOP record and nothing else, and its rows are:
+
+```
+K 16 Ss 16/69 free=1024 ACDF8D8E-CA32-51D8-9273-B92BF2CF019C
+K 17 Ss 17/69 free=1024 D461A719-F2EC-5C77-A7AF-045F17ED012C
+K 18 Ss 18/69 free=1024 40256211-624E-580B-97ED-3011FB3CB9A3
+```
+
+Two differences, and they are the same difference. `SU` becomes `Ss` — the letters and not just
+the count — so the driver's `EntryPoint` returned `EFI_SUCCESS` on this machine once its gate
+was satisfied; and the payload's own `Error: Image at 0009C565000 start failed: Unsupported`
+row is **not in the capture at all**, where rung 3 printed it immediately above the row. That
+row is the core's report and not the driver's: it is printed inside Apriori 17's own iteration,
+so it named `CmdDbDxe` and it named the status the loader saw. With the AOP record present there
+is no such row and no `U`.
+
+So the question 4.126 left confounded is answered, and it is answered against both of the
+candidates that step named. The build did not do it: rungs 3 and 4 are the same payload bytes.
+SMEM's heap did not do it: rung 3 is the run *with* this step's SMEM corrections, and its `K 17`
+row is `SU`; the row that moved is at Apriori 17, fifteen entries past the `smem_type=402` row
+that rung 3 prints at Apriori 2. It was the AOP record. 4.126's "experiment that is within
+reach" — extend the seed to SMEM's heap, then read `K 17`'s letters — is not the experiment that
+was needed, and this ladder shows it would not have answered the question it was designed for.
+
+The limit is in the header and it belongs beside this: what the seed changes is that the
+driver's gate passes, not that the driver works. The command database the driver reads next is
+at `AOP CMD DB 0x80860000`, which is RAM holding zero here, so a failure further inside
+`CmdDbDxe` would be the absent database and not the seed. This run reports one row's change and
+nothing about what the driver did after it started.
+
+### What the two SMEM corrections moved, and what they did not
+
+Rung 3 is the first run of the corrected SMEM seed, and comparing its stream against seed 5's
+says exactly what the two values bought. The `smem_alloc` row is gone. Seed 5 printed it twice —
+once at the end of its first pass and once at the end of its second — and rung 3 does not print
+it at all:
+
+```
+seed 5, stream row 80, first pass:  smem_alloc: SMEM allocation failed! smem_type=404, buf_size=8192
+rung 3, stream row 80, same place:  K 11 Ss 11/69 free=1024 BE17C909-CDB8-5503-A06E-52E8F6F9BBFC
+```
+
+That is the allocator finding the item, and the item's address is the second of the two
+corrections — the missing `uxth`, which put it at `0x80A00000` instead of `0x809F0000`. Both
+rows diverge at the same point in the same pass, so this is the seed and not the sampler.
+
+The `smem_get_addr` row did not move, and it is the row the entry's host fields were supposed to
+fix. Rung 3 still prints it, between `K 1` and `K 2`, where it has been since 4.125:
+
+```
+smem_get_addr: SMEM get addr failed! smem_type=402
+WARNING: Unable to read memory partition table from SMEM
+```
+
+and a second one at Apriori 13, `smem_type=137`. So the correction that installs the TOC entry
+(the host fields, without which the entry was skipped and no descriptor could be written) moved
+one of the two rows the stub's comment predicted and not the other. The stub's own account of
+the block scan names the candidate: the `+2` halfword is compared at `0x90C0` against an id
+nothing in the tree supplies, so a block that reaches the scan can still be rejected and leave
+descriptor 0 empty. **Whether that is why `smem_get_addr` survives this step's seed is not
+established here** — the run shows the row, and the reason is the next thing to read in the
+image.
+
+The corrections moved a third thing, and it is one step 4.126 could not explain. On seed 5 the
+`404` row and Apriori 11's row share a line, and the row's letter was `SO`:
+
+```
+seed 5, attempt 2, stream row 158:
+smem_alloc: SMEM allocation failed! smem_type=404, buf_size=8192K 11 SO 11/69 free=1024 BE17C909-…
+rung 3, stream row 80:
+K 11 Ss 11/69 free=1024 BE17C909-CDB8-5503-A06E-52E8F6F9BBFC
+```
+
+`SO` is the letter 4.126 read as "not a failure and not a success", and left open with `SO`'s
+value as a question for the phone's `P2 WHAT` row. In this step's captures the two are not
+independent: the only stream in this document that prints `K 11 SO` also prints the alloc
+failure on the same row, and the stream that removes the alloc failure prints `Ss` there. That
+is a correlation and not a mechanism, but it does narrow the question — `SO` at Apriori 11 is
+not reproducible without the failed allocation beside it, so whatever the letter stands for, a
+run whose SMEM seed works does not reach it.
+
+What is established is that it does not matter for this ladder's result: the row fails in rungs
+3 and 4 alike, both of which reach `K 18`, so the failing `smem_get_addr` is not what stands
+between this machine and Apriori 19.
+
+### What did not change, and correcting 4.126 on which payload was under the instrument
+
+The seeded run 4.126 already had ended with these two rows, and this step's rungs 3 and 4 end
+with the same two:
+
+```
+ERROR: C90000002:V03000007 I0 CB29F4D1-7F37-4692-A416-93E82E219766
+ASSERT DebugLib.c +78: Format != ((void *) 0)
+```
+
+Seed 5's last twelve stream rows and rung 3's last twelve are identical, text for text. That is
+worth stating flatly because the working note going into this step read the pair as a *new*
+regression, one Apriori entry further than seed 5's stop, and attributed it to the payload at
+`/tmp/gauguin-kernel.raw` having been replaced. It is not new: it is the same stop at the same
+entry, in a capture whose seed differs from seed 5's in two values that the ladder can be seen
+to have changed elsewhere. The ceiling did not move with the seed.
+
+The row's caller id is `RpmhDxe`'s, and this step can show it in bytes rather than in row order.
+The sixteen bytes of `CB29F4D1-7F37-4692-A416-93E82E219766` occur in exactly two files under
+`Binaries/gauguin`: `RpmhDxe.efi`, at file offset `0xe018` — inside its `.data` section, which is
+VMA `0xe000`, so the constant sits at RVA `0xE018` of that image — and one `RawFiles` entry
+beside it. No `FILE_GUID` in the tree's INF/DSC/DEC declarations is that value; `RpmhDxe`'s is
+`60F4DF83-C758-52B5-9AA0-92EA560EDB8F`. So a `K 19` row for `RpmhDxe` would carry `60F4DF83-…`,
+and the `ERROR:` row carries something else — the image's own name for itself, printed by the
+status-code path. That is the reading step 4.125 gave this pair — one `DebugAssert` in
+`RpmhDxe`, printed once through the status-code handler and once by DebugLib — reached here from
+the bytes rather than from the row order, and it is why the pair is one stop and not two.
+
+Step 4.126 also says, at `:25286-25288`:
+
+> The mirror's payload is `/tmp/gauguin-kernel.raw`, md5 `0e5226c062935eb0465b3409eba74c39`.
+> The file at that path today is neither: it is the 4.74 set, sha256
+> `90b21643e3450c326fb3d24baf64d58d4692a5d155c36b76d2e020ff04a96b59`.
+
+The second sentence is wrong. The file at that path is the mirror's payload — the value in the
+first sentence, 3,145,840 bytes — and it has been throughout: its mtime is `2026-09-26 13:05`,
+before step 4.125's own panel sampling at 15:58 and before seed 5's run at 16:07, and before
+every capture in this step. What the second sentence quotes is not a payload in that path at
+all: `90b21643…` is `work/out/p2-variants/Mu-gauguin-silicon-gzip.img` — the flashed image, the
+set this document calls the 4.74 set — so the row appears to have hashed the image and written
+the payload's path beside it.
+
+That matters beyond bookkeeping, because 4.126 built a confound on it. The payload the phone
+ran and the payload the mirror ran were said to be unreachable in one direction and replaced in
+the other, and "the two are confounded in every capture here" rests on that. The first half
+stands — the phone's payload, md5 `a2963f46faeb27fe601022c3a67aa738`, is still on no disk here.
+The second half does not: every capture in 4.125, 4.126 and this step records
+`0dcfbd6a…` / `0e5226c0…` in its own header, and the file's mtime orders it before all of them.
+
+### Read this step
+
+Instruments: `tools/qemu-panel-read.py`'s `aop_words` and the rewritten AOP checks with the
+one-block bound; `tools/qemu-el3-stub.S`'s `SEED_AOP_IPA` / `SEED_AOP_STATE` / `SEED_AOP_MAGIC`
+/ `SEED_AOP_REC_OFF` and its three stores, and its `SEED_SMEM_ENTRY_HOST` and
+`SEED_SMEM_TABLE_REL` expressions; `l2_plan` and `block_for_ipa` in the launcher against the
+run's own `57 region(s)` / `55 2 MB block(s)` / `0x40000000..0x46e00000` line; four captures
+made with one payload, `sha256 0dcfbd6a…`, and four stub hashes (`c1795b87…`, `be98d7aa…`,
+`f567b832…`, `a082b796…`) against seed 5's `5d3f2929…`; the row-by-row comparison of seed 5's
+and rung 3's streams with each capture's last twelve rows; `sha256sum` and `md5sum` over
+`/tmp/gauguin-kernel.raw` with its mtime and over `work/out/p2-variants/Mu-gauguin-silicon-gzip.img`;
+`aarch64-linux-gnu-objdump -d` and `-h` over `device/dxe/EnvDxe.efi` at `0x83b8`, `0x83c8`,
+`0x83f4`, `0x8408`, `0x8b2c`, `0x8de0` and `0x8f84` and a byte walk of its `.data` page at
+`0xd800`, plus the CmdDbDxe gate at RVA `0x45c0` and `0x2540`; a byte search for the
+`CB29F4D1-…` bytes across `Binaries/gauguin` and a `FILE_GUID` search across the tree's
+INF/DSC/DEC files. Nothing was built for the device, nothing was flashed, no partition was
+written, and the device was absent.
+
+| | |
+|---|---|
+| instrument | the launcher's AOP read-back with the widened dump, its `block_for_ipa`/`l2_plan` lookup, the stub's two SMEM corrections, four runs of one payload under four stub variants, `EnvDxe`'s own instructions and data, the two seeded captures' streams side by side, and hashes over the payload, the image and every stub — nothing was built, flashed or written |
+| shows | that the AOP seed is written where the driver looks and reads back consistently, the mailbox word being a pointer (`0x42bf000c` holds `0x0c3f0014`, the record at `+8` holding `1` and `0x0c0330db`); that the ladder moves exactly one row — `K 17 SU 16/69` to `K 17 Ss 17/69` — and removes the payload's own `Error: Image at 0009C565000 start failed: Unsupported` row, so `EFI_UNSUPPORTED` was the absent AOP record; that rungs 3 and 4 stop in the same two rows seed 5 stopped in; and that the corrected SMEM seed removes the `smem_alloc` `404` row and leaves the `smem_get_addr` `402` row where it was |
+| adds | the `aop_words` unpacking with the guard the record's position needs and the one-block bound that replaces an assumption; the ladder table with each rung's stub hash and ceiling; the demonstration that `EFI_UNSUPPORTED` was the absent AOP record — not the build, which is the same payload bytes in both rungs that matter, and not SMEM's heap, which is still failing in the rung that removed the `U`; the two SMEM corrections with the instructions that require them, and the measurement that they take the `404` row off and not the `402` one, which is half of what the stub's own comment predicted; and the `CB29F4D1-…` bytes found at RVA `0xE018` of `RpmhDxe.efi`'s `.data` against `RpmhDxe`'s `FILE_GUID` of `60F4DF83-…` |
+| corrects | the working note that read this step's runs as a new regression one Apriori entry past seed 5: rung 3's last twelve rows are seed 5's last twelve rows, text for text, and the ceiling did not move when the seed did; step 4.126's paragraph at `:25286-25288` claiming the file at `/tmp/gauguin-kernel.raw` is not the mirror's payload — it is, and `90b21643…` is `work/out/p2-variants/Mu-gauguin-silicon-gzip.img`; the earlier reading that the AOP seed's read-back disagreement meant the seed was miswritten, when it was the read that unpacked three words from zero; the reading of `0x8e84` as an abort, which is the walker's `0xFFFFFFFE` "type" return — its other return, `0xFFFFFFFC` at `0x8e8c`, is what an empty descriptor produces, and the stub's own account has the flag-only seed reaching that one; the frame in which the `0xD830` descriptors are values a seed could supply, when that address is inside the driver's loaded image `.data` and the image's load writes it, so the descriptor has to be produced by the driver's initialiser and the seed's job is the TOC that initialiser reads; and step 4.126's experiment proposal, which this ladder shows would not have answered the question it was designed for |
+| does not close | the P3 gate and the owed panel reading of the flashed 4.74 set; why the `smem_get_addr` `402` row survives the corrected seed, with the block scan's `+2` id at `0x90C0` as the candidate and no run yet that separates it from the alternative; what `CmdDbDxe` does once started, since the command database at `0x80860000` is absent here; the second entry into the payload that seed 5's capture holds and rung 3's does not — the two-attempt stream and this step's one-attempt stream correlate with the `404` row's presence and with nothing else this step measured, and no mechanism is claimed; `SO`'s value, which needs `P2 WHAT`; and the phone's own `K` rows, which remain the only record that could confirm this ladder against the device |
+| not an action | nothing was built for the device, nothing was flashed and no partition was written; the changes are to the launcher's read-back and to the stub's SMEM seed, and every run that judged them is a QEMU run |
