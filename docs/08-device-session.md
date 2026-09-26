@@ -26663,3 +26663,76 @@ the second.
 | corrects | `docs/00-plan.md`'s P2 paragraph (lines 40-41 as they stood before this step's own edit to them), whose *"46 matches, 19 started, 27 failed to load"* is right as a count and whose *"and not one `?`, so the batch drained rather than stopping"* is backwards — a short line is the stopping — and whose two named anchors then move with the map; the plan's owed-readings paragraph (line 121 as it stood), whose *"the one Apriori name that matches nothing in this volume"* describes a presence fault when `unhit=` counts a discovery one and no name is missing from any measured volume; the plan's step 4.125 paragraph (line 82 as it stood), whose *"the same entry index at which the device's `P2 SEQ` records its first failure"* (requoted at `docs/08:26020`) is the same *slot* and not the same entry, since under the loop's map the phone's first `L` at slot 18 is ap20 `PdcDxe` while the mirror's stop is ap19 `RpmhDxe`; the plan's step 4.126 paragraph (lines 101 and 108 as they stood), whose *"`P2 SEQ`'s index *i* is Apriori entry *i + 1*"* holds only on a completed walk and whose *"the coincidence of index 19"* is a coincidence of slot; Step 4.12's `P2 SEQ`'s index *i* is Apriori entry *i + 1*, which its own quoted mechanism does not give except on a contiguous prefix and which is false from slot 13 on at both admissible stops; Step 4.128's open question, answered *no* for this archive; `tools/arch-protocol-census.py`'s docstring premise that the string is *"positional and independently corroborated"*, together with the per-protocol `ap`/`pos` columns derived from it; the fourth line of `tools/fv-census.py`'s `=== SEQ join ===` framing, which is already flagged as an assumption in the tool and whose numbers this step supplies; and the reading of `CoreDispatcher ()` returning as the walk having reached the end of the volume, which it does not establish |
 | does not close | the P3 gate and the owed panel reading of the flashed 4.74 set under *先读屏，再刷下一次*; which of the two admissible stops — physical 49 or 50 — the phone's walk reached, since their batches are byte-identical and only `P2 WALK seen=` separates them (48 against 49); the phone's own `P2 SEQ` length, `P2 APRI first=`, `unhit=` and `P2 APRI entries=`, which are the four readings that would put the phone on one side of this step or the other; what the phone's payload volume's own physical order is, since the two volumes measured here agree on the promotion table but the payload it is running carries no capture; which of the 27 `L` letters each `K` row's `free=` belongs to; whether `E722B03F-…` is installed as a protocol; and the whole of P4 and P5 |
 | not an action | nothing was built for the device, nothing was flashed and no partition was written; every reading in this step is off files already on disk, and no device is attached to this machine. The porting goal is not advanced by it: P3's display, USB-host and buttons items remain unfinished and P4 and P5 are not begun |
+
+## Step 4.131 — the four committed tools that name drivers under `P2 SEQ` slots carried step 4.130's falsified premise in their own words, so the premise is corrected where the tools state it
+
+Step 4.130 measured that `P2 SEQ`'s slot `k` belongs to the `k`-th Apriori entry that **matched**, and
+that the identity map the record has read the letters through is not that map. The measurement is in
+`docs/08`, but the premise it falsifies is *stated* in four committed tools — in their docstrings, in
+a code comment, and in three lines they print — and a record whose instruments assert a refuted claim
+re-derives the error every time an instrument is run. That is the failure steps 4.94 and 4.130 are both
+about: not a number a reader could not ask again, but a claim the reader has no way to check because
+the tool says it and the tool is what is being trusted. So this step corrects the statements. It changes
+**no arithmetic**: every number each tool prints is the number it printed before, verified below. Nothing
+was built, flashed or written; the only files touched are the four tools, and no device is attached to
+this machine.
+
+### What changed, file by file
+
+| file | what it said | what it says now |
+|---|---|---|
+| `tools/apriori-index.py` (docstring) | *"**The position mapping, and why it is trustworthy.** Promoted position `i` is Apriori file index `i + 1`"*, with `mP2AprioriGuid[i]` filled "in file order with `mP2Apriori++` inside the match branch" given as the reason | the same mechanism, read off the source: `CopyGuid` and `mP2Apriori++` are **both** inside the match branch (`Dispatcher.c:2115-2120`), so slot `k` is the `k`-th **match**; `i + 1` needs the extra premise that the matched set is the contiguous prefix, which a completed walk gives (69 entries on this volume) and a stopped walk does not (33 of 46 slots move, from slot 13) |
+| `tools/apriori-index.py` (the two anchors) | *"so position 21 is `ShmBridgeDxe`"*, *"so position 36 is `SecurityStubDxe`"* — the slot as the conclusion | the array's names asserted as the array's: ap22 is `ShmBridgeDxe`, ap37 is `SecurityStubDxe`; the letters quoted beside them (slot 21 is `s`, slot 36 is `L`) hold under **either** map, so the anchor checks the volume and cannot check a string |
+| `tools/apriori-index.py` (`--skip`) | a single shift, *"the name tables are shifted from `SEQ[j-1]` on"* | unchanged, plus one paragraph: a stopped walk is neither of the two shapes `--skip` models — its batch drops a tail *and* re-admits the array's last four entries, which sit physically **below** the stop — so `--skip` cannot decode one |
+| `tools/apriori-index.py` (printed) | *"anchors hold … (two independent readings agree with this table)"*; *"this image offers 69 promoted positions and the string has 46"* with *"(a length disagreement is itself a reading: `docs/08`'s decode table has a row for each way the array can be short)"*; *"no '?' -> the drain reached every promoted entry; the batch ran to the end of the array"* | the anchors line says what they are — the volume's names, quoted against letters that read the same under either map; the length branch says the volume leaves only one reading (70 entries, all present, a completed walk prints 69, so a 46-character line is a walk that **stopped**), that the `ap` column is the **volume's** map, and names slot 18 = ap20 `PdcDxe` as the first slot that moves; `no '?'` now says the batch ran to the end of *the string* — which is what the letters say — and that whether the string is the whole array is a question no letter answers |
+| `tools/arch-protocol-census.py` (docstring) | *"The volume's `P2 SEQ` letter string is positional and independently corroborated … so it is the better record of the two"* | positional in the **loop's** sense (slot `k` = `k`-th match), corroborated against `P2 STATS apriori=46/70`, and a stopped walk; the bijection the tool asserts survives because it is **entailed by the array indices and the run boundaries** — the eight `L` producers' slots lie inside the solid `L` run under both maps (30..43 identity, 28..38 loop) and the four `s` producers' slots inside the opening eighteen `s` — so the letters supply no evidence about the names |
+| `tools/arch-protocol-census.py` (docstring, top) and (printed) | *"`VariableRuntimeDxe` is `ap31 pos 30`"*; *"the partition agrees … the same names on both sides, not two counts that happen to match"* | ap31 is at slot 28 under the loop's map and 30 under the identity map, **both `L`**, which is why the verdict does not turn on the map; the partition line keeps its verdict and gains the sentence that the letters do not evidence it — the source census does |
+| `tools/arch-protocol-census.py` (code comment) | the position `p` used to index the letter string, undiscussed | the comment now says `p` is the volume's position and the string's slot only on a completed walk, so `letters[p]` is a letter belonging to some other entry — the same letter for all thirteen producers here, which is exactly why the bijection is entailed and not corroborated |
+| `tools/fv-census.py` (SEQ-join framing) | *"it is the batch a walk that reached the end produces"* and, of the cut, *"ap14 … sits at physical 52, above the stop, so a stop leaves it out and **every later slot shifts by one**"* | the batch is the completed walk's, unchanged; the cut is not a one-index shift and the shift is not uniform — `{1..13, 15..21, 23..34, 36..43, 45, 46, 66..69}` gives +1 past ap14, +2 past ap22, +3 past ap35, +4 past ap44, and a jump to ap66 at slot 42 |
+| `tools/apriori-prefix.py` (docstring) | *"a scan that reached 80 DRIVER files promotes a contiguous run of the array, while a scan cut at 48 or 49 promotes a scattered set"* | the same two candidates with the first one's premise stated: no array on this disk supports it, since a complete scan of the 70-entry array promotes **69** and a 46-character line is a scan that stopped (`docs/08` step 4.130); the contiguous `ap1..ap46` batch is what a complete scan gives when the array was read 368 bytes short — the `entries=47` reading — so the census is the truncated-array reading and the cut is the whole-array one |
+
+**Left deliberately alone.** Every computed number in all four tools, including `ANCHORS`, `SEQ`, the
+`ap`/`pos` columns, the producer census and `fv-census.py`'s two tables. The `ap`/`pos` columns stay
+because on a completed walk they are the right columns and because they are the only name-under-slot
+output the tool has; what changed is that they are now labelled as what they are. `--skip` and its
+arithmetic are unchanged for the readings it was written for.
+
+### How the edits were checked
+
+- `python3 -m py_compile` on all four files.
+- `tools/fv-census.py` re-run with no arguments and its output diffed against the pre-edit run kept at
+  `/tmp/fv-census.out`: **empty diff**, exit 0. The framing paragraph is a comment; the tables are
+  byte-identical.
+- `tools/arch-protocol-census.py` on `work/out/p2-4.94/Mu-gauguin-silicon-gzip.img` with the recorded
+  SEQ and the eight-name transcription: exit **1** both before and after the edit, checked by stashing
+  the edit and re-running. The non-zero exit is the transcription's missing `Variable Write` — the
+  defect the tool was written to catch — and not a regression.
+- `tools/apriori-index.py --seq ssssssssssssssssssLLLsLLLLLLLLLLLLLLLLLLLLLLLL`: exit 0, and the two
+  new caveat paragraphs print above the table.
+- `tools/apriori-prefix.py --target 46`: unchanged, `70 bands`, `seen values giving exactly 46
+  promotions: [48, 49]`, and the slot-by-slot batch read off its table is
+  `{1..13, 15..21, 23..34, 36..43, 45, 46, 66..69}` — step 4.130's batch, from a tool whose batch
+  computation was not touched. Its `--letters` block already concluded *"the recorded string has no
+  slot map of its own, so it cannot choose between two batches of its own length"*, which is the same
+  argument this step applies to `fv-census.py`; the two were written from the same reading and the
+  second one is what step 4.130 then measured.
+
+### What the tools still cannot do
+
+- **No option models a cut.** `--skip J` renumbers past one entry; the cut drops four interleaved
+  entries and a tail and re-admits the array's last four. A stopped-walk string therefore cannot be
+  decoded by any of these four tools as they stand, and the honest thing for them to do — which is now
+  what they say — is refuse the names and read the letters.
+- **No letter decides which map the run used.** That is `P2 APRI entries=`, `sum=`, `miss=` and
+  `unhit=`, which the phone has never been read for. The prediction is single-valued on this archive
+  for a completed walk (`bytes=1120 entries=70 sum=a998b263`, `unhit=1`) and single-valued for a
+  46-promotion stop (`unhit=24`, `miss=14 PlatformInfoDxeDriver`), so either reading settles it.
+
+| | |
+|---|---|
+| instrument | the four tools' own text — docstrings, a code comment and four printed conclusions — read against `Dispatcher.c:2115-2120` and `docs/08` step 4.130; `git stash` to re-run each tool pre-edit; `diff` of `tools/fv-census.py`'s output against `/tmp/fv-census.out`; `py_compile` on all four; `tools/apriori-prefix.py --target 46` re-run for its own batch table; nothing was built, flashed or written, and no device is attached |
+| shows | that the premise step 4.130 falsified is stated in four committed tools rather than only in `docs/08`, and that three of them print it as a conclusion — `apriori-index.py`'s *"anchors hold … two independent readings agree"*, *"the batch ran to the end of the array"* and its length-disagreement message, `arch-protocol-census.py`'s *"the partition agrees … not two counts that happen to match"*; that the mechanism the tools cite is right and the conclusion drawn from it is not, since `CopyGuid` and `mP2Apriori++` are both inside the match branch; that the two `apriori-index.py` anchors are array-name assertions whose accompanying letters hold under either map, so they cannot catch a stopped walk; that `fv-census.py`'s *"every later slot shifts by one"* is wrong beyond the first unhit entry, the shift being +1/+2/+3/+4 and then a jump to ap66; and that `apriori-prefix.py`'s *"reached 80 DRIVER files promotes a contiguous run"* needs the truncated-array premise, since a complete scan of the 70-entry array promotes 69 |
+| adds | the corrected statement of the mapping in the four places a reader would otherwise re-derive the falsified one, which is what makes step 4.130's finding survive contact with the toolchain; a printed warning from `apriori-index.py` whenever a string's length is not the completed-walk length, naming the volume's map as the one being shown; the arithmetic of the cut's shift, which is not a shift by a constant and had been written as one; and the premise `apriori-prefix.py`'s complete-scan candidate rests on |
+| corrects | `tools/apriori-index.py`'s *"The position mapping, and why it is trustworthy"*, its two anchor conclusions, and the three printed conclusions above; `tools/arch-protocol-census.py`'s *"positional and independently corroborated"* and its `ap31 pos 30`; `tools/fv-census.py`'s *"every later slot shifts by one"*; `tools/apriori-prefix.py`'s complete-scan candidate. Step 4.130's `corrects` row named the first two of these as corrections of the record's premise; this step is where the tools themselves say so |
+| does not close | nothing about the device: the P3 gate and the owed panel reading of the flashed 4.74 set under *先读屏，再刷下一次* are untouched, and so are the phone's `P2 APRI entries=` / `sum=` / `miss=` / `unhit=`, which are still the rows that would decide which map the run used; no tool here can decode a stopped-walk string, and none was made able to |
+| not an action | no firmware was built, nothing was flashed, no partition was written; the four edited files are development tools that read images off this disk, and their computed output is unchanged — `fv-census.py`'s is byte-identical. The porting goal is not advanced by this step: P3's display, USB-host and buttons items remain unfinished and P4 and P5 are not begun |

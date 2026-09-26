@@ -21,7 +21,10 @@ including `Variable Write`. That assertion is impossible on the source alone.
 only reached *from* that same entry point (`:601` when
 `PcdEmuVariableNvModeEnable` is TRUE, otherwise through `FtwNotificationEvent` at
 `:499`). Nothing else in the tree installs either one - measured, not assumed -
-and `VariableRuntimeDxe` is `ap31 pos 30` in `P2 SEQ`, where the letter is `L`.
+and `VariableRuntimeDxe` is `ap31` in `P2 SEQ`, where the letter is `L` - at slot
+28 under the loop's map and slot 30 under the identity map, both of them `L`, which
+is why this tool's verdict does not turn on which map is used (`docs/08` step
+4.130).
 `L` is stamped before the entry point is called, so the driver's code never ran
 and **both** protocols are absent. The set has nine names, and the transcript was
 short one.
@@ -32,15 +35,31 @@ one line per missing entry is easy to transcribe one short when two adjacent
 entries of `mArchProtocols[]` share a producer, and `Variable`/`Variable Write`
 are adjacent and do.
 
-**What makes the set checkable.** The volume's `P2 SEQ` letter string is positional
-and independently corroborated - 46 letters against `P2 STATS apriori=46/70`, with
-two anchors from a volume reading that did not come from the string - so it is the
-better record of the two. And on this firmware the partition is exact: nine
-protocols are absent and nine of the thirteen producers carry `L`; four are present
-and the four remaining producers carry `s`. No residue either way. The tool
-asserts that bijection rather than printing the two counts side by side, because
-two counts that agree are a coincidence until the *same* nine names land on the
-same nine letters.
+**What makes the set checkable, and what the letters do not do.** The volume's
+`P2 SEQ` letter string is positional - `mP2AprioriGuid` is written inside the
+match (`Dispatcher.c:2115-2120`), so slot `k` belongs to the `k`-th Apriori entry
+that matched - and it is corroborated against `P2 STATS apriori=46/70`. But it is
+positional in the *loop's* sense and not the array's: a walk that stops hands over
+the entries below its stop, and this device's 46-character string is a stopped
+walk, of which no archived build's array can make a completed one (`docs/08` step
+4.130). At the two stops that give exactly 46 promotions the slots cease to be
+`ap(k+1)` from slot 13 on, so no name read off this string by position is a
+reading of the run.
+
+The bijection the tool asserts survives that anyway, and it survives for a reason
+worth stating: on this firmware the partition is exact - nine protocols are absent
+and nine of the thirteen producers carry `L`, four are present and the four
+remaining producers carry `s`, no residue either way - and every one of the eight
+`L` producers' slots lies inside the string's solid run of `L` under *both* maps
+(slots 30..43 under the identity map, 28..38 under the loop's), while all four `s`
+producers' slots lie inside the opening run of eighteen `s`. So the eight names
+*cannot* land on anything but `L` and the four cannot land on anything but `s`:
+the bijection is **entailed by the array indices and the run boundaries, and the
+letters supply no evidence about the names at all.** The tool asserts it rather
+than printing the two counts side by side because two counts that agree are a
+coincidence until the *same* nine names land on the same nine letters - which is
+still the reason to print names, but the agreement here is not the reading it
+looks like.
 
 **Where the producer map comes from, and why it is measured.** Producer-to-protocol
 is not recoverable from a volume: an FFS file records the protocols it consumed
@@ -591,6 +610,13 @@ def main():
                          " position cannot carry one letter")
             e = hits[0]
             p = pos.get(e["file"])
+            # `p` is the *volume's* position for this entry (`ap - 1`, since only
+            # entry 0 fails to match), and the string's slot only when the walk
+            # completed. On this device's stopped walk the two disagree from slot
+            # 13 on, so `letters[p]` is a letter that belongs to some other entry -
+            # the same letter for all thirteen producers here, which is exactly why
+            # the bijection this tool asserts is entailed and not corroborated (see
+            # the docstring and docs/08 step 4.130).
             ch = letters[p] if (letters and p is not None and p < len(letters)) \
                 else None
             rows.append(dict(
@@ -622,6 +648,11 @@ def main():
                   f" {len(present)} whose producer is `s` are the {len(present)}"
                   " present - the same names on both sides, not two counts that"
                   " happen to match")
+            print("  Read the next sentence before using that as corroboration:"
+                  " every producer's slot lies inside a solid run of one letter"
+                  " under either slot map (`docs/08` step 4.130), so the names"
+                  " cannot land on anything else and the letters do not evidence"
+                  " them. What evidences the nine is the source census above.")
     code = 0
     if args.panel:
         print()

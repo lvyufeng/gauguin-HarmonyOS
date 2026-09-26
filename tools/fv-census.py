@@ -431,12 +431,17 @@ else:
 #
 # **This table is the identity map, SEQ[k] = ap(k+1), and the map is an
 # assumption and not a reading**: it is the batch a walk that reached the end
-# produces. `tools/apriori-prefix.py` prints the same table for the cut batch,
-# where every slot from 14 on holds the next entry instead (ap14
-# PlatformInfoDxeDriver sits at physical 52, above the stop, so a stop leaves it
-# out and every later slot shifts by one). Step 4.104: the letters have no slot
-# map of their own, so what this table shows is what the observed string reads
-# like *if* the walk completed - it cannot establish that it did.
+# produces. `tools/apriori-prefix.py` prints the same table for the cut batch.
+# The cut is not a one-index shift, and the shift is not uniform: at the two stops
+# of this volume that give 46 promotions the batch is
+# {1..13, 15..21, 23..34, 36..43, 45, 46, 66..69}, so the slot holds one entry
+# further along for every entry the walk never handed over - +1 past ap14, +2 past
+# ap22, +3 past ap35, +4 past ap44 - and at slot 42 it jumps to ap66, because the
+# array's last four entries sit at physical 14..22, *below* the stop, and are
+# matched by a walk that stopped. Step 4.104: the letters have no slot map of
+# their own, so what this table shows is what the observed string reads like *if*
+# the walk completed - it cannot establish that it did. Step 4.130 measures the
+# batch.
 # ---------------------------------------------------------------------------
 print()
 print("=== SEQ join: ap1..ap69 vs the 46 characters ===")

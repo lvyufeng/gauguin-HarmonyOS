@@ -19,6 +19,16 @@ files sit low in the volume and late in the array. The two batches share 42
 entries and differ in eight, so `P2 DIAG`'s GUID list separates them outright,
 and this tool prints both lists for comparison against a photograph.
 
+The "reached 80" candidate needs its premise stated, because no array on this
+disk supports it: every archived payload's array is 70 entries with entry 0 the
+core file and 1..69 all present `DRIVER`s, so a scan that reached the end of
+*this* volume promotes **69**, and a 46-character line is a scan that stopped
+(`docs/08` step 4.130). The contiguous `ap1..ap46` batch is what a complete scan
+gives when the array was read 368 bytes short at run time - the `entries=47`
+reading - which is why the census below is the truncated-array reading and the
+cut is the whole-array one, and why the row that decides between them is `P2
+APRI` and not any letter string.
+
 The letters (`s`, `L`) cannot separate them and no reading of them ever will.
 Each character is the load result of the driver in that slot, and the slots are
 the hypothesis under test - so a string of the right length is consistent with

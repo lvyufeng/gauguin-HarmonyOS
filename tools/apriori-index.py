@@ -23,28 +23,42 @@ This tool removes that step. It prints, for every position, the Apriori file
 index, the GUID and the driver's own name, so a letter string read off the panel
 is decoded here rather than by eye.
 
-**The position mapping, and why it is trustworthy.** Promoted position `i` is
-Apriori file index `i + 1`: the array's entry 0 is `DxeCore`, which is a
-`DXE_CORE` file and is never added to the discovered driver list, and every other
-entry in this array names a `DRIVER` file the volume contains. So position is file
-order minus the non-matches (`Dispatcher.c:2050-2060` fills `mP2AprioriGuid[i]` in
-file order with `mP2Apriori++` inside the match branch), and on this volume the
-only non-match is entry 0.
+**The position mapping, and the one premise it needs.** `mP2AprioriGuid` is
+written *inside the match* - `CopyGuid` and `mP2Apriori++` are both in that branch
+(`Dispatcher.c:2115-2120`) - so **slot `k` belongs to the `k`-th Apriori entry
+that matched**, in increasing file index. Position `i` is Apriori file index
+`i + 1` when the matched set is the contiguous prefix `ap1..apN`, and a walk that
+reaches the end of the volume gives exactly that: entry 0 is the `DXE_CORE` file,
+which `CoreAddToDriverList` is never called for, and entries 1..69 are `DRIVER`
+files the volume contains, so a completed walk promotes all 69 (`docs/08` step
+4.130). A walk that *stops* hands over the entries below its stop, and those are
+not `ap1..apN`.
+
+That premise is load-bearing here, because the mapping this tool prints is the
+**volume's** and the phone's run is a stopped one: its `P2 SEQ` is 46 characters,
+and no build on this disk has an array short enough to make that a completed walk.
+At the only two stops of this volume that give exactly 46 promotions, 33 of the
+46 slots name a different entry than the identity map does, from slot 13 on - slot
+18 is `PdcDxe` (ap20) and not `RpmhDxe` (ap19), and slot 21 is `DiskIoDxe` (ap24)
+with `ShmBridgeDxe` (ap22) unhit, so never promoted at all.
 
 That is also what `docs/08`'s decode table means when it writes `ap1..ap46
-matched`, and what `fv-census.py` means by its 1-based "Apriori N": **position `i`
-is Apriori `i + 1`.** This tool asserts two of those as a live self-test, both
-quoted from measurements that did not come from the string being decoded:
+matched`, and what `fv-census.py` means by its 1-based "Apriori N": under the
+premise above they are the same numbering. `ANCHORS` checks two *array* names,
+ap22 `ShmBridgeDxe` and ap37 `SecurityStubDxe`, against the volume. The letters
+quoted beside them hold under either map - slot 21 is `s` and slot 36 is `L`
+whether or not the entries under those slots are the ones the identity map names -
+so the anchor is a check on the array and **not** a check on the string:
 
-  * *"**74** (ShmBridgeDxe, Apriori 22) succeeded"* - so position 21 is
-    `ShmBridgeDxe`, and `P2 SEQ` independently shows `s` at slot 21 and `L` either
-    side, the run's only `s` past the first eighteen.
-  * *"**5** (SecurityStubDxe, Apriori 37) failed"* - so position 36 is
-    `SecurityStubDxe`.
+  * *"**74** (ShmBridgeDxe, Apriori 22) succeeded"* - ap22 is `ShmBridgeDxe`; that
+    this is the entry under position 21 is the premise, not the measurement.
+  * *"**5** (SecurityStubDxe, Apriori 37) failed"* - ap37 is `SecurityStubDxe`,
+    likewise.
 
 If a later rebuild moves the Apriori file, those assertions fail loudly, which is
 the point: a stale mapping mislabels every letter, and a mislabelled reading looks
-exactly like a right one.
+exactly like a right one. What they cannot do is catch a stopped walk, which is
+the failure they were never able to see.
 
 **`--skip J`** is for the documented case where the mapping shifts. `docs/08`'s
 decode table has a row for `miss=j`: the absent entries are interleaved rather than
@@ -52,6 +66,15 @@ a suffix, `miss` names the first one, and the name tables are shifted from
 `SEQ[j-1]` on. Passing the file index that matched nothing reproduces that shift,
 so the labels stay right under either reading instead of silently assuming the
 suffix.
+
+A stopped walk is neither of those two shapes and no `--skip` expresses it: its
+batch drops a tail *and* re-admits the array's last entries, which sit physically
+below the stop - at the 46-promotion stops on this volume the matched set is
+`{1..13, 15..21, 23..34, 36..43, 45, 46, 66..69}` (`docs/08` step 4.130), a `--skip`
+of one index cannot produce it, and decoding a stopped-walk string with this tool
+answers with the volume's map instead. The option is kept for the readings it was
+written for; the stopped walk needs `P2 APRI`'s own rows
+(`entries=`, `sum=`, `miss=`, `unhit=`) before any name can be put under a slot.
 
 Note what `--skip` does **not** decide. The two open readings of this run's
 `P2 APRI` - the array read whole (`entries=70`, then `miss=47`) and the array read
@@ -368,8 +391,16 @@ def decode(letters, entries, pos, table, kind):
     if len(s) != len(usable):
         print(f"  this image offers {len(usable)} promoted positions and the string"
               f" has {len(s)} - decoding the {min(len(s), len(usable))} that line up")
-        print(f"  (a length disagreement is itself a reading: `docs/08`'s decode table"
-              f" has a row for each way the array can be short)")
+        print(f"  A length disagreement is itself a reading, and this volume leaves"
+              f" only one: its {len(entries)} entries all name files it contains, so"
+              f" a walk that reached the end would print {len(usable)} characters,"
+              f" and a {len(s)}-character line is a walk that **stopped**.")
+        print(f"  The `ap` column below is the VOLUME's map and not this string's."
+              f" Slot `k` holds the k-th entry that matched, a stopped walk's batch"
+              f" is not ap1..apN, and at this volume's 46-promotion stops 33 of the"
+              f" 46 slots name a different entry from slot 13 on - slot 18 is ap20"
+              f" `PdcDxe` and not ap19 `RpmhDxe`. Read the letters, not the names"
+              f" (`docs/08` step 4.130).")
     bad = 0
     for i, ch in enumerate(s):
         e = next((x for x in entries if pos.get(x["file"]) == i), None)
@@ -397,7 +428,9 @@ def decode(letters, entries, pos, table, kind):
         i0 = nons[0][0]
         e0 = next((x for x in entries if pos.get(x["file"]) == i0), None)
         print(f"\n  first position that is not 's': {i0}  "
-              f"(ap{e0['file'] if e0 else '?'}, {e0['name'] if e0 else '?'})")
+              f"(ap{e0['file'] if e0 else '?'}, {e0['name'] if e0 else '?'}"
+              f" - the volume's map, which is this string's map only on a"
+              f" completed walk)")
         if kind == "WHY":
             print(f"  -> KEY's `at=` should be {i0} and `err=` should read"
                   f" {table.get(nons[0][1], ('?',))[0]} if this string and that"
@@ -416,8 +449,9 @@ def decode(letters, entries, pos, table, kind):
         nq, ns = s.count("?"), s.count("S")
         print(f"\n  shape:")
         if nq == 0:
-            print(f"    no '?'  -> the drain reached every promoted entry; the batch"
-                  f" ran to the end of the array")
+            print(f"    no '?'  -> the drain reached every promoted entry, so the"
+                  f" batch ran to the end of *this string*; that the string is the"
+                  f" whole array is a separate question and no letter answers it")
         else:
             print(f"    {nq} '?' -> the drain stopped before {s.index('?')}; everything"
                   f" from there on was promoted and never attempted")
@@ -601,8 +635,12 @@ def main():
         bad = 1
     if not bad:
         print(f"  anchors hold: position {ANCHORS[0][0]} is {ANCHORS[0][1]}, "
-              f"position {ANCHORS[1][0]} is {ANCHORS[1][1]}"
-              f"  (two independent readings agree with this table)")
+              f"position {ANCHORS[1][0]} is {ANCHORS[1][1]}")
+        print(f"  (these are the *volume's* names for those two a-priori entries."
+              f" They cannot check a string: the letters they are quoted against"
+              f" sit in a run that reads the same under either map, so this line"
+              f" passes on a completed walk and on a stopped one alike -"
+              f" `docs/08` step 4.130)")
 
     if args.sizes:
         bad |= sizes_table(entries, pos, ctx, args.seq or args.why)
