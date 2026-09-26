@@ -23760,3 +23760,265 @@ Step 4.119 note at `:23400-23406`, and Step 4.118 at `:23340`.
 | corrects | Step 4.118's commit-message inference that a 46-character SEQ means `AprioriEntryCount` was 46; `Dispatcher.c:2267-2270` says the length is the number of matches, `:136-138` says the two readings are indistinguishable from the SEQ alone, `P2BRINGUP_APRIORI_MAX` is 128 so the instrumentation cannot be the cause, and Steps 4.12 and 4.21 had already written it correctly |
 | does not close | whether the driver publishes what it carries — that is a runtime fact behind the `DxeMain.c:593` assert, and the two panel outcomes that would settle it are mutually exclusive on one photograph |
 | not an action | nothing was built, nothing was flashed, no partition was written, and the device was absent throughout; every claim here is about bytes on this host |
+
+## Step 4.120 — the install call is in the driver's own `.text`, and the two GUIDs it carries have names the driver prints
+
+Step 4.119 ended by naming what it could not do: *carrying a GUID is not installing it*, no call
+site was disassembled, and two of the eleven GUIDs in `.data` resolved to nothing in this tree.
+**This step disassembles the call site.** The first limit is closed for the call that matters —
+the driver does load `BootServices->InstallMultipleProtocolInterfaces` and does pass the 24-byte
+keypad node — and the second closes too, from a direction Step 4.119 did not look in: the names
+are in the driver, next to the branches that print them.
+
+It also corrects three readings that were in the working notes behind Step 4.119 before any of
+them reached this document. Two are the kind this repository has made before — a structure read
+as the wrong shape, and a count taken from a partial scan. The third is the interesting one: the
+four calls at the top of the entry point are not DEBUG prints.
+
+### The entry point, and how the install site is reached
+
+`AddressOfEntryPoint = 0x1000` and `SizeOfOptionalHeader = 0xf0`, so the first instruction of
+`.text` is the PE entry. From it:
+
+| address | instruction | what it is |
+|---|---|---|
+| `0x1000` | the AutoGen `_ModuleEntryPoint` stub | compares three bytes against `0x49`, `0x42`, `0x49` at `0x1024`, `0x1030`, `0x103c` |
+| `0x10bc` | `b 0x114c` | the stub's fall-through, taken when the check does not divert |
+| `0x120c` | `bl 0x1458` | the AutoGen `ProcessLibraryConstructorList` call |
+| `0x1458` | `b 0x1e14` | the last constructor is a jump into the driver's own entry function |
+| `0x1e14` | `sub sp, sp, #0x30` | the function that stores its state, clears its buffers, creates its event and installs |
+| `0x1e68` | `bl 0x39cc` | the platform bring-up routine, called with `x0 = 0x8235`, `x1 = 0x8238` |
+| `0x1f1c` | `ldr x12, [x14, #328]` | the install — see below |
+| `0x1f50` | `blr x12` | and the call |
+
+There is no ambiguity in that chain: every link is a direct branch with a literal target, so the
+install site is reachable from the PE entry by the AutoGen path alone, with no table or callback
+between them.
+
+### The offset `328` is `0x148`, and the table it indexes is the one this tree's header declares
+
+`[x14, #328]` is `BootServices + 0x148`. That is `InstallMultipleProtocolInterfaces`, and the
+number is not a guess: `MdePkg/Include/Uefi/UefiSpec.h` declares `EFI_BOOT_SERVICES` with an
+`EFI_TABLE_HEADER Hdr` first (24 bytes) and **44 members, size `0x178`**, and the members that
+matter here land at
+
+| offset | member | found in this driver at |
+|---|---|---|
+| `0x50` | `CreateEvent` | `0x1ef8` |
+| `0x140` | `LocateProtocol` | `0x37b4`, `0x39fc`, `0x3a30` |
+| `0x148` | `InstallMultipleProtocolInterfaces` | `0x1f1c` |
+
+The derivation is worth writing down because getting it wrong is easy and silent: reading
+`UefiSpec.h` forward from any `Hdr;` finds `EFI_RUNTIME_SERVICES` first and concatenates the two
+tables, which yields a `BootServices` table of about sixty members and puts every offset past
+`GetTime` on the wrong member. The table that is right is found by scanning *backward* from
+`} EFI_BOOT_SERVICES;` for the **last** preceding `EFI_TABLE_HEADER … Hdr;`, then advancing in
+8-byte strides over every `;`-terminated line from there. An earlier draft of these notes used
+the sixty-member table; it is not used in this document anywhere, and nothing here rests on it.
+
+One independent check agrees: `0x1ee4` loads `[x19, #1008]` and `0x1ef8` then loads
+`[x13, #80]`. `0x83f0` is the cached `gBS` — the same global whose `UefiBootServicesTableLib.c`
+assert string `"gBS != ((void *) 0)"` sits in `.text` at `0x65d3` — so the driver's own two
+`BootServices` uses run through the same cached pointer, and `+80` and `+328` are read from one
+table.
+
+### The argument list, pair by pair
+
+`InstallMultipleProtocolInterfaces (Handle, GUID, Interface, …)` is variadic with a NULL
+terminator, and the driver sets every register of it:
+
+| register | value | is |
+|---|---|---|
+| `x0` | `x29 - 8` (`0x1f48 sub x0, x29, #0x8`) | the handle out-parameter, a stack local |
+| `x1` / `x2` | `0x8058` / `0x80e8` | `EFI_SIMPLE_TEXT_IN_PROTOCOL` GUID, and the interface |
+| `x3` / `x4` | `0x8068` / `0x8100` | `EFI_SIMPLE_TEXT_INPUT_EX_PROTOCOL` GUID, and the interface |
+| `x5` / `x6` | `0x8078` / `0x8130` | `EFI_DEVICE_PATH_PROTOCOL` GUID, and the 24-byte keypad node |
+| `x7` | `0` (`0x1f4c mov x7, xzr`) | the terminator — a literal, not a memory read |
+
+The three GUID values are the ones Step 4.119 printed, and `0x8130` is the node Step 4.119 found
+present and adjacent. **What changes is the verb.** Step 4.119 could say the driver carries the
+node; the call site at `0x1f44` computes its address (`adrp`/`add x6, x6, #0x130`) and `0x1f50`
+passes it to the install. The `LocateDevicePath` link in Step 4.118's chain is asking for a
+handle whose `SimpleTextInputEx` device path equals those 24 bytes; this driver is trying to
+publish exactly that pairing.
+
+Two more things are set on the way to the call. `0x1ec0` puts `0x10` in `w0` and `0x1ec4`
+calls `0x2764`, which is a wrapper — `mov x8, x0; orr w0, wzr, #4; mov x1, x8; b 0x2730` — that
+allocates with pool type 4 (`EfiBootServicesData`) and returns the pointer, stored at `0x83c8`
+at `0x1ecc`; a NULL return branches to `0x1f58`, which returns `0x8000000000000009`
+(`EFI_OUT_OF_RESOURCES`). `0x1ed4` then calls `0x22e0`, and since `x0` is still that pointer,
+`0x22e0` is being run on the allocation itself — `stp x0, x0, [x0]`, an empty list head, which is
+what `InitializeListHead` does and what its `AssertChipset` on `ListHead != NULL` checks. And at
+`0x1ee8`–`0x1f0c` the driver calls `CreateEvent` with `w0 = 0x100` (`EVT_NOTIFY_SIGNAL`),
+`w1 = 8` (`TPL_CALLBACK`), `x2 = 0x1c9c` (the notify function), `x3 = 0` and `x4 = sp + 8`, reads
+the event back out of `sp + 8` at `0x1f0c`, and stores it into **both** protocol tables.
+
+### Which table is `In` and which is `Ex` — measured three ways, not chosen
+
+The event goes to `[0x80e8 + 16]` and `[0x8100 + 16]` (`0x1f38`, `0x1f40`), and the image's own
+`.data` words say what the two tables are:
+
+| offset | word | `SimpleTextIn.h` member at that index | `SimpleTextInEx.h` member |
+|---|---|---|---|
+| `0x80e8` | `0x1464` | `Reset` | — |
+| `0x80f0` | `0x147c` | `ReadKeyStroke` | — |
+| `0x80f8` | `0` then the event | `WaitForKey` | `WaitForKeyEx` is not here |
+| `0x8100` | `0x154c` | — | `Reset` |
+| `0x8108` | `0x1564` | — | `ReadKeyStrokeEx` |
+| `0x8110` | `0` then the event | — | `WaitForKeyEx` |
+| `0x8118` | `0x16ac` | — | `SetState` |
+| `0x8120` | `0x16b4` | — | `RegisterKeyNotify` |
+| `0x8128` | `0x1858` | — | `UnregisterKeyNotify` |
+
+So **`0x80e8` is the `SimpleTextInput` table and `0x8100` is the `SimpleTextInputEx` table**,
+which is what the argument list requires: the GUID at `x1` is `gEfiSimpleTextInProtocolGuid` and
+the interface at `x2` is `0x80e8`; the GUID at `x3` is the Ex GUID and the interface at `x4` is
+`0x8100`. Three independent things agree, and any one of them alone would leave room for doubt:
+
+- The struct orders in the two headers differ in exactly the way the tables do. `SimpleTextIn.h`
+  is `{Reset, ReadKeyStroke, WaitForKey}` — three pointers, 24 bytes — and `0x80e8` holds three
+  non-relocated-elsewhere words, the third of which is zero in the file because the event is
+  written at runtime. `SimpleTextInEx.h` is `{Reset, ReadKeyStrokeEx, WaitForKeyEx, SetState,
+  RegisterKeyNotify, UnregisterKeyNotify}` — six pointers, 48 bytes — and `0x8100` runs to
+  `0x812f`, which is immediately before the device-path node at `0x8130`.
+- `0x16ac` is `mov x0, #0x8000000000000003; ret`, i.e. a `SetState` that returns
+  `EFI_UNSUPPORTED`, which is the standard shape for a driver that implements the Ex protocol
+  minimally rather than not at all.
+- Step 4.119 published the `.reloc` sites in `.data` as `0x80d8`, `0x80e0`, `0x80e8`, `0x80f0`,
+  `0x8100`, `0x8108`, `0x8118`, `0x8120`, `0x8128`, `0x8148`, `0x8150`. **`0x80f8` and `0x8110`
+  are absent from that list**, and they are the two words the code overwrites with the event —
+  so the relocation table, the file's zero bytes and the runtime store agree on the same two
+  slots.
+
+`0x8148` and `0x8150` both hold `0x8148`, a statically-initialized empty `LIST_ENTRY` that
+points at itself, so the driver has one such head in its data and one built at runtime from a
+pool allocation.
+
+### The four calls at the top of the entry point are `SetMem`, not DEBUG prints
+
+`0x1e80`, `0x1e94`, `0x1ea8` and `0x1ebc` all call `0x287c`, and the shape of each call is
+`(address, length, 0)` — `0x8220` for 7 bytes, `0x8227` for 7, `0x8254` for `0x1c` and `0x8270`
+for `0x1c`. They are not prints, and the four addresses are not strings: all 70 bytes are zero in
+the file, and `0x287c` is the AutoGen `SetMem` wrapper, which asserts at `0x2898` against the
+strings `SetMemWrapper.c` (`0x64ad`) and
+`(Length - 1) <= (0xFFFFFFFFFFFFFFFFULL - (UINTN)Buffer)` (`0x64bd`) before branching to `0x296c`,
+whose first instruction is `dup v0.16b, w2` — a vector broadcast of the fill byte. So the entry
+function clears four static buffers of 7, 7, 28 and 28 bytes before it locates anything. The
+notes this step came from counted the same four calls as DEBUG prints with those lengths; that is
+the third correction, and it is the one worth keeping, because "prints" would have been a
+readable claim about the driver's behaviour and "zeroes two 7-byte and two 28-byte buffers" is a
+different one.
+
+### The two GUIDs Step 4.119 could not name are named by the driver's own failure branches
+
+The routine at `0x39cc` locates twice, into `0x8418` and `0x8420`, and the branches taken when
+each locate fails name the protocol it was looking for:
+
+| GUID | site | failure branch | format string it reaches |
+|---|---|---|---|
+| `0x80B8` `60759B13-A8BF-46FE-B7E6-797BFB335DF3` | `0x39f4` (`add x0, x0, #0xb8`) | `0x3a0c tbnz x19, #63, 0x3a70` | `0x6a3d` — `ButtonsInit: failed to locate PmicGpioProtocol, Status = (0x%x)` |
+| `0x80C8` `9BA45B66-EFA4-441C-A3E4-ED2224786BE2` | `0x3a28` (`add x0, x0, #0xc8`) | `0x3a40 tbnz x19, #63, 0x3a98` | `0x6aad` — `ButtonsInit: failed to locate PmicPONProtocol, Status = (0x%x)` |
+
+So **`0x80B8` is `PmicGpioProtocol` and `0x80C8` is `PmicPONProtocol`**, and the binding is the
+branch, not the ordering of the two messages. A third site confirms the name from the other
+side: when the `0x80B8` locate *succeeds* but leaves `0x8418` NULL, the code reaches `0x3a7c`
+and calls `DebugAssert` at `0x2074` with the arguments `0x6a7f` = `ButtonsLib.c`, `w1 = 0x1e7` =
+**487**, and `0x6a8c` = `PmicGpioProtocol != ((void *) 0)`, then branches to `0x3a94`, which
+branches to itself. That is a source line number and a source variable name: `ButtonsLib.c:487`.
+
+What Step 4.119 wrote about these two is therefore half wrong and half right. It is right that
+neither GUID value is declared in any `.dec`, `.h`, `.dsc`, `.inf` or `.c` in this tree — that
+was re-checked without the include filter that made the first search look like an absence of a
+different kind — and it is right that no `gQcomPmicGpioProtocolGuid` exists here to read
+`QcomPkg.dec` for. It is wrong to have left them unnamed: the driver names both, in a message and
+in an assert, and `ButtonsDxe.ffs` names both again in its own protocol list, where four 16-byte
+GUIDs at file `0x1d`, `0x2e`, `0x3f` and `0x50` — each preceded by a `0x02` byte, the PE beginning
+at `0x68` = 104 — are `SimpleTextIn`, `PlatformInfo`, `PmicGpio` and `PmicPON` in that order.
+Step 4.119's own reading of that list named three of the four and mis-set their offsets; the
+substance is the same and the fourth is new.
+
+The third locate in the same routine is the one Step 4.119 read as `GetPlatformInfo`, and it now
+has a name of its own from the driver's strings. `0x37b4` locates `0x80A8`, which is
+`EFI_PLATFORMINFO_PROTOCOL_GUID` (`EFIPlatformInfo.h:87-89`, `QcomPkg.dec:67`), into the stack at
+`sp + 0x18`, and prints `0x6970` — `ButtonsInit: Failed to locate PlatformInfo Protocol,
+Status =  (0x%x)` — when that fails; on success it takes `[x0 + 8]` and calls it with a stack
+out-struct. When it fails, the caller at `0x39cc` reports `0x6aee`, `ButtonsInit:
+InitializeKeyMap() failed, Status =  (0x%x)`, so the routine being wrapped is the keymap
+initializer and the PlatformInfo locate is *inside* it. Both messages carry the doubled space
+after `Status =` that the driver uses wherever a `%r` argument was deleted from the format; the
+embedded NUL the notes behind Step 4.119 recorded is not there — a byte search for a NUL
+immediately followed by `(0x%x)` over the whole image returns nothing.
+
+### Both protocols have producers and consumers in the phone's own driver set
+
+The two GUIDs are not orphans. A byte search over the 86 `.efi` files in `device/dxe/` finds each
+value in the drivers that would relate to it:
+
+| driver | `PmicGpioProtocol` at | `PmicPONProtocol` at |
+|---|---|---|
+| `PmicDxe.efi` | `0x1e078` | `0x1e0f8` |
+| `ButtonsDxe.efi` | `0x80b8` | `0x80c8` |
+| `AdcDxe.efi` | `0x8088` | — |
+| `DisplayDxe.efi` | `0x35278` | — |
+| `UsbConfigDxe.efi` | `0x11128` | — |
+| `ChargerExDxe.efi` | — | `0x6088` |
+| `QcomChargerDxeLA.efi` | — | `0x16088` |
+| `RealTimeClock.efi` | — | `0x70b8` |
+| `ResetRuntimeDxe.efi` | — | `0x80e8` |
+
+`PmicDxe.efi` carries both, `0x80` apart, inside a 16-byte-stride GUID array — the 16 bytes
+before each are another GUID, and the one before the second is `PlatformInfo`'s (`0x1e0e8`). A
+PMIC driver holding a dense GUID array next to platform-info's is the shape of a protocol table,
+so the natural reading is that `PmicDxe` publishes both — but that is an inference from layout
+and this step does not claim more: what is measured is where the values are, in which files, and
+that the consumer set is a real one.
+
+That matters for the ordering rather than for the driver, and it is the consequence Step 4.119's
+closing row already reached from the other end: **`PmicDxe` is `ap35`, `phys 54`, and the
+instrument reads it as `L`** (Step 4.118's own table at `:23446-23450`). The keypad library
+Step 4.118 wanted would have read `DALTLMM`, `PmicDxe` and `GpiDxe`, all three `L`. This step
+shows that `ButtonsDxe`'s own second and third locates depend on the same driver, so the
+dependency is not an artefact of the library that was never written — it is in the driver already
+in the platform, and it fails in the same place.
+
+### What this step does not say
+
+- It does not say `ButtonsDxe` is ever reached. A call site in `.text` is a fact about bytes on
+  this host; `CoreLoadImage` has to return for it to run, and the assert at `DxeMain.c:593` stops
+  nine architectural protocols short of BDS. Nothing here shortens the P2 wall by a line.
+- It does not say the install succeeds, nor that its entry point returns `EFI_SUCCESS`. The
+  failure returns are measured (`0x8000000000000009` from the allocation branch), not the
+  outcome.
+- It does not establish what the 16-byte pool allocation at `0x83c8` is for, only that it is
+  allocated as `EfiBootServicesData` and initialized as an empty list head.
+- It does not name the routines at `0x1e14`, `0x3780`, `0x39cc` or `0x3988` in source terms. The
+  driver's own strings name `ButtonsInit`, `ConfigureButtonGPIOs`, `InitializeKeyMap`,
+  `EnableInput`, `ReadGpioStatus` and `ButtonsLib.c`, and the message prefixes do not have to
+  match the function that prints them, so this step describes the code by address and quotes the
+  strings rather than assigning names.
+- It changes no count. The 27 `L`s, the 46-character SEQ, the nine absent architectural protocols
+  and the P3 gate are all where they were.
+
+### Read this step
+
+`device/dxe/ButtonsDxe.efi`, disassembled with `aarch64-linux-gnu-objdump -d` (the artefact is
+`/tmp/buttons.asm`, 6,555 lines, and `/tmp` is volatile — regenerate it before re-checking any
+address here); the byte-identical
+`uefi/Binaries/gauguin/QcomPkg/Drivers/ButtonsDxe/ButtonsDxe.efi`; `device/dxe/ButtonsDxe.ffs`
+(GUIDs at `0x1d`, `0x2e`, `0x3f`, `0x50`; PE at `0x68`); the other `.efi` files in `device/dxe/`
+named in the table above;
+`Mu_Basecore/MdePkg/Include/Uefi/UefiSpec.h` for the `EFI_BOOT_SERVICES` member order;
+`Mu_Basecore/MdePkg/Include/Protocol/SimpleTextIn.h` and `SimpleTextInEx.h` for the two struct
+orders; `Silicon/Qualcomm/QcomPkg/Include/Protocol/EFIPlatformInfo.h:87-89` and `QcomPkg.dec:67`
+for `0x80A8`; `QcomPkg.dec:78` for the `PmicPON` GUID that is *not* the one this driver carries;
+and in this document Step 4.119 at `:23544`, its GUID table at `:23600-23610`, its `.reloc`
+site list at `:23621`, Step 4.118's `L` table at `:23446-23450`, and Step 4.118 at `:23340`.
+
+| | |
+|---|---|
+| instrument | a full disassembly of the one driver Step 4.119 byte-searched, its `.data` words read raw (ImageBase 0, so RVA is VA), and a byte search for both GUID values across the 86 `.efi` in `device/dxe/` |
+| shows | `0x1f1c ldr x12, [x14, #328]` and `0x1f50 blr x12` are `BootServices->InstallMultipleProtocolInterfaces` — `0x148` in the 44-member, `0x178`-byte table `UefiSpec.h` declares — called with `gEfiSimpleTextInProtocolGuid` + `0x80e8`, `gEfiSimpleTextInputExProtocolGuid` + `0x8100`, `gEfiDevicePathProtocolGuid` + **the 24-byte node at `0x8130`**, and a literal zero terminator; the entry point reaching it is `0x1000` → `0x10bc` → `0x114c` → `0x1458` → `0x1e14` |
+| adds | names for the two GUIDs Step 4.119 could not name — `0x80B8` is `PmicGpioProtocol` and `0x80C8` is `PmicPONProtocol`, from the branches that print `ButtonsLib.c:487`'s assert and the two `failed to locate` messages — and the finding that `PmicDxe` carries both values `0x80` apart, so `ButtonsDxe`'s second and third locates depend on the driver the instrument already reads as `L` |
+| corrects | that the four calls at the entry point with lengths 7, 7, `0x1c`, `0x1c` are DEBUG prints — `0x287c` is `SetMemWrapper.c`, `0x296c` is `dup v0.16b, w2`, and the four regions are 70 zero bytes; that the two 8-byte slots at `0x82a8`/`0x83b8` hold a device path — both hold `0x82b0`, and `0x8330`/`0x83c0` hold `0x8338`; and that the format string at `0x6970` contains an embedded NUL — it contains a doubled space, and no NUL-then-`(0x%x)` exists anywhere in the image |
+| does not close | whether the driver is reached or its entry point returns success — both are behind the `DxeMain.c:593` assert; and what the 16-byte `EfiBootServicesData` allocation at `0x83c8` is for |
+| not an action | nothing was built, nothing was flashed, no partition was written, and the device was absent throughout; every claim here is about bytes on this host |
