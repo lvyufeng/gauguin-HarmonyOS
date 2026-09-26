@@ -24022,3 +24022,228 @@ site list at `:23621`, Step 4.118's `L` table at `:23446-23450`, and Step 4.118 
 | corrects | that the four calls at the entry point with lengths 7, 7, `0x1c`, `0x1c` are DEBUG prints — `0x287c` is `SetMemWrapper.c`, `0x296c` is `dup v0.16b, w2`, and the four regions are 70 zero bytes; that the two 8-byte slots at `0x82a8`/`0x83b8` hold a device path — both hold `0x82b0`, and `0x8330`/`0x83c0` hold `0x8338`; and that the format string at `0x6970` contains an embedded NUL — it contains a doubled space, and no NUL-then-`(0x%x)` exists anywhere in the image |
 | does not close | whether the driver is reached or its entry point returns success — both are behind the `DxeMain.c:593` assert; and what the 16-byte `EfiBootServicesData` allocation at `0x83c8` is for |
 | not an action | nothing was built, nothing was flashed, no partition was written, and the device was absent throughout; every claim here is about bytes on this host |
+
+## Step 4.121 — Every inner volume in the tree, the seven instrument sets they walk, and the one the digest never repeats because it is inlined
+
+The question this step was carried in with is narrow: `work/out/boot-now-0923.img`
+is the readback of what `boot` held on 09-23 — Step 4.32 says so at `:5297` — but
+*which build's firmware is inside it* has never been asked of more than a handful of
+named payloads. Two ladder tables in this document (Step 4.35 at `:5792`, Step 4.39
+at `:6364`) sample three of them; Step 4.29's samples six. So the question is asked
+here of all of them, and the answer is a negative that is worth having exactly
+because it is negative.
+
+### The census, and why the walk is the right instrument
+
+Every `.img` under `work/out/` — **133 files** — was walked with `tools/fv-inventory.py`'s
+`unpack()`, imported rather than re-implemented, so the padding and FFS rules are the
+ones this repository has already paid for. 124 walk; 43 of them have a **distinct inner
+`FVMAIN`**. For each distinct volume the tool's own `inner FV bytes` were hashed and
+searched for `P2 <NAME>` literals.
+
+Searching the inner volume rather than the `.img` is the whole of the method and Step
+4.35 already gives the reason: the firmware volume is a `SECTION_GUID_DEFINED` under an
+LZMA GUID, so a `grep` of the payload finds none of these strings. And searching for
+*literals* rather than asking `tools/probe-fingerprint.py` is deliberate here: the
+fingerprint tool answers "does this build have instrument X", which is the question the
+ladder tables ask. This asks "are these two files the same firmware", which is a
+question about bytes and has to be answered with bytes.
+
+### The rungs, in build order, read off the volumes
+
+Counted with `P2 ([A-Z0-9]{1,8})` over the inner volume. The count is of instrument
+*codes*, and it excludes the one incidental match every image carries: the string
+`##    5 = GPP2 Partition` in the boot-manager menu text has a `P2 P` in it, so a
+volume with no instrument at all still counts one under a naive pattern.
+
+| # | first inner `FVMAIN` of the set | inner bytes | codes | first written | the tree's copies |
+|---|---|---|---|---|---|
+| 0 | `4d99a162be49083d` | 7,348,224 | **0** | 09-23 12:09:45 | `work/out/boot-current-1209.img` |
+| 1 | `fd7c1fa94be75b3f` | 7,348,224 | 4 — `DIAG NOLOAD SEQ STATS` | 09-23 12:06:55 | `work/out/retracted/Mu-gauguin-arch-first-gzip.img` |
+| 2 | `c8f57e46046c86c5` | 7,348,224 | the same four | 09-23 15:09:52 | `work/out/boot-before-p2walk.img` |
+| 3 | `2995a6d0c1e62ceb` | 7,352,320 | 6 — `+ WALK FREE` | 09-23 20:47:55 | `work/out/boot-now-0923.img`, and nothing else |
+| 4 | `d4f359da1cbdc06f` | 7,352,320 | 8 — `+ APRI WHY` | 09-23 22:56:34 | `work/out/p2-silicon-gzip-preread-0923d.img` |
+| 5 | `e9415585f8ae1039` | 7,352,320 | 8, the same set rebuilt | 09-23 23:45:24 | `work/out/p2-4.14/` |
+| 6 | `fa0f356ef218e099` | 7,352,320 | 9 — `+ ERR` | 09-24 00:21:37 | `work/out/p2-4.16/` |
+| 7 | `b87cf4493574ea10` | 7,352,320 | 11 — `+ RETRY BIN` | 09-24 01:41:28 | `work/out/p2-4.19/`; rebuilt as `bdd54244e3148d02` in `p2-4.20/` |
+| 8 | `9ac6f35463a6b800` | 7,352,320 | 13 — `+ FWHY FWTY` | 09-24 21:20:20 | six volumes over `p2-4.65/`, `p2-freewhy/`, `p2-freewhy-g/`, `p2-gio0/`, `p2-phywake/`, `p2-pmic/` |
+
+Set 8 is where the instrument stops growing, and every volume after it carries the same
+13 codes. What changes after 09-24 21:20 is the volume's **size**, five times, and the
+size bump is what identifies the driver set rather than the instrument:
+
+| inner bytes | first written | volumes | directories |
+|---|---|---|---|
+| 7,524,352 | 09-25 01:20:01 | 1 | `work/out/usb-host-0925/` |
+| 7,356,416 | 09-25 07:32:28 | **21** | `p2-4.66/` … `p2-4.88/` and `p2-variants/` |
+| 7,360,512 | 09-25 20:50:50 | 3 | `p2-4.89/` … `p2-4.92/` |
+| 7,364,608 | 09-26 03:20:35 | 2 | `p2-4.93/`, `p2-4.94/` |
+| 7,536,640 | 09-26 09:00:30 | 1 | `work/out/usb-host/` |
+
+**43 distinct inner volumes, 124 walked, 12 groups in all** — nine rows above and the
+rest of them behind the size column. Two of the size bumps are the USB host experiment
+(the table's 7,524,352 and 7,536,640 rows, both 13 codes, larger than the main line) and
+three are rebuilds of the main line.
+
+Four things in that table are not in any earlier step:
+
+- **Set 0 carries no instrument code.** Its single `P2 ` match in 7.3 MB is the GPP
+  menu string. It is the only volume in the tree with no instrument in it, and that is
+  what makes set 1 a set rather than the start of the record. The file's own mtime is
+  the *readback* time — 12:09:45, three minutes after set 1's build — so the file is
+  newer than a build it predates in content, and nothing in this document dates the
+  firmware inside it. It is a 48 MiB partial dump of the `boot` partition, and `:19696`
+  already groups it by inner size with the two builds beside it.
+- **Set 1 predates set 2**, by three hours (`12:06:55` against `15:09:52`), with the
+  same four codes and the same inner size. So `retracted/` holds an *earlier* build than
+  the baseline beside it: the directory name records the experiment's retirement
+  (Step 4.10's, per `:1304` and `:1956`), not a build newer than its neighbours. No
+  ladder table can see this, because no ladder table lists it.
+- **Set 3 is a singleton.** `2995a6d0c1e62ceb` is carried by exactly one image in the
+  tree, itself. Its neighbours are two codes away on either side — `c8f57e46` below
+  lacks `WALK` and `FREE`, `d4f359da` above adds `APRI` and `WHY` — and no `p2-4.*`
+  directory holds it. So the answer to the carried question is that
+  `work/out/boot-now-0923.img` **is not an archived build under another name**: the
+  build that produced it was never archived as a build output, and this readback is the
+  only copy of its firmware anywhere in the repository.
+- **The full set is 13 codes, not 15.** `P2Key` and the `K` tick are printed without a
+  `P2` prefix — one row is `K %d %c%c`, and the `KEY` row has two spellings — so they do
+  not appear in the pattern and a volume that has them still counts 13. The number of
+  `P2 ` strings is therefore the same for the payload in `boot` today as for a build a
+  day older, which is why the fingerprint tool's "14 of 14" and this count are not in
+  conflict: it counts rows, this counts literals.
+
+That negative is consistent with everything already written about the file and
+overturns none of it. Step 4.32 at `:5297` records it as "written 09-23 20:47, i.e.
+*after* the 16:10 read it matches: a named copy of what the partition held, not a build
+output" — the same statement, and the mtime is `20:47:55`. `:1836` records the
+on-device inner `FVMAIN` as `2995a6d0c1e62ceb…`, 123 files, 7,352,320 B. Step 4.39 at
+`:6375` and Step 4.98 at `:19213` record which rows it does and does not carry. The
+step adds one sentence to that body of work: *of the 43 distinct firmwares in this
+tree, this is the only one with no second copy.*
+
+### The two things the binaries say about rung 3 that the source's current text cannot
+
+A census of hashes says which volumes are the same. It does not say what the *code* in
+them does, and for two questions that matter the source on disk is not evidence,
+because the source has moved on. Both were answered by taking `DxeCore` out of the
+inner volume (`inner[off:off+size]` for the entry named `DxeCore`, then the PE at its
+`MZ`), disassembling it with `aarch64-linux-gnu-objdump -d`, and looking for two
+things that exist in the code and not in the format strings.
+
+**`P2Hold` is not in it.** `P2Hold`'s spin is `Hold = 2000000000ULL`, and 2,000,000,000
+is `0x77359400` — a value the compiler must materialise as `mov w20, #0x9400` /
+`movk w20, #0x7735, lsl #16`. That pair is absent from rungs 1 and 3 and from rung 4a,
+and present in rung 4b and every rung after it:
+
+```
+rung1   boot-before-p2walk          movk w20, #0x7735, lsl #16 : absent
+rung3   boot-now-0923               absent
+rung4a  p2-silicon-gzip-preread-0923d   absent        <- step 4.13's build
+rung4b  p2-4.14                     present         (0x3e0c)
+rung5   p2-4.16                     present         (0x3db4)
+rung7   p2-4.74                     present         (0x3db4)
+```
+
+That arrival point is exactly the boundary Step 4.14 describes at `:2709` — "the repeat
+loop's `CoreStall (300000)` becomes `P2Hold ()`" — and rung 4a is step 4.13's build
+and rung 4b is step 4.14's, which is the pairing that matters, because it is the one
+Step 4.14 names as the code change. So the boundary is visible from the images, not only
+from the step text, and it lands where the step says it does.
+
+**And the digest is inlined in rungs 1 and 3.** Two facts, both measured off the
+disassembly and both reproducible with `aarch64-linux-gnu-objdump -d` on the extracted
+PE:
+
+- the function that prints `P2 NOLOAD total=` — entered at `0x1b28` in every rung — is
+  called by exactly **one** `bl` in every rung, r1 and r7 alike;
+- the function that references `P2 SEQ [%a]` is *that same address* in r1 and r3
+  (the reference lands at `0x3e4c` inside the function at `0x1b28`), and a different
+  one from r4a on, called by **two** `bl`s: `0x1148c` in r4a, `0x114b0` in r4b,
+  `0x11470` in r5.
+
+One call site is what a compiler inlines; the loop gave it two, and two is what a
+compiler stops inlining. The count of `bl`s is the count of *call sites*, not of
+executions — r3's is one site with no loop, r4a's is two sites of which the second is
+executed forty more times. What follows from it is the only thing this step needs: on
+the rung-3 payload the digest is executed **once**, and the payload in `boot` on 09-23
+printed its own rows once each.
+
+The consequence is a correction to a sentence this document has now written more than
+once. `:19431` says "after the first wipe the panel holds nothing but digest copies
+laid end to end, and each copy ends on the same row"; `:7235` says the same thing about
+the wipe. **That is a property of the payloads from rung 4a onward, and the payload in
+`boot` on 09-23 was rung 3.** `CoreDisplayDiscoveredNotDispatched` is called once, the
+digest is inlined at that one call, and there is no `P2Hold` to pause between copies
+because there are no other copies. So on the image that produced the only `P2 SEQ`
+reading ever taken, the digest was **printed once** — and the reading coming back as
+"one `P2 SEQ` string and one `P2 DIAG` line" (Step 4.13 at `:2378`) is not a reader
+losing a race with a repeating block. It is an image with a single copy in it, and the
+repeat loop that was built to end that race is in the *next* build, which is the one
+Step 4.13's own rung-4a volume carries.
+
+`P2 FREE largest=` is the last row of that single copy — `P2Digest` runs from
+`Dispatcher.c:2239` to `:2471` and prints its rows in that order, SEQ at `:2339`/`:2348`,
+DIAG at `:2422`, STATS at `:2431`, WALK at `:2454`, FREE at `:2462`, then `P2Bins` at
+`:2464` and `P2Key` at `:2470`, the last two being the two literals rung 3 does not
+carry. So the anchor this document published for reading a panel — `tools/console-budget.py`'s
+"the KEY line is the last line of every copy" (its `:432`, `:443`) — is about a payload
+that has `P2Key`, and the image the reading was actually taken from has no `P2Key`
+literal at all (Step 4.39 at `:6385`). It is set 8 — the 13-code set the payload in
+`boot` today belongs to (`90b21643…`, per `:19611` and every step since) — that the rule
+is written for, and that is the payload it should be used on. Both rules are correct;
+they belong to different sets, and `tools/console-budget.py` reads the source and takes
+no image, so it cannot say which. `tools/probe-fingerprint.py --rows IMG` can — it
+prints the subset that is in the volume — and running the two together is what makes
+the anchor per-payload instead of per-source.
+
+That the *row* differs between the two rungs is already written down: `:19433-19434`
+says "On `boot-now-0923` that row is `P2 FREE largest=`; on both payloads of record it
+is `KEY …`". What is added here is why, and it is not the reason that paragraph gives.
+`:19433`'s premise — "after the first wipe the panel holds nothing but digest copies
+laid end to end" — needs at least two copies to be true, and a rung with the digest
+inlined into a function called once has one. The paragraph's conclusion is right and its
+argument does not reach it: `P2 FREE largest=` is the last thing on that panel not
+because a copy was wiped over an earlier one, but because nothing printed a second row
+after it.
+
+### What this step does not say
+
+- **It does not identify a step whose build rung 3 is.** It places it after rung 1 and
+  before step 4.13's build, and Step 4.13's own opening at `:2378` says the image in
+  `boot` carried `P2 WALK` and `P2 FREE` for a whole session — the same set. Whether
+  the step that built it has a number is not a question about bytes.
+- **It does not make rung 3 readable.** `P2 ERR` and `P2 WHY` are absent from it, so
+  no panel showing it can name a failing status (Step 4.39 at `:6402`, Step 4.98 at
+  `:19213`). That is unchanged.
+- **It does not take the owed reading, and it does not make one takeable.** The panel
+  reading of the payload in `boot` under 先读屏，再刷下一次 is still owed, and `P2 FREE
+  largest=` is still part of it.
+- **It does not change the P2 wall.** `DxeMain.c:593` still asserts before `:606`'s
+  `gBds->Entry`; the nine architectural protocols are still the nine; the SEQ is still
+  46 characters with 27 `L`s in it; the P3 gate at `docs/00-plan.md:322` is still unmet.
+- **It does not re-derive set 8's place in `boot`.** That `boot` holds `90b21643…`
+  is this document's own readback record, taken on the device; no device was present
+  here and nothing in this step read a partition.
+
+### Read this step
+
+`tools/fv-inventory.py`'s `unpack()` imported and run over the 133 `.img` under
+`work/out/`; the `DxeCore` entry of six of those volumes extracted by hand and
+disassembled with `aarch64-linux-gnu-objdump -d` (the extracted files live under
+`/tmp`, which is volatile — re-extract before re-checking an address); and in this
+document Step 4.13 at
+`:2376-2385`, Step 4.14 at `:2692-2716`, Step 4.29's ladder, Step 4.32 at `:5281-5297`,
+Step 4.35 at `:5792-5825`, Step 4.39 at `:6364-6410`, Step 4.98 at `:19206-19213`, the
+row-order paragraph at `:19426-19436`, and the row census at `:19540-19590`;
+`Dispatcher.c:2239-2471` for the digest and its row order, and `:2482-2558` for the
+NOLOAD function and the loop; `DxeMain.c:560-612`; `tools/console-budget.py:425-455`.
+
+| | |
+|---|---|
+| instrument | `tools/fv-inventory.py`'s own walk over all 133 payloads in the tree, hashing and literal-searching each distinct inner `FVMAIN`; and the `DxeCore` of six of those volumes extracted and disassembled with `aarch64-linux-gnu-objdump -d` |
+| shows | 43 distinct firmwares over 12 groups, seven instrument sets (0, 4, 6, 8, 9, 11, 13 codes), and the arrival points of the repeat loop and of `P2Hold` — the `P2 SEQ [%a]` reference inside the same function as `P2 NOLOAD total=` in rungs 1 and 3 and inside a second, twice-called function from step 4.13's build on; and `0x77359400` absent until step 4.14's build |
+| adds | that `work/out/boot-now-0923.img`'s inner volume is carried by no other image in the tree, so the build that produced it was never archived and this readback is its only copy; that set 0 (`boot-current-1209.img`) carries no instrument code at all — its one `P2 ` match is the GPP menu string — and that set 1 (`retracted/…arch-first…`) is three hours *older* than the `boot-before-p2walk` build beside it despite the same four codes |
+| corrects | "after the first wipe the panel holds nothing but digest copies" (`:7235`, `:19431`) — true from step 4.13's build on, and not true of the rung-3 image that produced the only `P2 SEQ` reading, whose digest is inlined into a function called once; the paragraph at `:19433-19434` already gives the right ending row for that image but reaches it by that premise. It also scopes `tools/console-budget.py`'s KEY-line anchor to the payloads that carry `P2Key`, which the image the reading came from does not |
+| does not close | the owed panel reading; which step built rung 3; and whether a photograph of the 09-23 panel ever held the single digest copy it printed |
+| not an action | nothing was built, nothing was flashed, no partition was written, and the device was absent throughout — every claim here is about bytes on this host |
