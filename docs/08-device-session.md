@@ -888,9 +888,14 @@ owes two, so "reached" is said of the driver and the protocol follows from it.)
 - **Malformed images.** A census of all 86 PE32+ files in the volume found no
   malformed one: every arch-protocol provider is `0xaa64`, `ImageBase 0x0`,
   `DllCharacteristics 0x160`, uniform `OptHeaderSize 0xf0` — the same shape as
-  the drivers that run. The FFS `Checksum`/`State`/`FileSize` block is not
-  re-validated on the start path anyway (`CoreValidateFfsHeader` runs only on the
-  read path), so a stale checksum could not be the cause even if one existed.
+  the drivers that run. The FFS `Checksum`/`State`/`FileSize` block **is**
+  re-validated: `FvCheck` calls `IsValidFfsHeader` (`FwVol.c:457`) and
+  `IsValidFfsFile` (`FwVol.c:500`), and those two call sites are the only ones in
+  the tree — so a stale checksum could not be the cause, but only because it is
+  measurably not there: all 123 headers in the payload in `boot` pass both checks
+  (**step 4.122**). This bullet used to say the block was *not* re-validated and
+  named a function, `CoreValidateFfsHeader`, that this bullet's own checkout does
+  not contain.
 - **Heap exhaustion.** The five providers that ran are the five *cheapest* in the
   batch, so "the batch ran out of memory partway" was the obvious reading until
   the arithmetic killed it. Page-aligned `SizeOfImage` summed over every file in
@@ -3062,7 +3067,7 @@ fingerprint is what tells them apart, and they point at different code:
 
 | `P2 APRI` | what has to be true |
 |---|---|
-| `bytes=1120 entries=70 sum=a998b263` | the array was read whole and 23 of its names matched nothing — a premise is wrong, because `CoreAddToDriverList` inserts every driver the walk returns into `mDiscoveredList` unconditionally (`Dispatcher.c:1142-1190`) |
+| `bytes=1120 entries=70 sum=a998b263` | the array was read whole and 23 of its names matched nothing — a premise is wrong, because `CoreAddToDriverList` inserts every driver the walk returns into `mDiscoveredList` unconditionally (`Dispatcher.c:1509-1542`) |
 | `bytes=752 entries=47 sum=b4ba9d75` | the Apriori section came back 368 bytes short of its 1120; `unhit` is then 1, `miss` is none, the promotion loop never looks past ap46, and the observed SEQ is the string it must print |
 
 `P2 STATS apriori=46/70` would say the same thing in one number — and the numerator is
@@ -24246,4 +24251,239 @@ NOLOAD function and the loop; `DxeMain.c:560-612`; `tools/console-budget.py:425-
 | adds | that `work/out/boot-now-0923.img`'s inner volume is carried by no other image in the tree, so the build that produced it was never archived and this readback is its only copy; that set 0 (`boot-current-1209.img`) carries no instrument code at all — its one `P2 ` match is the GPP menu string — and that set 1 (`retracted/…arch-first…`) is three hours *older* than the `boot-before-p2walk` build beside it despite the same four codes |
 | corrects | "after the first wipe the panel holds nothing but digest copies" (`:7235`, `:19431`) — true from step 4.13's build on, and not true of the rung-3 image that produced the only `P2 SEQ` reading, whose digest is inlined into a function called once; the paragraph at `:19433-19434` already gives the right ending row for that image but reaches it by that premise. It also scopes `tools/console-budget.py`'s KEY-line anchor to the payloads that carry `P2Key`, which the image the reading came from does not |
 | does not close | the owed panel reading; which step built rung 3; and whether a photograph of the 09-23 panel ever held the single digest copy it printed |
+| not an action | nothing was built, nothing was flashed, no partition was written, and the device was absent throughout — every claim here is about bytes on this host |
+
+## Step 4.122 — the FFS checksum block is validated on the path that matters, and the function the document named for it is in no file of the tree
+
+**The carried question.** Step 4.8 closed "malformed images" as an explanation for the 27 `L`s
+with one sentence, and that sentence carried two claims:
+
+> The FFS `Checksum`/`State`/`FileSize` block is not re-validated on the start path anyway
+> (`CoreValidateFfsHeader` runs only on the read path), so a stale checksum could not be the cause
+> even if one existed.
+
+Both halves are false, and they fail in opposite directions. The block **is** validated — on the
+path that produces the file list the dispatcher is handed, and terminally. And the function named
+as the one that validates it does not exist anywhere in this checkout. The conclusion the sentence
+was carrying, *no malformed image explains the 27*, survives; the reasoning does not, and the
+reasoning is the part a reader would reuse. This step replaces it with a measurement and a
+histogram, and records the two ways the measurement itself can be written to say the opposite.
+
+### The function that is not there
+
+`grep -rln CoreValidateFfsHeader work/uefi/Mu-Silicium/` exits 1 with no output; the symbol is in
+no file of the tree, Mu-Silicium's own copy of `MdeModulePkg` included. What exists is a pair of
+functions whose names differ by one word — `IsValidFfsHeader` (`Ffs.c:150`) and `IsValidFfsFile`
+(`Ffs.c:187`) — and the wrong name is a *plausible* one, which is the whole difficulty: the
+sentence reads as though it were checked, and the name it gives is a name a reader would believe.
+It was not checked.
+
+Where the two real ones are called, in the whole tree:
+
+| symbol | declared | defined | called |
+|---|---|---|---|
+| `IsValidFfsHeader` | `FwVolDriver.h:364` | `Ffs.c:150` | `FwVol.c:457`, inside `FvCheck` |
+| `IsValidFfsFile` | `FwVolDriver.h:382` | `Ffs.c:187` | `FwVol.c:500`, inside `FvCheck` |
+| `VerifyHeaderChecksum` | — | `Ffs.c:117` | `Ffs.c:166`, from `IsValidFfsHeader` alone |
+
+Two call sites, both in `FvCheck`, and none anywhere else. So the sentence's split — "not on the
+start path, only on the read path" — is not a scoping error, it is the wrong split: validation does
+not happen on a read at all. It happens once, when the volume is first walked, and what it produces
+is `FvDevice->FfsFileList`; a later `FvReadFile` looks its file up in that list rather than
+re-testing it. The walk the dispatcher depends on *is* the walk `FvCheck` performs.
+
+What a failure does there is the second half of the correction, and it is stronger than "validation
+is present":
+
+| the test | false at | consequence |
+|---|---|---|
+| `IsValidFfsHeader (ErasePolarity, FfsHeader, &FileState)` | `FwVol.c:457` | `FileState` `HEADER_INVALID`/`HEADER_CONSTRUCTION` ⇒ **resync**: skip 24 bytes (32 for an FFS3 file) and `continue`. Any other state ⇒ `Status = EFI_VOLUME_CORRUPTED` (`:476`), `goto Done` |
+| `IsValidFfsFile (ErasePolarity, CacheFfsHeader)` | `FwVol.c:500` | `Status = EFI_VOLUME_CORRUPTED` (`:504`), `goto Done` — the volume is abandoned |
+
+A single FFS file failing the second test ends the walk for the whole volume, and an `FvCheck` that
+returns an error is an `EFI_FIRMWARE_VOLUME2_PROTOCOL` that is never installed on that handle: not
+fewer drivers, no drivers. The first test's soft branch is a resync, not a pass — the header is not
+accepted there either, it is stepped over. "A stale checksum could not be the cause" is therefore
+true in the opposite of the way it was argued: a stale checksum is the one cause that would leave
+the volume *unwalkable*, which is the loudest failure this firmware has and not the one on the panel.
+
+### What the block is, and which bytes the check covers
+
+`EFI_FFS_FILE_HEADER` is 24 bytes, and the sentence's "`Checksum`/`State`/`FileSize`" is three of
+them, with two neighbours that matter as much:
+
+| offset | field | used by |
+|---|---|---|
+| 16 | `IntegrityCheck.Checksum.Header` | the summed byte `VerifyHeaderChecksum` is testing |
+| 17 | `IntegrityCheck.Checksum.File` | subtracted out of that sum; compared against the data checksum by `IsValidFfsFile` |
+| 18 | `Type` | the walk's dispatch — which is why 18 is not `Attributes` |
+| 19 | `Attributes` | `FFS_ATTRIB_CHECKSUM` (`0x40`) selects fixed checksum vs computed |
+| 20-22 | `Size[3]` | how far the walk steps to the next file |
+| 23 | `State` | input to `GetFileState`; subtracted out of the header sum |
+
+Three details in there are load-bearing, because each is a way to run this check and get the whole
+volume wrong:
+
+- **The header sum subtracts the on-disk `State` byte, not the decoded one.** `VerifyHeaderChecksum`
+  (`Ffs.c:117`) is `CalculateSum8 (header, 24) − FfsHeader->State − FfsHeader->IntegrityCheck.Checksum.File == 0`,
+  with `State` the *raw* byte — here `0xF8`, not the `0x07` the erase polarity decodes it to. Decoding
+  first is the natural move if one has just read `GetFileState`, and it breaks every file in the
+  volume by the same 241.
+- **`GetFileState` returns the highest set bit, not the byte.** Erase polarity is set on this volume,
+  so the raw `0xF8` decodes to `0x07` — which is a *bitmask* (CONSTRUCTION | HEADER_VALID |
+  DATA_VALID), and the state is its top bit, `EFI_FILE_DATA_VALID` (`0x04`). `IsValidFfsHeader` gates
+  on that value: only `HEADER_VALID`, `DATA_VALID`, `MARKED_FOR_UPDATE` and `DELETED` reach the
+  checksum, and everything else returns `FALSE` without one being computed. Returning the whole
+  decoded byte instead makes the switch fall to `default` and declares every file corrupt — the
+  mistake `tools/fv-census.py`'s `get_file_state` exists to prevent, in its own words.
+- **`IsValidFfsFile` compares against `FFS_FIXED_CHECKSUM` (`0xAA`) unless `Attributes & 0x40`.**
+  `Attributes` is `0x00` on all 123 files here, so the fixed branch is the one taken and no file body
+  is ever summed; that is also what makes `FvCheck`'s memory-mapped `AllocateCopyPool` branch
+  (`FwVol.c:487-497`) dead code on this volume, as `:1671-1674` already records.
+
+### The measurement
+
+Taken with `tools/fv-census.py`'s own replay functions imported rather than re-written
+(`verify_header_checksum`, `data_checksum_ok`, `get_file_state`), over **eleven** payloads — every
+rung from `boot-current-1209` through the payload in `boot`, plus the two variants the tree keeps
+apart, `usb-host/Mu-gauguin-xhci-host-gzip.img` and `retracted/Mu-gauguin-arch-first-gzip.img`:
+
+**0 header-checksum failures and 0 file-checksum failures on all eleven.** Their inner `FVMAIN`
+volumes run `0x702000`–`0x730000` and carry 122, 123 or 126 files, and on each of them every file
+the volume holds passed both tests — which for the payload in `boot` the replay confirms is the same
+as every file the walk lists (`files added to FfsFileListHeader: 123`).
+
+On the payload in `boot` (`90b21643e3450c32…`, inner `0x704000`, 7,356,416 B) the histogram is clean
+in the way a volume the device walks has to be clean:
+
+| read | value |
+|---|---|
+| `State`, raw byte 23 | `{0xF8: 123}` — decodes to `0x07`, state `EFI_FILE_DATA_VALID` on every file |
+| `IntegrityCheck.Checksum.File`, byte 17 | `{0xAA: 123}` |
+| `Attributes`, byte 19 | `{0x00: 123}` — `FFS_ATTRIB_CHECKSUM` clear, so the fixed-checksum branch everywhere |
+| `IntegrityCheck.Checksum.Header`, byte 16 | **103 distinct values** across the 123 files (min 2, max 254) |
+| `Type`, byte 18 | `{0x02: 37, 0x05: 1, 0x07: 80, 0x09: 5}` |
+| FV header | `FvLength 0x704000`, `HeaderLength 0x48`, `ExtHeaderOffset 0x60`, `ExtHeaderSize 0x14`, first file at `0x78` |
+
+The varied byte 16 is the point of printing it. The risk with a replay that reports *pass* is a test
+that is true by construction — a field compared against itself, or an identity with no file bytes in
+it — and the variation is what rules that out here: `sum (header, 24)` differs from file to file
+because the header carries each file's GUID, size and state, and the sum minus `State` minus
+`Checksum.File` still comes to zero across 103 different values of the subtracted byte. 123
+equalities holding on 103 distinct numbers is what a checksum check looks like when it is doing
+work. `tools/fv-census.py`'s
+whole run on the same image closes the loop in its own words — `files added to FfsFileListHeader:
+123`, `scan ended: erased run at 0x703bb8`, `corruption: none`, `hides 0 files`, `files passing the
+exact IsValidFfsFile data-checksum test: 123 failures: none`. (The `0x702308` erased run at `:1656`
+belongs to a different rung — a `0x703000` volume, which is `boot-now-0923`, `preread-0923d`,
+`p2-4.14` and `p2-4.16` — while the payload in `boot` is `0x704000` and stops at `0x703bb8`, `0x448`
+from its end. Both hide nothing, which is why `:1655-1668`'s conclusion is right on either.)
+
+### The two mistakes that would have made this the opposite finding
+
+This measurement's first attempt reported **122 failures out of 123** — the volume corrupt, the walk
+abandoned, no drivers, which would have answered the carried question spectacularly and wrongly. It
+was wrong twice, and both mistakes are one keystroke from the correct code:
+
+1. `IntegrityCheck.Checksum.File` read at offset **16** instead of 17. The header checksum and the
+   file checksum are adjacent bytes with adjacent names, so a test that subtracts byte 16 where the
+   firmware subtracts byte 17 differs by exactly `h[16] − h[17]` — zero on one file in 256.
+2. `State` inverted before being subtracted — i.e. decoding it the way `GetFileState` does, which is
+   the right thing to do one line earlier and the wrong thing to do here.
+
+In the run that reported 122/123 both were present at once, so the one file that passed is the one
+where the two deviations happen to cancel; either mistake alone fails essentially every file.
+
+The lesson is already written down in this repository in a different place, for
+`CalculateCheckSum8`'s `(0x100 − sum) & 0xFF` versus the raw sum, which `tools/fv-census.py` says
+"can only pass on a file whose checksum field is zero". **This check has more than one way to be
+written so that it fails every file and still looks like a check**, and a replay that announces "the
+whole volume is corrupt" is far more likely to be one of them than to be a finding about the volume.
+What separates the two is a histogram rather than more care in the arithmetic: 123 files carrying one
+`State` value, one `Attributes` value and 103 distinct checksum bytes is what a volume the device
+walks looks like, and a replay that fails all 123 of those same files is describing its own
+arithmetic rather than the volume.
+
+### The array, re-measured over the same eleven payloads
+
+The Apriori array's 1120 bytes were hashed on each of the eleven. **Ten agree** on
+`c25c6d1675307959194ba361e7c1108ac1f620efd3e5af5223235202a43f78a6`; the exception is
+`retracted/Mu-gauguin-arch-first-gzip.img`, `f68657bc766fdf47ebd903376ed7ba10115e5734156c4e95e122ab8687c93be3`,
+which is the one image in the tree whose array was deliberately rewritten by
+`tools/build-apriori-variant.sh` and whose GUID array is the whole of the 554 bytes that differ. So
+`:20325-20326`'s four-payload statement is a ten-payload one: the array is a constant of the build,
+not a variable of the ladder, and only the variant that asked for a different order has a different
+one. Its FFS file is `1148` bytes on the arch-first image too, with 70 entries — same length,
+different content.
+
+One layout detail is worth writing down because it is a trap that produces plausible output rather
+than an error: the Apriori **file** is 1148 bytes, its single `EFI_SECTION_RAW` *declares* 1124, and
+the array is the 1120 bytes after that section's own 4-byte common header — so the array starts 28
+bytes into the file, not 24. Read at 24 and the four section-header bytes are glued to the front of
+the first GUID, whose little-endian rendering is `19000464-CB7F-D6A2-186A-2F4EB43B9920`: the RAW
+section's size `0x464` (`64 04 00`) and its type `0x19`, then `DxeCore`'s GUID missing its first four
+bytes. `tools/fv-inventory.py`'s own docstring records the same four bytes at the other end of the
+same GUID — a file walk stepped 4 bytes early yields `FFFFFFFF-CB7F-D6A2-186A-2F4EB43B9920` — and the
+coincidence is not a coincidence: both are DxeCore's GUID with a 4-byte neighbour in front of it, one
+of them the previous file's tail, the other this file's own section header.
+
+### What this step does not say
+
+- **It does not say a checksum *should* have failed.** It says none did, in any of the eleven images,
+  at both layers, measured with the firmware's own tests. The 27 `L`s are `CoreLoadImage` failures
+  (the SEQ carries no `S` and no `?`, so no entry point returned an error and the drain reached every
+  promoted entry), and nothing at the FFS layer explains them.
+- **It does not re-open the cutoff question.** The enumeration of physical-prefix stops was run again
+  here and lands where `tools/fv-census.py` already puts it: the stops that promote 46 are the ones
+  at volume files 49 and 50, both `miss=14 PlatformInfoDxeDriver`, both `matched=1..69`. Laying either
+  stop's promotion order against the observed 46 characters is the comparison Step 4.104 withdrew and
+  Step 4.106 at `:21045-21075` re-derives the reason for: the slot map *is* the batch under test, so
+  a difference between the two orders is the hypothesis restated rather than evidence about it. That
+  the two stops' strings are byte-identical on this volume — the boundary file at 50,
+  `FeatureEnablerDxe`, is one the array never names — is what makes it feel like evidence and what
+  makes it useless.
+- **It does not change the P2 wall.** `DxeMain.c:593` still asserts before `:606`'s `gBds->Entry`;
+  the nine architectural protocols are still the nine; the SEQ is still 46 characters with 27 `L`s;
+  the P3 gate at `docs/00-plan.md:322` is still unmet.
+- **It does not take the owed reading.** The panel reading of the payload in `boot` under
+  先读屏，再刷下一次 is still owed, and `P2 APRI`, `P2 APRI miss=`, `P2 WALK`, `P2 STATS
+  discovered=`, `P2 ERR` and `P2 WHY` are still the fields that would decide it.
+
+### The line numbers this step's edit moved
+
+The correction in the "Malformed images" bullet above replaced six lines with eleven, so
+every citation in this log that points past it is now **five lines short** of what it
+names — the same failure mode Step 4.49 tabulated for `Dispatcher.c` and the probes' own
+growth. The citations inside this step were re-measured against the file as it now stands;
+the older ones were not, and are the debt this step leaves. The four worth carrying
+forward, because other steps lean on them:
+
+| was | now | what it names |
+|---|---|---|
+| `:888-893` | `:888-898` | the malformed-image bullet itself, and the sentence this step rewrote |
+| `:1657-1660` | `:1662-1665` | the `FvCheck` bullet and its erased run at `0x702308` |
+| `:20320-20321` | `:20325-20326` | the four-payload Apriori-array statement, which this step's ten payloads extend |
+| `:3065` | `:3070` | the row citing `CoreAddToDriverList` as `Dispatcher.c:1142-1190` |
+
+Nothing in the steps that follow should copy a line number out of this log without
+re-reading the line it names; that has been the rule since Step 4.49 and this step is the
+reason to repeat it.
+
+### Read this step
+
+Instruments: `tools/fv-census.py` imported for `verify_header_checksum` / `data_checksum_ok` /
+`get_file_state` and also run whole on the payload in `boot`; `tools/fv-inventory.py`'s `unpack` and
+`tools/apriori-order.py`'s `apriori_array` over eleven payloads under `work/out/`; `sha256sum` and
+`grep -rln` on this host. Read: `Ffs.c:95-228`, `FwVol.c:444-510`, `FwVolDriver.h:360-385`,
+`Dispatcher.c:1500-1550` and `:2170-2200`, `tools/fv-census.py`'s docstring and `:150-265`,
+`tools/fv-inventory.py:60-130`, and in this document `:888-898` (corrected in place by this step),
+`:1658-1675`, `:20325-20326`, `:21045-21105`.
+
+| | |
+|---|---|
+| instrument | `tools/fv-census.py`'s own `verify_header_checksum` / `data_checksum_ok` / `get_file_state`, imported and applied to every FFS file of eleven payloads; the tool also run whole on the payload in `boot`; `grep -rln CoreValidateFfsHeader work/uefi/Mu-Silicium/` |
+| shows | the two validators exist, are called from exactly two sites, both inside `FvCheck` (`FwVol.c:457`, `:500`), and that a `FALSE` from either ends the volume (`EFI_VOLUME_CORRUPTED` at `:476`/`:504`); that all 123 headers of the payload in `boot` pass both checks with `State` raw `0xF8`, `Checksum.File` `0xAA`, `Attributes` `0x00` and 103 distinct header-checksum bytes; and that the Apriori array is the same 1120 bytes on ten of the eleven payloads |
+| adds | that `CoreValidateFfsHeader` is in no file of the checkout, so the sentence that named it was never checked against the source; the `GetFileState`-returns-the-highest-bit rule and the raw-`State` subtraction, both of which are ways to declare the whole volume corrupt; the array-start offset (28, not 24) and the `19000464-CB7F-…` GUID that reading it 4 bytes early produces; and the arch-first image's array hash, which no step has recorded |
+| corrects | `:891-896`'s "the FFS `Checksum`/`State`/`FileSize` block is not re-validated on the start path anyway (`CoreValidateFfsHeader` runs only on the read path)" — corrected in place, both halves; `:3070`'s citation of `CoreAddToDriverList` as `Dispatcher.c:1142-1190`, which is `:1509-1542`; and the scope of `:1663`'s erased run (`0x702308` belongs to a `0x703000` volume; the payload in `boot` is `0x704000` and stops at `0x703bb8`); and the line drift the correction itself caused, tabulated in "The line numbers this step's edit moved" |
+| does not close | the owed panel reading; which of `EFI_OUT_OF_RESOURCES` / `EFI_NOT_FOUND` / `EFI_ACCESS_DENIED` / `EFI_SECURITY_VIOLATION` / a `CoreLoadPeImage` status backs each of the 27 `L`s; and the P2 wall itself |
 | not an action | nothing was built, nothing was flashed, no partition was written, and the device was absent throughout — every claim here is about bytes on this host |
