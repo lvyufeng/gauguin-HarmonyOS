@@ -23397,6 +23397,14 @@ byte-identical because both were cut from the same macro.
 
 ### Three of the six links are supplied by drivers, and this port has none of the three
 
+> **Step 4.119 qualifies the noun in that heading, and the qualification is in this port's
+> favour.** The three are Silicium's `KeypadDeviceDxe`, `KeypadDxe` and their library, and the
+> count below is unchanged. But link 4 of the chain above — an `SimpleTextInputEx` handle on a
+> device path equal to `KeypadDevicePath` — turns out to have a second candidate supplier that
+> this port already has: `ButtonsDxe.efi`, which carries that same 24-byte device path and the
+> `SimpleTextInputEx` GUID in its own `.data`, and is named by neither header. See Step 4.119
+> for the bytes.
+
 `KeypadDeviceDxe` and `KeypadDxe` are not gauguin's. The measurement is a count over the tree:
 of **85** platform `.dsc` files, **11** name `KeypadDeviceDxe`, and the same 11 name it in
 `DXE.inc`, in `APRIORI.inc` and in `[Components]`, with `KeypadDxe` beside it in all four
@@ -23532,3 +23540,223 @@ ap58 and ap32), and `:23441-23443`.
 | agrees with | Step 4.109's sequence and Step 4.116's buckets — the three Qualcomm providers a keypad library would read (`DALTLMM` ap32, `PmicDxe` ap35, `GpiDxe` ap45) are all `L`, so P3 item 4 is ordered after the wall |
 | does not close | the 27 `L`s, `P2 FREE largest=`, or anything the gate waits on; and it asks rather than answers whether `ButtonsDxe` can select a boot entry on its own |
 | not an action | nothing was built, nothing was flashed, and the device was absent throughout — the panel line above is a prediction and is labelled as one |
+
+## Step 4.119 — the driver this port already has carries the device path the combo looks for, and a SEQ's length is a count of matches rather than of entries
+
+Step 4.118 ended by naming the question it did not ask: whether `ButtonsDxe` exposes something a
+boot-entry selector could use instead of Silicium's keypad stack. It is answerable without the
+device, and the answer is sharper than the question. **This step also corrects an inference
+Step 4.118 wrote into its commit message**, which is the second of its two parts.
+
+### The measurement
+
+A byte search, not a source reading. Every `.efi` in the phone's own extracted driver set
+(`device/dxe/`, **86** files) and every `.efi` staged under `uefi/Binaries/gauguin/` (**55**
+files) was read and searched for the 16 bytes of `EFI_KEYPAD_DEVICE_GUID`
+(`0e 8a f5 d7 d2 be 5a 4b bb 43 8a b2 3d d0 e2 b0`) and for the 24-byte device path that
+`BootDevices.h:31-51` builds out of it. Result: **one driver carries it.**
+
+| hit | what it is |
+|---|---|
+| `device/dxe/ButtonsDxe.efi` | the driver |
+| `uefi/Binaries/gauguin/QcomPkg/Drivers/ButtonsDxe/ButtonsDxe.efi` | the same file, staged |
+| `device/dxe/ButtonsDxe.ffs` | the volume file the driver came out of |
+| `device/dxe/fv-inner.bin` | the whole inner volume, which contains that FFS |
+
+The last two are not separate drivers — they are the container and the container's image of the
+same file. So exactly one driver in the phone's own 86 carries the GUID that Step 4.118's chain
+looks for, and it is not a keypad driver.
+
+### What it carries, byte for byte
+
+`ButtonsDxe.efi` is 40,960 B with three sections; `.data` is at RVA `0x8000` with its raw
+pointer also at `0x8000`, so a file offset in `.data` is its RVA and the dump needs no
+translation. At file offset `0x8130`:
+
+```
+01 04 14 00 | 0e 8a f5 d7 d2 be 5a 4b bb 43 8a b2 3d d0 e2 b0 | 7f ff 04 00
+```
+
+Twenty-four bytes: a `HW_VENDOR_DP` node (`01 04`) of length `0x14` = 20, carrying
+`D7F58A0E-BED2-4B5A-BB43-8AB23DD0E2B0`, followed by the four-byte end node (`7f ff 04 00`).
+That is `KeypadDevicePath` — `HARDWARE_DEVICE_PATH` (`0x01`) + `HW_VENDOR_DP` (`0x04`) +
+`sizeof (VENDOR_DEVICE_PATH)` = 20 + `EFI_KEYPAD_DEVICE_GUID` + `END_DEVICE_PATH_TYPE` /
+`END_ENTIRE_DEVICE_PATH_SUBTYPE` / `END_DEVICE_PATH_LENGTH` = `0x7F` / `0xFF` / `4`
+(`BootDevices.h:31-51`) — **byte for byte, including the length fields.**
+
+Ahead of the node, at `.data` `0x8028`, sit eleven consecutive 16-byte GUIDs — a linker-merged
+table, not a structure, since the stride is exactly 16 and there is no count word. It runs to
+`0x80D7`; the node begins 88 bytes after it ends. All eleven decode to names in this tree except
+the last two:
+
+| .data | GUID | named by |
+|---|---|---|
+| `0x8028` | `BEDAEABC-5E70-4D66-9733-213D072B9D04` | `gEfiShimLibraryHobGuid` (`QcomPkg.dec`) |
+| `0x8038` | `7739F24C-93D7-11D4-9A3A-0090273FC14D` | `gEfiHobListGuid` (`MdePkg.dec`) |
+| `0x8048` | `05AD34BA-6F02-4214-952E-4DA0398E2BB9` | `gEfiDxeServicesTableGuid` |
+| `0x8058` | `387477C1-69C7-11D2-8E39-00A0C969723B` | `gEfiSimpleTextInProtocolGuid` |
+| `0x8068` | `DD9E7534-7762-4698-8C14-F58517A625AA` | `gEfiSimpleTextInputExProtocolGuid` |
+| `0x8078` | `09576E91-6D3F-11D2-8E39-00A0C969723B` | `gEfiDevicePathProtocolGuid` |
+| `0x8088` | `D2B2B828-0826-48A7-B3DF-983C006024F0` | `gEfiStatusCodeRuntimeProtocolGuid` |
+| `0x8098` | `5B1B31A1-9562-11D2-8E3F-00A0C969723B` | `gEfiLoadedImageProtocolGuid` |
+| `0x80A8` | `157A5C45-21B2-43C5-BA7C-822FEE5FE599` | `gEfiPlatformInfoProtocolGuid` (`QcomPkg.dec`) |
+| `0x80B8` | `60759B13-A8BF-46FE-B7E6-797BFB335DF3` | nothing in this tree |
+| `0x80C8` | `9BA45B66-EFA4-441C-A3E4-ED2224786BE2` | nothing in this tree |
+
+The fourth, fifth and sixth entries of that table are, in order, `SimpleTextIn`,
+`SimpleTextInputEx` and `DevicePath`. The first two, in that order, are exactly the pair
+`KeypadDxe.c:306` passes to `InstallMultipleProtocolInterfaces`; the third is the protocol
+`KeypadDxe` does not name there, because it comes from the handle it was connected to. This image
+carries all three beside the vendor device path.
+
+### The bytes are not the loader's
+
+A reader's first objection to a 16-byte match is that the loader might assemble those bytes from
+relocated pointers at run time. Checking that is a matter of reading `.reloc`, which is an
+ordinary base-relocation table here: five blocks, and the last one ends on the section's final
+byte. Of its 2,028 entries, **136 are `IMAGE_REL_BASED_DIR64` and the other 1,892 are
+`ABSOLUTE` padding**. Eleven of the 136 fall in `.data`:
+
+```
+0x80D8 0x80E0 0x80E8 0x80F0 0x8100 0x8108 0x8118 0x8120 0x8128 0x8148 0x8150
+```
+
+The list matters for what is missing from it. **No site lies inside the GUID table
+(`0x8028-0x80D7`) and no site lies inside the node (`0x8130-0x8147`)**; the two nearest bracket
+the node at `0x8128` and `0x8148`, and those two are slots of an adjacent table of eight-byte
+addresses — the bytes at `0x8128` are `58 18 00 00 00 00 00 00`, a pointer — whereas the 24 bytes
+between them are not. So the node is literal image data that no relocation touches, and what
+surrounds it is relocated and structurally different. That is the check that separates a device
+path from a coincidence, and it passes.
+
+### Two names for one value, and neither header knows the other
+
+`BootDevices.h:12-18` calls those 16 bytes `EFI_KEYPAD_DEVICE_GUID`; `QcomPkg.dec:44` calls the
+same 16 bytes `gQcomKeypadDeviceGuid`. Every byte agrees, and neither name reaches the other.
+`grep -rn gQcomKeypadDeviceGuid` over the whole tree returns **one line — the definition at
+`QcomPkg.dec:44` itself** — so no source file, INF or DSC anywhere reads that name. And
+`EFI_KEYPAD_DEVICE_GUID` appears twice, both in the header that defines it: the `#define` at
+`BootDevices.h:12` and its use at `:41`. On the platform side, Step 4.118's `grep -i keypad`
+over `gauguinPkg` returned nothing while the value was sitting in a driver the platform already
+stages. That is how this went unread: the search term and the thing being searched for are
+named differently on the two sides of the boundary.
+
+### What it changes
+
+Step 4.118's chain link 4 is
+`LocateDevicePath (&gEfiSimpleTextInputExProtocolGuid, &KeypadDevicePath, &StiHandle)`
+(`KeyCallback.c:53`). It asks for two things at once — a handle offering `SimpleTextInputEx`,
+and that handle's device path equal to the 24 bytes above — and Step 4.118 counted it as
+unsatisfiable because Silicium's `KeypadDxe` produces the first and Silicium's `KeypadDeviceDxe`
+produces the second, and gauguin has neither.
+
+`ButtonsDxe.efi` carries both, in one image, with the device path at the exact bytes. If it
+installs them, link 4 succeeds without either Silicium driver, and link 3's phrasing in Step
+4.118 — that the STI-Ex instance attaches to the handle link 1 created — is wrong for this
+supplier: a combined driver produces its own handle and needs no `ConnectController`.
+
+Link 1 then stops mattering in a second way. `LocateHandleBuffer (gKeypadDeviceProtocolGuid)`
+has no `else`, and the loop it guards exists to start the *consumer* (`KeypadDxe`). A driver
+that is both producer and consumer needs nothing connected, so the silent failure is not merely
+harmless, it is correct. Note the shape of the argument, because it is conditional: that
+silence would hide a real fault if `KeypadDxe` were ever added without `KeypadDeviceDxe`.
+
+So P3 item 4's second half may need **no new driver at all** — only that `ButtonsDxe` runs. And
+that moves the whole item onto the P2 wall rather than leaving it as work: `ButtonsDxe` is ap58,
+inside the a-priori array, so it is promoted before the dispatch loop begins and its fate is the
+same `CoreLoadImage` wall the other 27 meet.
+
+### What it does not prove, and what it still cannot show
+
+Carrying a GUID is not installing it. A driver can hold a device path it never publishes, and
+this step read the bytes rather than the code: no call site was disassembled and no import was
+resolved, so the claim here is *presence and adjacency*, not publication. The two unnamed GUIDs
+at `0x80B8` and `0x80C8` are the standing reminder: two of the eleven names in that table resolve
+to nothing in this tree, so even the GUIDs can only be half-read.
+
+Nothing can be observed yet either. `PlatformBootManagerAfterConsole` — and with it every line
+of `KeyCallback.c` — runs only after BDS starts, and BDS is one of the nine architectural
+protocols the assert at `DxeMain.c:593` stops short of. Step 4.118's predicted panel line and
+the alternative this step opens (`[Volume Up] Boot Manager` drawn at `ScreenHeight * 48 / 50`,
+`BootManager.c:122`) are both downstream of that wall, and the two are mutually exclusive on a
+single photograph: `SetupKeypad`'s error line (`KeyCallback.c:55`) cannot print on a boot that
+also positions the label.
+
+### The step's own error, in Step 4.118's commit message
+
+Step 4.118's commit message ends its refutation paragraph:
+
+> … so the 46-character SEQ means `AprioriEntryCount` was 46.
+
+**That is wrong, and the instrument says so in its own source, twice.**
+
+`Dispatcher.c:2267-2270`, in the comment above the line that prints `P2 APRI bytes= entries=
+sum=`:
+
+> The SEQ line is not one of those three. It is `mP2Apriori` characters long, and `mP2Apriori`
+> is incremented inside the match branch of the promotion loop, so its length is the number of
+> entries that matched and went on the scheduled queue — never the number scanned. A SEQ of 46
+> is therefore 46 matches out of `entries`.
+
+And `Dispatcher.c:136-138`, written as the disagreement the whole instrument was built to
+settle: *"a SEQ of 46 characters is either 46 entries scanned and every one matched, or 70
+scanned and 46 matched, and the two are indistinguishable from the SEQ line alone."*
+
+Two further checks close the remaining exits. `P2BRINGUP_APRIORI_MAX` is **128**
+(`Dispatcher.c:111`), and `P2MarkSeq` writes `mP2AprioriRes[Index]` for `Index < P2BRINGUP_APRIORI_MAX`
+(`:605`), so a 70-entry array cannot be truncated to 46 by the instrumentation. And the two
+readings the comment names are separated by `entries=` — which has never been read on this
+board, and is exactly the `P2 APRI` line Step 4.111's order puts third after `P2 ERR` and
+`P2 APRI miss=`.
+
+The refutation of the *promotion-gating* reading stands, because it rests on the loop and not on
+the length: `Dispatcher.c:2104-2113` sets `Dependent = FALSE; Scheduled = TRUE` and tail-inserts
+with no depex consulted, so the thirteen architectural protocols gate nothing at that point.
+What Step 4.118's refutation actually establishes is narrower than what its message claims: the
+promotion loop is not where the protocols bite. Step 4.118's *document* does not carry the
+error — the claim was written only into the message — and the document is not merely silent
+about it, it already states the opposite: Step 4.12 at `:1485` reads *"the 46 characters are 46
+matches, not 46 out of a room of 69"*, and Step 4.21 at `:3879-3886` reads *"the length is a
+count of promotions either way ... So the 46 characters fix the outcome of 46 promotions"*. The
+commit message contradicted two steps of this document that had been in it for months. The
+heading Step 4.118 does carry is qualified in place by a note above it, and that note points
+here.
+
+### What this step does not say
+
+- It does not say `ButtonsDxe` installs `SimpleTextInputEx`. It says the image carries the GUID
+  and the device path. See the section above; the two are different claims and only the first is
+  measured.
+- It does not say the keypad stack is unnecessary in general, only that a second candidate
+  supplier of the same device path is already present on this port.
+- It does not say the silent `LocateHandleBuffer` failure is harmless in every configuration.
+  It is harmless because the driver it would have started is also absent; the same silence over
+  a present consumer would be a defect.
+- It changes no count. Nothing moves in the 27 `L`s, in the 46-character SEQ, or in the nine
+  absent architectural protocols, and the P3 gate is untouched.
+- It does not close the question it opens. Whether `ButtonsDxe` publishes what it carries is a
+  runtime fact, and it needs the P2 wall passed before it can be read.
+
+### Read this step
+
+`device/dxe/ButtonsDxe.efi` and `uefi/Binaries/gauguin/QcomPkg/Drivers/ButtonsDxe/ButtonsDxe.efi`
+(`.text` RVA `0x1000`, `.data` RVA `0x8000` raw `0x8000`, `.reloc` RVA `0x9000`; bytes at
+`0x8028-0x80D7` and `0x8130-0x8147`; `.reloc` blocks `0x9000`, `0x9010`, `0x9034`, `0x90CC`,
+`0x9124`);
+`Silicon/Silicium/SiliciumPkg/Include/Configuration/BootDevices.h:12-18`, `:31-51`;
+`Silicon/Qualcomm/QcomPkg/QcomPkg.dec:44`;
+`Silicon/Silicium/SiliciumPkg/Drivers/KeypadDxe/KeypadDxe.c:306`;
+`Silicon/Silicium/SiliciumPkg/Library/BootManagerLib/KeyCallback.c:41-50`, `:53`, `:55`;
+`…/BootManagerLib/BootManager.c:114`, `:121-122`;
+`Mu_Basecore/MdeModulePkg/Core/Dxe/Dispatcher/Dispatcher.c:111`, `:136-138`, `:597-607`,
+`:2104-2113`, `:2267-2275`; in this document Steps 4.12 at `:1485` and 4.21 at `:3879-3886`, the
+Step 4.119 note at `:23400-23406`, and Step 4.118 at `:23340`.
+
+| | |
+|---|---|
+| instrument | a byte search for `EFI_KEYPAD_DEVICE_GUID` and its 24-byte device path over 86 `.efi` in `device/dxe/` and 55 in `uefi/Binaries/gauguin/`, plus a PE section-header and base-relocation read of the one hit |
+| shows | exactly one of the phone's own drivers carries the vendor device path `KeyCallback.c:53` hard-codes, and it also carries `gEfiSimpleTextInProtocolGuid` and `gEfiSimpleTextInputExProtocolGuid`; `BootDevices.h:12-18` and `QcomPkg.dec:44` name those bytes differently and neither names the other |
+| adds | a second candidate supplier for Step 4.118's link 4, which moves P3 item 4's second half off "write a Qualcomm `KeypadDeviceLib`" and onto the P2 wall — `ButtonsDxe` is ap58 and is promoted before the loop |
+| corrects | Step 4.118's commit-message inference that a 46-character SEQ means `AprioriEntryCount` was 46; `Dispatcher.c:2267-2270` says the length is the number of matches, `:136-138` says the two readings are indistinguishable from the SEQ alone, `P2BRINGUP_APRIORI_MAX` is 128 so the instrumentation cannot be the cause, and Steps 4.12 and 4.21 had already written it correctly |
+| does not close | whether the driver publishes what it carries — that is a runtime fact behind the `DxeMain.c:593` assert, and the two panel outcomes that would settle it are mutually exclusive on one photograph |
+| not an action | nothing was built, nothing was flashed, no partition was written, and the device was absent throughout; every claim here is about bytes on this host |
