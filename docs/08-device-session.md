@@ -25074,9 +25074,13 @@ is not an `AutoGen.c` caller id, and it is not a driver the batch had already st
 
 ### Why the machine stops: a print reached with a null format inside `RpmhDxe`
 
-Step 4.128 corrects this section's title and its conclusion. The terminal row is not a branch
-of `rpmh_image_os.c`; it is `DebugLib.c` line 78, inside `RpmhDxe`'s own `DebugLib`, and the
-`rpmh_image_os.c` sites below are the candidates that did *not* fire.
+Step 4.128 corrects this section's *file attribution* and leaves its conclusion standing. The
+terminal row is `DebugLib.c` line 78, inside `RpmhDxe`'s own `DebugLib` — but that is the
+guard, not the branch. The branch is one of this module's three null-format `DebugPrint` sites,
+all three of them in `rpmh_image_os.c`; the guard fires before the site's own assert, so the
+panel names the guard's file and the site is inferred from the call sites rather than read off
+the row. So this section's title is right about the file and wrong about which line prints, and
+the four sites it decodes below are the candidates of which exactly one *did* fire.
 
 The DebugLib the image was built with is not the one in this tree. This tree prints an
 assert in one of two spellings and the image's is a third: `"ASSERT [%a] %a(%d): %a\n"` is
@@ -25127,14 +25131,18 @@ where the device's does not. Three of the four named sites print with a null for
 asserting, and on those the machine dies on the print rather than on the assert: DebugLib's
 own guard fires first and spins, which is why the panel's last row names `DebugLib.c` and
 line 78 and not `rpmh_image_os.c`. **Step 4.128 answers the question this paragraph left open:
-none of the four was reached.** All four build their message from the file at `0xbdea`,
-`rpmh_image_os.c`, and would print `ASSERT rpmh_image_os.c +84: 0` (or `+175`, `+187`, `+197`);
-the panel prints `DebugLib.c +78`, so the row is a *print* reached with a null format somewhere
-else in the module, and which of its 22 `DebugPrint` sites that was is not established — the
-guard is what the panel shows and it does not record its caller. What the step does establish
-is that the terminal row is the payload's own code and not a missing register or a fabricated
-word: the seed put the words the earlier steps lacked in place, the run went eighteen Apriori
-entries further for it, and it stopped at a place the image itself considers fatal.
+one of the three was reached.** The three null-format call sites at `0x6004`, `0x6120` and
+`0x6190` are the only callers of `DebugVPrint` in this image that pass a literal null — the
+other nineteen pass a real format, and the fourth `rpmh_image_os.c` site, line **197**, prints
+`RPMH_ERR_FATAL` — so a `DebugLib.c`-and-78 row cannot come from anywhere in the module but
+those three, each of which pushes `rpmh_image_os.c` at `0xbdea` and would print
+`ASSERT rpmh_image_os.c +84: 0` (or `+175`, `+187`) had the guard let it through. *Which* of
+the three it was is not established: the guard is what the panel shows and it does not record
+its caller. The site's expression text, the `'0'` at `0xb4d4`, is what the assert would have
+printed. What the step does establish is that the terminal row is the payload's own code and
+not a missing register or a fabricated word: the seed put the words the earlier steps lacked in
+place, the run went eighteen Apriori entries further for it, and it stopped at a place the
+image itself considers fatal.
 
 ### The honesty the seed requires
 
@@ -25922,19 +25930,47 @@ are one call of `DebugAssert` **in `RpmhDxe`**, and the file and line the assert
 at `0x19d8`.
 
 The event is therefore a `DebugPrint`/`DebugVPrint` reached with a **null format string** from
-somewhere in `RpmhDxe`. What is not established is *which* of the module's 22 `DebugPrint` call
-sites it was: the guard is what the panel shows, and the guard does not record its caller.
+one of the module's three call sites that pass one. The module has 22 `bl` calls to
+`DebugVPrint` at `0x18dc`; nineteen of them load a real format into `x1` first (`0xa5e4`,
+`0xa65d`, `0xb47b`, `0xb500` or `0xd794`), and exactly three pass `mov x1, xzr`:
 
-**And it is not one of `rpmh_image_os.c`'s four.** Those four sites decode to a different
-message. Each builds `DebugAssert` with the file at `0xbdea` — `rpmh_image_os.c` — at line
-`84`, `175`, `187` and `197`, and with the description at `0xb4d4`, which reads back as the
-one-character literal `0`. That description is what `ASSERT (0)` stringifies to: `__FILE__`,
-`__LINE__` and the expression text `"0"`, the tripwire form rather than a null check. Any of the
-four firing would print `ASSERT rpmh_image_os.c +84: 0` — or `+175`, `+187`, `+197`. The panel
-prints `ASSERT DebugLib.c +78: Format != ((void *) 0)`. So none of the four was reached, and
-step 4.125's section *"Why the machine stops: an error branch in `rpmh_image_os.c`"* is about the
-wrong file. Step 4.125's open question — *"which of the four was reached is not established
-here"* — is answered: none of them.
+```
+0x6000: orr w0, wzr, #0x80000000 ; 0x6004: mov x1, xzr ; 0x6014: bl 0x18dc
+0x611c: orr w0, wzr, #0x80000000 ; 0x6120: mov x1, xzr ; 0x6130: bl 0x18dc
+0x618c: orr w0, wzr, #0x80000000 ; 0x6190: mov x1, xzr ; 0x61a0: bl 0x18dc
+```
+
+Each of the three is followed within a few instructions by an `ASSERT (0)`-shaped `DebugAssert`
+that names the file at `0xbdea` — `rpmh_image_os.c` — at line **84**, **175** and **187**
+respectively, with the description at `0xb4d4`, which reads back as the one-character literal
+`0`. So **one of those three was reached**, and the guard is what stopped it. That is the whole
+mechanism: the site's print is reached with a null format, `DebugVPrint`'s own guard at
+`0x191c` fires before the print can run, and its `DebugAssert("DebugLib.c", 78, …)` plus the
+spin at `0x19d8` is the pair the panel shows. The site's own `ASSERT rpmh_image_os.c +84: 0`
+never executes, which is why the panel names `DebugLib.c` and line 78 — the file the site's
+assert would have named, the `rpmh_image_os.c` at `0xbdea`, and its expression text, the `"0"`
+at `0xb4d4`, are both absent from the guard's message.
+
+*Which* of the three it was is not established, and the panel cannot settle it: the guard
+prints its own file and line and does not record its caller. The three differ only in where in
+the module they sit, and the reading of them is asymmetric. Line **84** is a cold function:
+`0x5fcc` looks up `RPMhMasterLog` (`0xbddc`) on the object at `0xe828+0x20` by calling
+`0xa2c8`, and takes the branch when that lookup returns 0 — a failure of the module's own
+logging object. Lines **175** and **187** are not cold: they are the failure tails of two shared
+helpers, `0x6108` (`(w0 & 0xff) == 0`) and `0x617c` (null pointer), reached by **66** and
+**35** `bl` sites respectively, and both are called from the wrapper at `0x6050`, which polls
+three interface slots of the object at `0xe828` — `[x10+72]`, `[x10+80]` and `[x10+88]` — and
+converts each result with `cset w0, eq` before handing it to the helper. So the likeliest
+reached site is one of the two interface-slot checks, on a fabric the mirror is standing in for
+with a stub; but that is an inference about which of the three, not a reading. The one thing the
+row does fix is the file, and it is `rpmh_image_os.c`.
+
+Step 4.125's section *"Why the machine stops: an error branch in `rpmh_image_os.c`"* is
+therefore right about the branch and wrong about the row: the branch is the module's, the row
+is `DebugLib`'s. Step 4.125's open question — *"which of the four was reached is not
+established here"* — is narrowed from four to three and not closed; the fourth, line **197**, is
+excluded, because its print passes the real format `RPMH_ERR_FATAL` (`0xbe05`) and a
+non-null format cannot produce a `0x191c` guard trip.
 
 Two details of the decoding stand as recorded and are worth repeating because they are what made
 the wrong file plausible. `Format != ((void *) 0)` occurs **twice** in `RpmhDxe.efi`, at `0xa6a1`
@@ -26024,7 +26060,8 @@ Platforms/Xiaomi/gauguinPkg/Include/APRIORI.inc`; a row-by-row join of the captu
 against the array's index/name table; `Mu_Basecore/MdeModulePkg/Core/Dxe/Dispatcher/Dispatcher.c`
 at `:89`, `:111`, `:556-591`, `:605-608`, `:677-682`, `:2074`, `:2095-2126`, `:1122`, `:1157-1167`,
 `:2260-2300`, `:2333`; `aarch64-linux-gnu-objdump -d` over `device/dxe/RpmhDxe.efi` at `0x19c0`,
-`0x19d8`, `0x19e0` and its four `DebugAssert` sites; a byte search of both assert spellings across
+`0x19d8`, `0x19e0` and its four `DebugAssert` sites, plus a census of all 22 `bl 0x18dc`
+callers and of the four sites' preceding `mov w1, #…` line numbers and `x1` loads; a byte search of both assert spellings across
 the 123 inner files; `sha256sum` over `device/dxe/RpmhDxe.efi`, the tree's copy, and the PE
 inside volume file#33; the `FILE_GUID` line of the gauguin `RpmhDxe.inf` and a case-insensitive
 count of the 57 INFs declaring `CB29F4D1-…9766`; and `head -c 16` of `device/dxe/RpmhDxe.ffs`.
@@ -26036,7 +26073,7 @@ are all empty.
 |---|---|
 | instrument | the decompressed inner volume read as a file table and as a GUID array, the tree's own `APRIORI.inc` as the order's oracle, `Dispatcher.c`'s promotion loop and both `P2Tick` call sites, the prebuilt `RpmhDxe.efi` disassembled at its guard and its `DebugAssert`, a byte census of the two assert spellings across all 123 files, and hashes over the three copies of the same PE — nothing was built, flashed or written, and no device is attached |
 | shows | that the payload's Apriori array is **70** GUIDs — file#0 `FC510EE7-…`, body `0x464`, one `0x19` RAW section of 1120 bytes — exactly matching `APRIORI.inc`'s INF order with zero mismatches, and that every `K` row's tick number equals the array index of the GUID printed beside it (17 rows, 17 matches): `K 17` is `CmdDbDxe` at index 17 and `K 18` is **`NpaDxe` at index 18**, so Apriori **19** is `RpmhDxe`, at index 19, one past the last row; that the two counters on a row are two different counts — `mP2Tick` (dispatch attempts, `:665`) and `mP2Started` (successes, `:1163`) — so the unseeded rungs end `K 18 Ss 17/69` and the AOP-seeded one ends `K 18 Ss 18/69`, one more success at the same tick, which is CmdDbDxe's `U` turning into `s` read off the second counter; that the denominator 69 is `mP2Apriori`, the number of *promotions* (70 entries less `DxeCore`, which is a `DXE_CORE` file), so the batch stopped 18 ticks into 69 and did not exhaust its Apriori slots; that `P2Tick ('S', …)` runs after `CoreStartImage`, so each row reports a start that returned and the missing `K 19` says `RpmhDxe`'s entry point did not; and that the two terminal rows are one `DebugAssert` **inside `RpmhDxe`'s own `DebugLib.c`** — the guard at `0x19c0` naming `DebugLib.c`, line `78` and `"Format != ((void *) 0)"`, tail-calling the image's `DebugAssert` at `0x19e0` whose constants are the row's `0x90000002`/`0x03000007` and whose caller id is the row's `CB29F4D1-…9766`; and that the phone and the mirror stop in **different places** — the phone reaches `DxeMain.c:593`, which is `ASSERT_EFI_ERROR` on `CoreAllEfiServicesAvailable ()` at `:582`, so its dispatcher returned and its whole batch ran, while the mirror never gets past `RpmhDxe` — which makes the mirror's `RpmhDxe` stop an artefact of the stub and leaves the phone's real blocker where the plan has always put it, on the absent architectural protocols |
-| adds | the array's identity as a *file object* in the volume (file#0, its GUID, its `0x464` body and its single 1120-byte section) rather than a byte pattern in a payload; the index↔tick join, which is the instrument the record has been missing for every `K` row it has quoted; the two `P2Tick` call sites read off the source, which is what makes a `K` row a completed start rather than an attempted one; the decode of the four `rpmh_image_os.c` sites as `ASSERT (0)` tripwires at lines 84 / 175 / 187 / 197, whose description `"0"` is the stringified expression and whose message would have named that file and not `DebugLib.c`; the byte census that splits the volume's files 42/42 across the two assert spellings with no file in both, which is why a spelling can attribute a row to a set of images; and the three-way identity of the prebuilt PE (`device/dxe/RpmhDxe.efi` = the tree's copy = the PE in volume file#33) with the two naming conventions named on each side |
-| corrects | this window's own working note that the `U` in `K 17 SU` was a `(Status & 0x80000402)` class rather than `EFI_UNSUPPORTED` — `P2WhyLetter` (`Dispatcher.c:588-589`) returns `'U'` for `EFI_UNSUPPORTED` and nothing else, so step 4.127's reading stands and the retraction it proposed is not written; step 4.125's *"in `rpmh_image_os.c`"*, which is the wrong file, and its *"which of the four was reached is not established"*, which is answered *none*; the reading that the two terminal rows come from two different modules, when both are one `DebugAssert` in one image; the earlier reading of the last `K` row as `CmdDbDxe` at Apriori 18, which is one off — `CmdDbDxe` is `K 17`; the earlier claim that the Apriori array holds 58 entries with a 12-byte terminator, which came from reading GenFv's padding byte as a size and is deleted; and step 4.127's *"no `FILE_GUID` in the tree … is that value"*, which is the `FILE_GUID` of 57 other boards' `RpmhDxe.inf` |
-| does not close | the P3 gate and the owed panel reading of the flashed 4.74 set; *which* of `RpmhDxe`'s 22 `DebugPrint` call sites passed the null format — the guard is what the panel shows and it does not record its caller; what `RpmhDxe` was doing at that point, since the AOP mailbox this instrument seeds is one word of an interface the driver goes on to read more of; whether the 46-letter `P2 SEQ` in this record is a reading of an older image, which is the only reading consistent with a 70-entry array and a 69-entry denominator but which no capture here confirms; and the phone's own `K` rows, which remain the only record that could confirm this ladder against the device |
+| adds | the array's identity as a *file object* in the volume (file#0, its GUID, its `0x464` body and its single 1120-byte section) rather than a byte pattern in a payload; the index↔tick join, which is the instrument the record has been missing for every `K` row it has quoted; the two `P2Tick` call sites read off the source, which is what makes a `K` row a completed start rather than an attempted one; the decode of the four `rpmh_image_os.c` sites as `ASSERT (0)` tripwires at lines 84 / 175 / 187 / 197, three of which print first with a literal null format — so their own assert is never reached and the guard's row is what the panel shows — and whose description `"0"` is the stringified expression of the tripwire; the enumeration of all 22 `bl 0x18dc` (`DebugVPrint`) callers in `RpmhDxe.efi`, of which exactly three pass `mov x1, xzr` (`0x6004`, `0x6120`, `0x6190`, the fourth `rpmh_image_os.c` site passing the real format `RPMH_ERR_FATAL`) and the other nineteen load a real format; and the reading of `DebugVPrint`'s own mask test at `0x1928` as following the null test, so no debug level can suppress the guard; the byte census that splits the volume's files 42/42 across the two assert spellings with no file in both, which is why a spelling can attribute a row to a set of images; and the three-way identity of the prebuilt PE (`device/dxe/RpmhDxe.efi` = the tree's copy = the PE in volume file#33) with the two naming conventions named on each side |
+| corrects | this window's own working note that the `U` in `K 17 SU` was a `(Status & 0x80000402)` class rather than `EFI_UNSUPPORTED` — `P2WhyLetter` (`Dispatcher.c:588-589`) returns `'U'` for `EFI_UNSUPPORTED` and nothing else, so step 4.127's reading stands and the retraction it proposed is not written; this step's own first draft, which read the panel's `DebugLib.c +78` as proof that *none* of `rpmh_image_os.c`'s four sites was reached — the disassembly of the module's 22 `DebugVPrint` callers shows the three null-format sites are exactly three of those four, so one of them was reached and the guard caught it; step 4.125's *"which of the four was reached is not established here"*, which is narrowed to three — its file attribution stands and only the row's file changes; and the reading of `DebugVPrint`'s `0x80000402` mask test as a status class rather than as that function's own print-level test against its first argument; the reading that the two terminal rows come from two different modules, when both are one `DebugAssert` in one image; the earlier reading of the last `K` row as `CmdDbDxe` at Apriori 18, which is one off — `CmdDbDxe` is `K 17`; the earlier claim that the Apriori array holds 58 entries with a 12-byte terminator, which came from reading GenFv's padding byte as a size and is deleted; and step 4.127's *"no `FILE_GUID` in the tree … is that value"*, which is the `FILE_GUID` of 57 other boards' `RpmhDxe.inf` |
+| does not close | the P3 gate and the owed panel reading of the flashed 4.74 set; *which* of the three null-format sites in `rpmh_image_os.c` — lines 84, 175 and 187 — the mirror reached, since the guard is what the panel shows and it does not record its caller, with the two interface-slot checks behind the wrapper at `0x6050` as the likelier pair and no run that separates them; what `RpmhDxe` was doing at that point, since the AOP mailbox this instrument seeds is one word of an interface the driver goes on to read more of; whether the 46-letter `P2 SEQ` in this record is a reading of an older image, which is the only reading consistent with a 70-entry array and a 69-entry denominator but which no capture here confirms; and the phone's own `K` rows, which remain the only record that could confirm this ladder against the device |
 | not an action | nothing was built for the device, nothing was flashed and no partition was written; every reading in this step is off files that were already on disk, and no device is attached to this machine. The porting goal is not advanced by it: P3's display, USB-host and buttons items remain unfinished and P4 and P5 are not begun |

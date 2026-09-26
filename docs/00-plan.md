@@ -67,9 +67,14 @@ mechanism: there the image fails to load, here it loads, starts, and then assert
 inside its own error branch. The last two panel rows decode — `EFI_SOFTWARE |
 EFI_SW_EC_ILLEGAL_SOFTWARE_STATE`, reported under `RpmhDxe`'s own baked-in caller
 id, and then a `DebugLib` guard firing because a print was reached with a null
-format. Step 4.128 answers which of `rpmh_image_os.c`'s four such sites was reached: **none of
-them** — all four would print `ASSERT rpmh_image_os.c +N: 0`, and the panel prints
-`DebugLib.c +78`, so the row is a print reached with a null format elsewhere in the module. The
+format. Step 4.128 answers which of `rpmh_image_os.c`'s four such sites was reached: **one of
+three** — the module's 22 `bl` calls to `DebugVPrint` include exactly three that pass
+`mov x1, xzr` (`0x6004`, `0x6120`, `0x6190`), and those three are three of the four
+`rpmh_image_os.c` sites, at lines 84, 175 and 187; the fourth, line 197, prints the real format
+`RPMH_ERR_FATAL` and cannot trip the guard. So the branch is in `rpmh_image_os.c` after all and
+the row's file is `DebugLib.c`'s, because `DebugVPrint`'s own null test at `0x191c` fires before
+the site's `ASSERT (0)` and spins, which is why the site's `ASSERT rpmh_image_os.c +N: 0` is
+never printed. Which of the three is still open. The
 assert is `RpmhDxe`'s own `DebugLib.c:78` (`ASSERT (Format != NULL)`, whose `CpuDeadLoop` is the
 `b .` at RVA `0x19d8`), and one `DebugAssert` at `0x19e0` in that image emits both panel rows.
 The digest is still absent for the original reason: this run dies
