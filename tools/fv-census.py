@@ -8,19 +8,30 @@ Why this exists: the panel reads
 
 which is 46 characters - 18 s, 3 L, 1 s, 24 L - while the Apriori file names 70
 GUIDs. `mP2Apriori` counts Apriori entries that matched an entry the walk had
-handed to CoreAddToDriverList, so 46 means 23 of the 70 names matched nothing:
-their drivers are not in mDiscoveredList at all. That is not the same question
-as "why do 27 loads fail", and the two have been conflated in this repo before.
+handed to CoreAddToDriverList, so 46 means 24 of the 70 names matched nothing -
+one of them index 0, the DXE core, which no walk can match, and 23 drivers that
+are not in mDiscoveredList. That is not the same question as "why do 27 loads
+fail", and the two have been conflated in this repo before.
 
 The temptation is to read the split as a *physical* cutoff in the volume, and
 this tool exists to measure that rather than assert it. It prints the volume in
 physical order with the Apriori index overlaid, replays FvCheck's scan exactly,
 and then joins `Apriori[k + 1]` to the volume's file table and reports the
 lowest physical index among the failed loads against the highest among the
-successful ones. Measured: **5** (SecurityStubDxe, Apriori 37) failed while
-**74** (ShmBridgeDxe, Apriori 22) succeeded, so no physical cutoff exists - not
-as a boundary, not as a suffix, not at all. The Apriori *index* is the only
-ordering in which the promoted set is contiguous.
+successful ones. Measured, on the slot map the doc's Step 4.12 join assumes:
+**5** (SecurityStubDxe, Apriori 37) failed while **74** (ShmBridgeDxe, Apriori
+22) succeeded, so the *failures* are not a physical suffix and no cutoff explains
+the 27.
+
+That sentence is about one slot map and not about the volume, and the difference
+is worth keeping visible: on the identity map the promoted set spans files 0..74,
+while under the cut hypothesis it is a physical prefix *by construction* - a
+stopped walk hands over exactly the files below its stop - and no reading of the
+letters can choose between the two maps (Step 4.104). What the measurement does
+settle on either map is that the failures interleave with the successes: under the
+cut map the same computation gives file 5 failed against file 43 loaded. So the
+promoted *set* is contiguous in Apriori index only if the walk ran to the end, and
+`P2 STATS discovered=` is the field that says which (Step 4.105).
 
 Two other candidate mechanisms for a partial mDiscoveredList are disposed of
 here too, both by measurement rather than argument:
@@ -43,20 +54,38 @@ dead code and puts every file through the exact `IsValidFfsFile` test (EDK2's
 The second half of the tool turns the one reading that *was* taken - the 46
 characters of `P2 SEQ` - into an answer about mechanism rather than a location.
 `len(P2 SEQ)` is `mP2Apriori`, the count of Apriori entries the walk promoted, so
-the tool first tabulates `stop -> miss -> seen -> SEQ len` and finds the stops
-that could produce 46: physical 49 (`seen=48`) and physical 50 (`seen=49`), both
-`miss=14 PlatformInfoDxeDriver`. It then checks the SEQ's *content* against each
-of them, and that is what closes the branch rather than narrowing it - the
-`predicted SEQ` for a stop holds different drivers in the later slots, and both
-stops are refuted at slots 17 and 21. Slot 21 is ShmBridgeDxe: it sits at
-physical 74, no stop below 74 can promote it, and every driver a stop at 49 or
-50 can promote into that slot has an observed `L` while the panel shows `s`.
+the tool tabulates `stop -> miss -> seen -> SEQ len` and finds the stops that could
+produce 46: physical 49 (`seen=48`) and physical 50 (`seen=49`), both
+`miss=14 PlatformInfoDxeDriver` with `unhit=24`.
 
-So the 46 characters are not a stopped discovery walk, and the digest was built to
-leave what remains as a fork between two readings of `P2 APRI`, both of which
-produce the observed SEQ exactly: the array read whole (`entries=70`, and then 23
-names matched nothing, which a complete walk forbids) or the array read 368 bytes
-short (`entries=47`, `unhit=1`, the promotion loop never looking past ap46).
+**An earlier version of this half then compared the SEQ's *content* against each
+stop and reported both REFUTED. Step 4.104 withdrew that, and the block below no
+longer makes the comparison.** A comparison of that shape needs a slot map - which
+Apriori entry owns each character - and the slot map *is* the batch being tested,
+so laying the observed string against a candidate's array indices in array order
+assumes the answer; the census's `diffs` at slots 17 and 21 were the batches'
+difference restated, not a test. Measured (`tools/apriori-prefix.py`): the two
+stops' batches are byte-identical, because the boundary file at physical 50
+(`FeatureEnablerDxe`) is one the Apriori array never names - it consumes a `seen`
+and promotes nothing. So those 46 characters decide *that* the walk stopped, and
+neither where it stopped nor whether the array was read whole.
+
+What does decide is off the `P2 SEQ` line, and the tool prints it per stop:
+`P2 APRI unhit=` (24 for a stop, 1 for a walk that reached the end) and `miss=`
+(`14 PlatformInfoDxeDriver`, or none), `P2 STATS discovered=` (48 or 49, or 80),
+`P2 WALK t=0 seen=`, and `last=` - `DALTLMM` at 48, `FeatureEnablerDxe` at 49,
+`SetupBrowser` on a complete walk. Step 4.105 tabulates all 70 reachable
+signatures, and enumerating them is what killed the shape this tool used to
+predict (`matched=1..46` / `miss=47`, the array's head promoted and its tail not):
+the array's head and tail interleave in DRIVER rank, so no prefix of the file
+order produces it.
+
+So what the 46 characters leave open is the Apriori read itself, in the two
+readings of it that produce the observed SEQ exactly: the array read whole
+(`entries=70`, and then the names that matched nothing are index 0 - which no walk
+can match - plus, on a stopped walk, the 23 entries above the stop) or the array
+read 368 bytes short (`entries=47`, `unhit=1`, the promotion loop never looking
+past ap46 - the shape the doc predicted for years as `matched=1..46`).
 
 **The volume closes that fork, and it closes it against the second reading.**
 `bytes=752` needs `SizeOfBuffer` to come back 752 while the section declares 1124,
@@ -385,10 +414,12 @@ print(f"  replay of the promotion loop over this volume (index 0 skipped): "
       f"matched {matched[0]}..{matched[-1]} of {len(apriori)} entries, "
       f"miss {miss if miss is not None else 'none'}")
 if len(matched) == len(apriori) - 1 and miss is None:
-    print("  -> over THIS volume entries 1..69 all match, so a panel `miss=none`\n"
-          "     would mean the array was not this volume's, and any `miss=` value is\n"
-          "     the entry where the device's discovered list stops agreeing with the\n"
-          "     file table above - `miss=47` being where a contiguous tail begins")
+    print("  -> over THIS volume entries 1..69 all match, so which entries matched\n"
+          "     nothing is decided by the *walk* and not by the file table: `unhit=1`\n"
+          "     with `miss=none` is a walk that reached the end, `unhit=24` with\n"
+          "     `miss=14 PlatformInfoDxeDriver` is one that stopped at physical 49 or\n"
+          "     50, and any other pair says the device's array is not this one's\n"
+          "     (Step 4.105; the doc's old `miss=47` is not reachable at all).")
 else:
     print(f"  -> {len(apriori) - 1 - len(matched)} entries match no DRIVER file "
           f"here; the first is\n     ap{miss} {apriori[miss]} "
@@ -397,6 +428,15 @@ else:
 # ---------------------------------------------------------------------------
 # The join. ap0 is DxeCore and is never in mDiscoveredList (the DXE_CORE branch
 # of the walk only fills gDxeCoreLoadedImage->FilePath), so SEQ[0] is ap1.
+#
+# **This table is the identity map, SEQ[k] = ap(k+1), and the map is an
+# assumption and not a reading**: it is the batch a walk that reached the end
+# produces. `tools/apriori-prefix.py` prints the same table for the cut batch,
+# where every slot from 14 on holds the next entry instead (ap14
+# PlatformInfoDxeDriver sits at physical 52, above the stop, so a stop leaves it
+# out and every later slot shifts by one). Step 4.104: the letters have no slot
+# map of their own, so what this table shows is what the observed string reads
+# like *if* the walk completed - it cannot establish that it did.
 # ---------------------------------------------------------------------------
 print()
 print("=== SEQ join: ap1..ap69 vs the 46 characters ===")
@@ -427,6 +467,12 @@ print(f"highest physical index among the LOADED ones: {hi} "
 print(f"-> a physical cutoff is "
       f"{'CONSISTENT' if lo > hi else 'IMPOSSIBLE'}: "
       f"a load at physical {lo} failed while physical {hi} succeeded")
+print("   (under THIS map. It is not an argument for a completed walk, because the "
+      "cut\n   hypothesis has a map of its own, under which the same computation "
+      "gives file 5\n   failed against file 43 loaded - also IMPOSSIBLE - and Step "
+      "4.104 is why the\n   letters cannot choose between the two maps. What the "
+      "measurement settles on\n   either map is that the failures interleave with "
+      "the successes.)")
 print()
 print("drivers the walk registered but the Apriori file does not name:")
 notin = [fvinv.guid_str(g) for g, t, *_ in files
@@ -444,10 +490,14 @@ print(f"  {len(notin)}: {[nm(g) for g in notin]}")
 # from "a failure happened" into "the walk stopped here", which is the difference
 # between a symptom and a location.
 #
-# It is also how the two hypotheses are told apart on the panel. A cut is one of
-# these eight values; the tail assumption (ap1..ap46 matched, ap47..ap69 did not)
-# is `miss=47`, which is not on the list at all - because a cut leaves a physical
-# *suffix* missing and the tail set reaches back to the console drivers.
+# It is also how the hypotheses are told apart on the panel, and the join below is
+# what makes it a small test rather than a map. The doc's tail assumption (ap1..ap46
+# matched, ap47..ap69 did not) is `miss=47`, which is not on the list at all -
+# because a cut leaves a physical *suffix* missing and the tail set reaches back to
+# the console drivers at physical 14, 20, 21 and 22. And of the stops whose promotion
+# count is the 46 characters that were read, only physical 49 and 50 qualify, both
+# of them `miss=14 PlatformInfoDxeDriver` - so `miss=` names the stop, while `unhit=`
+# (24 or 1) is the field that decides whether there was one (Step 4.105).
 #
 # The `SEQ len` column is what makes the table a decoder rather than a key. `P2
 # SEQ` has been read three times and `P2 APRI miss=` never, and the length of the
@@ -479,7 +529,10 @@ def promoted(stop):
                if (by_guid.get(apriori[a]) or 0) <= stop)
 
 
-NULLGUID = "0" * 32
+# A zero EFI_GUID in the form the panel's `%g` prints it, which is what a type with
+# no file of that name shows: `mP2WalkLast` is a STATIC initialiser and `last` is
+# written only on a successful GetNextFile.
+NULLGUID = "00000000-0000-0000-0000-000000000000"
 
 
 def walk_last(stop):
@@ -492,8 +545,10 @@ def walk_last(stop):
     PAD or DXE_CORE. Those differ on exactly the read this decoder is being used
     for: stops 49 and 50 are a driver and a driver, but the same query one file
     later is answered by a file the type filter would never have returned.
-    `iter` is seen + 1 on a pass that ends by running out of files
-    (`EFI_NOT_FOUND`), which is the pass a cut walk ends on.
+    `iter` is `seen + 1` **per volume** on a pass that ends by running out of files
+    (`EFI_NOT_FOUND`), and the counters are STATIC globals summed over every volume
+    the dispatcher walked, so the panel prints `iter = seen + 2` (Step 4.102). Only
+    `seen` and the `last=` this returns are used here.
     """
     best = NULLGUID
     for i in range(0, min(stop + 1, len(files))):
@@ -537,30 +592,39 @@ print("  -> a `miss` of anything else is not a short walk at all: the device is 
       "do not. The tail assumption\n     of step 4.12 wants miss=47, which is "
       "not on this list, because a cut leaves a\n     physical suffix missing "
       "and ap47..ap69 include files at physical 14, 20, 21 and 22.")
-print("  -> and miss=22 ShmBridgeDxe is closed by the 5-vs-74 result above: a "
-      "walk that stopped\n     before physical 74 did not load ShmBridgeDxe at "
-      "74, so that row cannot be this run.")
+print("  -> and miss=22 ShmBridgeDxe is closed by the *length* of the line and not "
+      "by its\n     letters: the stops whose promotion count is 46 are physical 49 "
+      "and 50, both of them\n     miss=14, so no run that printed a 46-character SEQ "
+      "can print miss=22. (The 5-vs-74\n     result above rests on the identity map, "
+      "which is the assumption under test - Step\n     4.104.)")
 
 # ---------------------------------------------------------------------------
-# The join, and why the cut branch closes instead of narrowing.
+# The join: two stops, not one, and the letters do not separate them.
 #
 # `len(P2 SEQ)` is `mP2Apriori`, so a stopped walk has to produce exactly 46
-# promotions - and only two stops do (physical 49 and 50). But the SEQ line's
-# *content* is a second constraint on the same stop, and it is the one that
-# closes the branch. Each character is the load result of the driver promoted
-# into that slot, and 22 is the one that settles it: ShmBridgeDxe sits at
-# physical 74, so no stop below 74 can promote it, while every driver a stop at
-# 49 or 50 *can* promote into that slot has an observed `L`. The string stops
-# matching at two slots, and no other stop produces 46 promotions at all.
+# promotions - and two stops do (physical 49 and 50, i.e. `seen` 48 and 49, since
+# the file at physical 50 is a DRIVER the array never names).
 #
-# What is left is not a location but the Apriori read itself, and the two readings
-# of it that produce the observed SEQ exactly. Only one of them is reachable: the
-# section header declares 1124 and `GetSection` reports the declared size, so the
-# read cannot come back short and `entries=70` is forced. What the panel can still
-# decide is `miss=` - whether the 23 entries that matched nothing are the array's
-# tail (miss=47, the name tables stand) or scattered through it (miss<47, the
-# tables shift from that index on) - and, if the image on the device is not this
-# one, the `sum=`.
+# **An earlier version of this block read the SEQ line's *content* as a second
+# constraint on the same stop, and used it to REFUTE both stops. Step 4.104
+# withdrew that.** A comparison of that shape needs a slot map - which Apriori
+# entry owns each character - and the slot map *is* the batch under test, so
+# laying the observed string against a candidate's array indices in array order
+# assumes the answer. Measured (`tools/apriori-prefix.py`): the two stops'
+# batches are byte-identical, because physical 50 (FeatureEnablerDxe) is a file
+# the array never names - it consumes a `seen` and promotes nothing. So the
+# letters are consistent with both stops and cannot choose between them.
+#
+# What chooses is off the `P2 SEQ` line, and it is printed per stop below: `P2
+# APRI unhit=` (24 for a stop, 1 for a walk that reached the end) and `miss=`
+# (14 PlatformInfoDxeDriver, or none), `P2 STATS discovered=` (48/49 or 80),
+# `P2 WALK t=0 seen=`, and `last=` - DALTLMM at 48, FeatureEnablerDxe at 49,
+# SetupBrowser for a walk that reached the end (Step 4.105).
+#
+# What the census can still say about the Apriori *read* is separate from that
+# and it stands: the section header declares 1124 and `GetSection` reports the
+# declared size, so a read that came back short is out and `entries=70` is
+# forced. `matched=` reads 1..69 either way and decides nothing.
 # ---------------------------------------------------------------------------
 print()
 print(f"=== The join against the `P2 SEQ` line actually read ({len(SEQ)} characters) ===")
@@ -570,24 +634,35 @@ print(f"  stops whose promotion count is exactly {len(SEQ)}: "
       f"{', '.join(f'physical {k} (seen={seen_at[k]})' for k in cands)}")
 for k in cands:
     matched = [a for a in range(1, len(apriori)) if (ap_phys.get(a) or 0) <= k]
-    pred = "".join(obs[a - 1] if a - 1 < len(obs) else "?" for a in matched)
-    diffs = [i for i, (p, o) in enumerate(zip(pred, obs)) if p != o and p != "?"]
-    print(f"  stop at physical {k}: predicted SEQ {pred}")
-    print(f"       {'REFUTED' if diffs else 'consistent'}"
-          + (f" at slot(s) {diffs}" if diffs else ""))
-    for i in diffs:
-        m = matched[i]
-        print(f"       slot {i}: a stop here promotes {nm(apriori[m])} (ap{m}, "
-              f"physical {ap_phys[m]}),\n         whose own result is '{obs[m - 1]}'; "
-              f"the panel shows '{obs[i]}', the result of\n         "
-              f"{nm(apriori[i + 1])} (ap{i + 1}, physical {ap_phys[i + 1]}).")
-print("  -> no stop on this volume produces the observed SEQ, so those 46 characters "
-      "are not a\n     stopped discovery walk. The 23 absent Apriori entries were "
-      "never asked for, or were\n     asked for by a walk that cannot lose a file "
-      "it was handed.")
-print("     (slot 17 shifts because ap14 PlatformInfoDxeDriver is at physical 52 - the "
-      "lowest\n     Apriori-named file above the stop - so a stop leaves it out and "
-      "every later slot\n     holds the next driver instead.)")
+    unh = [a for a in range(1, len(apriori)) if not ((ap_phys.get(a) or 0) <= k)]
+    lastdrv = walk_last(k)
+    print(f"  stop at physical {k}  (seen={seen_at.get(k, 0)}):")
+    print(f"      P2 APRI matched={matched[0]}..{matched[-1]} unhit={len(unh) + 1} "
+          f"miss={unh[0] if unh else 'none'}"
+          + (f" {nm(apriori[unh[0]])}" if unh else ""))
+    print(f"      P2 STATS discovered={seen_at.get(k, 0)}")
+    print(f"      P2 WALK t=0 seen={seen_at.get(k, 0)} last={lastdrv} "
+          f"({nm(lastdrv)})")
+print("  -> both stops are consistent with the observed SEQ, and the two are not "
+      "separated by\n     its letters: their batches are byte-identical, because the "
+      "boundary file at\n     physical 50 (FeatureEnablerDxe) is one the array never "
+      "names - it consumes a `seen`\n     and promotes nothing. So the 46 characters "
+      "decide that the walk stopped, and neither\n     where it stopped nor whether "
+      "the array was read whole (Step 4.104, Step 4.105).")
+if cands:
+    unhits = sorted({1 + len([a for a in range(1, len(apriori))
+                              if not ((ap_phys.get(a) or 0) <= k)]) for k in cands})
+    misses = sorted({(lambda u: u[0] if u else None)(
+        [a for a in range(1, len(apriori)) if not ((ap_phys.get(a) or 0) <= k)])
+        for k in cands}, key=lambda v: (v is None, v))
+    print(f"  -> a {len(SEQ)}-character SEQ admits `unhit=` in {unhits} and `miss=` in "
+          f"{misses},\n     which is what rules out the shape the doc predicted for "
+          f"years - the array's head\n     promoted and its tail not, i.e. "
+          f"`matched=1..46 miss=47`. `miss=47` is not in that set, and\n     "
+          f"`matched=` cannot read 1..46 here either, because ap69 "
+          f"(GraphicsConsoleDxe) is\n     inside the batch even when it is cut "
+          f"(Step 4.105, whose signature table was\n     enumerated over all 81 "
+          f"`seen`).")
 print()
 print("  Two readings of `P2 APRI` produce the observed SEQ exactly, and only one of "
       "them is\n  reachable from the volume:")
@@ -597,37 +672,46 @@ print(f"       needs the section header at 0x90 to declare {47 * 16 + 4} where i
       f"header declares, so the\n       Apriori section cannot come back "
       f"{len(payload) - 47 * 16} bytes short. REFUTED.")
 print(f"    `bytes={len(payload)} entries={len(apriori)} sum={ap_sum:#x}`")
-print("       the array was read whole, so 24 of its names matched nothing - index 0 "
-      "(DxeCore,\n       never in mDiscoveredList) and the 23 drivers named at "
-      "ap47..ap69, which must\n       therefore be missing from mDiscoveredList. "
-      "That is the reading the run has.")
+print("       the array was read whole, so the names that matched nothing are index 0 "
+      "(DxeCore,\n       never in mDiscoveredList) and, on a stopped walk, the 23 "
+      "entries above the stop:\n       24 in all. That is the reading the run has, and "
+      "`unhit=` is what says whether\n       the other 23 are there.")
 print("  `P2 STATS apriori=46/70` follows: `mP2AprioriCount` is the largest Apriori file "
       "size ever\n  seen, so the second number is 70 and `apriori=46/47` would mean the "
-      "running image is not\n  this one. `P2 APRI last=` agrees: the whole array ends at "
-      f"{apriori[-1]} (GraphicsConsoleDxe),\n  and D06A77F4-4874-5898-9421-303158ECEA1A "
-      "(I2C, ap46) is where the refuted reading stops.")
-print("  None of this explains the 27 failures. Every one of them - ap19, ap20, ap21 "
-      "and\n  ap23..ap46 - is inside the first 46, so it is promoted under either "
-      "reading, and `P2 ERR`\n  is the line that answers the 27. These 46 characters "
-      "answer a different question: why the\n  batch is 46 long.")
+      "running image is not\n  this one. The numerator is the *promotion* count under "
+      "either world, and a walk that\n  reached the end would print 69 - so **if the "
+      "46 characters are the whole line**, this\n  field is a second witness that the "
+      "walk stopped (Step 4.105 keeps the length itself\n  'carried, not decided', "
+      "because a capture can come back short).")
+print("  None of this explains the 27 failures, and under a stop they are not "
+      "ap19..ap46 either:\n  the `L` in slot *i* belongs to whatever entry the batch "
+      "put in slot *i*, and two of the\n  entries the identity map counts among the "
+      "27 - ap35 PmicDxe and ap44 BdsDxe - are\n  entries a stop at 49 or 50 leaves "
+      "*unhit* instead, so their protocols come up missing by\n  a different route "
+      "than a failed load. `P2 ERR` and `P2 NOLOAD` are the lines that answer\n  the "
+      "27; these 46 characters answer a different question: why the batch is 46 long.")
 
 _n07 = sum(1 for f in files if f[1] == 0x07)
 _last07 = max(i for i, f in enumerate(files) if f[1] == 0x07)
 print()
-print(f"  -> and `P2 WALK t=0 seen={_n07} iter={_n07 + 1} "
-      f"last={walk_last(len(files) - 1)}` is now a prediction rather\n     than a "
-      f"fork: with every stop refuted, the walk reached all {_n07} DRIVER files. "
-      f"That\n     `last=` is the last *driver* file and not the volume's last file - "
-      f"the walk is\n     type-filtered, so the {len(files) - 1 - _last07} "
-      f"FREEFORM/PAD/DXE_CORE files after physical {_last07} are never\n     returned "
-      f"at t=0 and never update `mP2WalkLast`.")
-print(f"  -> with the second reading refuted, the run's shape is fixed: ap1..ap46 "
-      f"promoted and\n     ap47..ap69 not, i.e. `P2 APRI matched=1..46 unhit=24 "
-      f"miss=47`. The SEQ matches it\n     by construction - which is exactly why the "
-      f"SEQ cannot be used to support it - and what\n     is left to explain is the "
-      f"other end: the 23 must be absent from a walk that this\n     tool predicts "
-      f"reaches all {_n07} DRIVER files, while the absent set is contiguous in\n     "
-      f"Apriori index ({47}..{69}) and scattered in physical order:")
+print(f"  -> and `P2 WALK t=0 seen={_n07} iter={_n07 + 2} "
+      f"last={walk_last(len(files) - 1)}` is a *fork*, not a\n     prediction: that "
+      f"line says the walk reached all {_n07} DRIVER files, while `seen=48` or "
+      f"`seen=49`\n     with `last=DALTLMM` or `last=FeatureEnablerDxe` says it "
+      f"stopped (Step 4.105). (The\n     `iter` is `seen + 2`, not `seen + 1`, "
+      f"because the counters are STATIC globals summed\n     over every volume the "
+      f"dispatcher walked and this FD has two - Step 4.102.) `last=` is the\n     "
+      f"last *driver* file and not the volume's last file - the walk is type-filtered, "
+      f"so the\n     {len(files) - 1 - _last07} FREEFORM/PAD/DXE_CORE files after "
+      f"physical {_last07} are never\n     returned at t=0 and never update "
+      f"`mP2WalkLast`.")
+print(f"  -> and the shape this block used to predict - ap1..ap46 promoted, "
+      f"ap47..ap69 not,\n     i.e. `P2 APRI matched=1..46 unhit=24 miss=47` - is not "
+      f"reachable on this volume. The\n     array's head (ap1..ap46) occupies DRIVER "
+      f"ranks 0..72 and its tail (ap47..ap69)\n     occupies ranks 12..70, so the two "
+      f"interleave and no prefix of the file order\n     promotes the head without "
+      f"part of the tail (Step 4.105, `tools/apriori-prefix.py`).\n     The tail's "
+      f"files, in physical order, for reference:")
 print("     " + " ".join(f"ap{a}:{ap_phys.get(a)}" for a in range(47, 70)))
 
 # ---------------------------------------------------------------------------
@@ -640,61 +724,105 @@ print("     " + " ".join(f"ap{a}:{ap_phys.get(a)}" for a in range(47, 70)))
 #     EFI_FV_FILETYPE_FIRMWARE_VOLUME_IMAGE }
 # and the probe prints the *position* in that array, not the type value - so the
 # DRIVER pass is t=0 and a t=7 on the panel is a line the code cannot emit. The
-# walk is a do/while around GetNextFile, and the terminating call that returns
-# EFI_NOT_FOUND is counted in `iter` and not in `seen`, so each line should read
-# iter = seen + 1 on a pass that ended by running out of files. `last` is the GUID
-# of the last file the pass was handed, which on a complete pass is the volume's
-# highest-offset file of that type.
+# walk is a do/while around GetNextFile and the terminating call that returns
+# EFI_NOT_FOUND is counted in `iter` and not in `seen`, so each *volume*
+# contributes `iter = seen + 1` for a type. The counters are STATIC globals and are
+# never reset, and the notify that increments them fires once per FV2 installation
+# (Step 4.102), so the panel prints a **sum** over every volume the dispatcher
+# walked: this FD has two, and each line therefore reads `iter = seen + 2`.
+#
+# The outer volume is FVMAIN_COMPACT, whose entire file list is `SECURITY_CORE`
+# and one type-0x0B FV-image file; what it adds per type is `OUTER` below. The
+# only row where it contributes a `seen` is t=4. `last` is the GUID of the last
+# file the pass was handed - on a complete pass the inner volume's highest-offset
+# file of that type, and on a stopped one the stop itself, which is why t=0's
+# `last=` is the field that separates the two stops from each other.
 # ---------------------------------------------------------------------------
 print()
 print("=== The `P2 WALK` lines this volume should produce ===")
 TYPES = [
     ("EFI_FV_FILETYPE_DRIVER", 0x07),
-    ("EFI_FV_FILETYPE_COMBINED_SMM_DXE", 0xF3),
+    # EFI_FV_FILETYPE_COMBINED_SMM_DXE is an alias of ..._COMBINED_MM_DXE, and
+    # both are 0x0C (PiFirmwareFile.h:70-71) - an earlier version of this table
+    # carried 0xF3 here, which is not a file type at all.
+    ("EFI_FV_FILETYPE_COMBINED_SMM_DXE", 0x0C),
     ("EFI_FV_FILETYPE_COMBINED_PEIM_DRIVER", 0x08),
     ("EFI_FV_FILETYPE_DXE_CORE", 0x05),
     ("EFI_FV_FILETYPE_FIRMWARE_VOLUME_IMAGE", 0x0B),
 ]
+# (seen, iter) contributed by FVMAIN_COMPACT: one terminating EFI_NOT_FOUND per
+# type per volume, and one FV-image file, that volume's only file in any of the
+# five types. Measured in Step 4.102 off the build tree's SILICIUM_UEFI.fd.
+OUTER = {0: (0, 1), 1: (0, 1), 2: (0, 1), 3: (0, 1), 4: (1, 1)}
 for idx, (tname, tval) in enumerate(TYPES):
     of = [f for f in files if f[1] == tval]
-    seen, itr = len(of), len(of) + 1
-    lastg = fvinv.guid_str(of[-1][0]) if of else "0" * 36
+    oseen, _oitr = OUTER[idx]
+    seen, itr = len(of) + oseen, len(of) + oseen + 2
+    lastg = fvinv.guid_str(of[-1][0]) if of else NULLGUID
     print(f"  P2 WALK t={idx} seen={seen} iter={itr} last={lastg}")
-    print(f"      ({tname} = {tval:#04x}, {seen} file(s) in this volume)")
-print(f"\n  -> t=0 seen={_n07} iter={_n07 + 1} is the line that matters, and the join above has "
-      "already made it\n     a prediction rather than a fork: it refutes the two stops "
-      "on the SEQ's *content*,\n     not merely on its length, so nothing short of a "
-      "complete walk fits. The other four\n     lines are the control, and they should "
-      "read exactly as above.")
+    print(f"      ({tname} = {tval:#04x}, {len(of)} file(s) in FVMAIN, "
+          f"{oseen} in FVMAIN_COMPACT)")
+# Bands in this payload's own terms, so the line below is right for any payload:
+# the complete band is the `seen` values of the stops that promote every Apriori
+# entry that has a file, and the cut band is the `seen` values of the stops that
+# promote exactly as many entries as the SEQ line had characters.
+_full = [k for k in range(0, len(files)) if promoted(k) == len(apriori) - 1]
+_fullband = (f"{seen_at[_full[0]]}..{seen_at[_full[-1]]}" if _full else "-")
+_cutseen = sorted({seen_at.get(k, 0) for k in cands})
+_cutband = " or ".join(str(s) for s in _cutseen) if _cutseen else "-"
+print(f"\n  -> t=0 seen={_n07} iter={_n07 + 2} is the line that matters, and the join above "
+      f"leaves it a *fork*:\n     the complete band is `{_fullband}` on this payload, "
+      f"`{_cutband}` (with the `last=` above) is a stop, and\n     the `P2 APRI` fields "
+      f"beside it are what decide. A `t=0 iter` above `seen + 2` is a\n     third volume "
+      f"and not a contradiction (Step 4.102); `t=1`, `t=2` and `t=4` are the\n     control "
+      f"rows, and `t=4 seen=1` is the one that says the outer volume was walked at\n     "
+      f"all.")
 
 # ---------------------------------------------------------------------------
-# The one number left that separates "the walk never handed them over" from "the
+# The one number that separates "the walk never handed them over" from "the
 # promotion loop dropped them". `discovered` is mP2Discovered, which
 # CoreAddToDriverList bumps on every successful insert into mDiscoveredList, so it
 # is |mDiscoveredList| and not a count of anything else. The DRIVER walk is the only
-# branch that adds a file per iteration here (this volume has no FV_IMAGE file and
-# the DXE_CORE branch does not call CoreAddToDriverList at all), and the four
-# non-DRIVER types contribute 0, 0, 0 and 0. So `discovered` should equal
-# `seen` at t=0, and the pair is read together with the SEQ length:
+# branch that adds a file per iteration on this volume (the inner volume has no
+# FV_IMAGE file and the DXE_CORE branch does not call CoreAddToDriverList at all),
+# so `discovered` is the number of DRIVER files the walk was handed - the same
+# quantity `P2 WALK t=0 seen=` names, on a different line. The pair is read
+# together with the promotion count:
 #
-#   seen=80 discovered=80 seq=69   the walk and the list are whole - the 23 were
-#                                  handed over, and the promotion loop's own
-#                                  CompareGuid/FvHandle test is what let them go
-#   seen=80 discovered<80 seq<69   the walk handed them over and the adds failed,
-#                                  which in a DEBUG build means the ASSERT in
-#                                  CoreAddToDriverList fired first
-#   seen<80  discovered<=seen      the walk stopped, and the stop is the mechanism
-#                                  after all - but then the missing set is a
-#                                  physical suffix, which ap47..ap69 are not
+#   seen=80    discovered=80    apriori=69/70   the walk and the list are whole,
+#                                               and the names that matched nothing
+#                                               are index 0 alone
+#   seen=48/49 discovered=48/49 apriori=46/70   the walk stopped, and the list is
+#                                               short by exactly what the stop left
+#                                               above it - the unhit set is a
+#                                               physical suffix of DRIVER files,
+#                                               which is what a stop produces by
+#                                               construction
+#   discovered < seen                           files were handed over and the adds
+#                                               failed, which in a DEBUG build
+#                                               means the ASSERT in
+#                                               CoreAddToDriverList fired first
+#
+# The middle row is the one this block used to exclude with "the missing set is a
+# physical suffix, which ap47..ap69 are not". That argument presupposes ap47..ap69
+# *are* the missing set, i.e. that the walk completed; on the cut hypothesis the
+# missing set is ap{0,14,22,35,44,47..65}, a suffix in physical order and scattered
+# in Apriori index (Step 4.105).
+# ---------------------------------------------------------------------------
 print()
 print("=== The `P2 STATS` numbers this volume should produce ===")
-print(f"  P2 STATS discovered={_n07} apriori=46/70 started=<s> "
+print(f"  completed:  P2 STATS discovered={_n07} apriori=69/70 started=<s> "
       "diag=<n> noload=<n>")
-print(f"      discovered {_n07} = one CoreAddToDriverList per DRIVER file, 0 from")
-print("      every other type: the FV_IMAGE walk finds no file in this volume and")
-print("      the DXE_CORE branch never adds. So discovered should equal seen at t=0,")
-print("      and apriori=46/70 with unhit=24 is what a 46-character SEQ implies.")
+print("  stopped:    P2 STATS discovered=48 apriori=46/70 started=<s> diag=<n> "
+      "noload=<n>")
+print("                  (or discovered=49 for a stop at 49 - both print the same")
+print("                   apriori=46/70, and both must equal `P2 WALK t=0 seen=`)")
+print(f"      discovered {_n07} on a completed walk = one CoreAddToDriverList per")
+print("      DRIVER file, 0 from every other type: the FV_IMAGE walk finds no file")
+print("      in the inner volume and the DXE_CORE branch never adds. The `apriori`")
+print("      numerator is the promotion count, which is the length of the `P2 SEQ`")
+print("      line and was read as 46.")
 print("      `started` is not predicted here - it is the run's own count of the 's'")
-print("      characters, so predicting 19 from the panel would be circular.")
-print("  57 = 80 - 23 would be the other reading made visible: the walk ran, and")
-print("      the 23 never reached mDiscoveredList. Anything else is neither.")
+print("      characters, so predicting 19 from the panel would be circular - and")
+print("      `started + noload = discovered` holds only on an `S`-free SEQ line")
+print("      (Step 4.105).")

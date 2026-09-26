@@ -1772,11 +1772,13 @@ whether a round trip is worth it:
   `do { … } while (!EFI_ERROR (GetNextFileStatus));`, so the terminating call —
   the one that returns `EFI_NOT_FOUND` — is counted in `iter` and in
   `mP2WalkErr`, and **not** in `seen`. That makes the DRIVER line
-  (`t=0`) a self-checking prediction: **`seen=80 iter=81`** if the sweep ran to
+  (`t=0`) a self-checking prediction: **`seen=80 iter=82`** if the sweep ran to
   the end of the volume, since `FVMAIN.Fv` holds exactly **80** files of type
   `0x07` — the histogram over all 123 files is `{0x02: 37, 0x05: 1, 0x07: 80,
-  0x09: 5}` — and the 81st call is the `EFI_NOT_FOUND` that ends it. Anything
-  less than 80 in `seen`, or more than 81 in `iter` for the DRIVER pass, is the
+  0x09: 5}` — and `iter` additionally counts each pass's terminating
+  `EFI_NOT_FOUND`, one per volume the dispatcher walked, of which this FD has two
+  (Step 4.102). Anything
+  less than 80 in `seen`, or more than 82 in `iter` for the DRIVER pass, is the
   walk being cut off, and `last` then names where. (An earlier draft of this
   bullet said `seen ≈ 73`, a guess off the Apriori array's length; the array is
   not the volume. A second draft said the other four types print `seen=0`; the
@@ -2586,6 +2588,20 @@ dispatch slots apart. So "the `L`s are not a single allocation that could not be
 satisfied" is established rather than conditional, and `P2 FREE largest=` no longer
 has to be read to get there. The row that still has to be read is `P2 WHY`'s.
 
+**Two more rows are struck, both in Step 4.105's and 4.106's light.** Row 2's
+`miss=47` — and the `matched=1..46` shape it names — is not reachable on this
+volume at all: `ap1..ap46` occupy DRIVER ranks 0..72 and `ap47..ap69` occupy ranks
+12..70, so the head and the tail interleave and no prefix of the file order
+promotes the head without part of the tail. A 46-character `P2 SEQ` admits
+`unhit=24` with `miss=14 PlatformInfoDxeDriver` only. The `P2 WALK t=0 seen=80
+iter=81` row reads `iter=82` (Step 4.102 — the counters are `STATIC` globals summed
+over every FV walked, and this FD has two), and its `discovered ≤ 57` consequence was
+derived from the `apriori=46` reading that Step 4.105 replaced: on a completed walk
+the pair is `seen=80 discovered=80 apriori=69/70`, and on a stopped one it is
+`seen=48/49 discovered=48/49 apriori=46/70`. The row's *decision* survives — a `seen`
+of 80 does exonerate the walk, since `discovered` then has to be 80 — but the
+shortfall it is looking for is not "≤ 57".
+
 **`P2 WALK` prints one line per entry in `mDxeFileTypes`, and the DRIVER pass is
 index `0`, not `7`.** The array is
 `{ EFI_FV_FILETYPE_DRIVER, COMBINED_SMM_DXE, COMBINED_PEIM_DRIVER, DXE_CORE,
@@ -2599,7 +2615,11 @@ the loop counts the terminating `EFI_NOT_FOUND` call in `iter` and not in `seen`
 **every line must satisfy `iter = seen + err`** — where `err` is a counter the
 digest does not print, and is 1 on a pass that ended by running out of files. So
 `iter = seen + 1` on all five lines is the expected reading, and `iter > seen + 1`
-means `GetNextFile` failed on a file the volume does contain.
+means `GetNextFile` failed on a file the volume does contain. *(Corrected in Step
+4.102: the counters are `STATIC` globals summed over every FV the dispatcher walked,
+so the reading is `iter = seen + 2` on all five lines of this two-volume FD — `+1`
+per volume — and the test becomes `iter > seen + 2`. `iter` is still the field that
+catches a `GetNextFile` failure, and `seen` is still the field that catches a cut.)*
 
 `P2LargestAlloc` probes a fixed ladder — 4096, 1024, 256, 64, 16, 4, 1 pages —
 and returns the first step that succeeds, so the value is quantized to those
@@ -3045,7 +3065,10 @@ fingerprint is what tells them apart, and they point at different code:
 | `bytes=1120 entries=70 sum=a998b263` | the array was read whole and 23 of its names matched nothing — a premise is wrong, because `CoreAddToDriverList` inserts every driver the walk returns into `mDiscoveredList` unconditionally (`Dispatcher.c:1142-1190`) |
 | `bytes=752 entries=47 sum=b4ba9d75` | the Apriori section came back 368 bytes short of its 1120; `unhit` is then 1, `miss` is none, the promotion loop never looks past ap46, and the observed SEQ is the string it must print |
 
-`P2 STATS apriori=46/70` says the same thing in one number. `mP2AprioriCount` is
+`P2 STATS apriori=46/70` would say the same thing in one number — and the numerator is
+conditional in the same way the SEQ length is: it is 46 only if the 46 photographed
+characters are the whole line, and 69 if the walk completed and the photograph caught a
+prefix (Step 4.105). `mP2AprioriCount` is
 `MAX (mP2AprioriCount, AprioriEntryCount)` — the largest Apriori file size ever
 *seen* — so the denominator was going to be the fork. With the fork closed the
 denominator is fixed at 70 by the volume, and what the line buys is an identity
@@ -3094,9 +3117,14 @@ type-filtered — `Type = mDxeFileTypes[Index]` is re-set before every `GetNextF
 and `mP2WalkLast` is copied only on a successful return — so the seven
 FREEFORM/PAD/DXE_CORE files after physical 115 are never returned at t=0 and never
 update it. `iter=81` is `seen + 1` on the pass that ends by running out of files,
-which is the pass a complete walk ends on. The other four lines are the control:
-`t=3` should read `seen=1 iter=2 last=D6A2CB7F-6A18-4E2F-B43B-9920A733700A` (the one
-DXE_CORE file) and `t=1`, `t=2`, `t=4` should each read `seen=0 iter=1` with an all
+which is the pass a complete walk ends on — and the `iter` in this block is one low:
+the counters are `STATIC` globals summed over **every** FV the dispatcher walked, and
+this FD has two, so a completed pass prints `iter = seen + 2` = **`iter=82`**
+(Step 4.102, whose table supersedes the five rows here and at 4.101; the `seen=`
+values and the `last=` GUIDs are unchanged, because only the terminating call's
+counting is). The other four lines are the control:
+`t=3` should read `seen=1 iter=3 last=D6A2CB7F-6A18-4E2F-B43B-9920A733700A` (the one
+DXE_CORE file) and `t=1`, `t=2`, `t=4` should each read `seen=0 iter=2` with an all
 zero GUID, since this volume has no file of those types at all.
 
 | | |
@@ -8267,7 +8295,7 @@ failures and the memory findings of 4.43–4.46 are untouched.
 |---|---|
 | instrument | `P2Digest`'s own comment block (`Dispatcher.c:2260-2275`) against `SeqLen = mP2Apriori` (`:2333`) and `mP2Apriori++` in the match branch (`:2120`) |
 | adds | the SEQ length is the promotion count and never the scan count, so `entries` and the SEQ are independent and the 4.13–4.47 fork does not arise from them; `P2 STATS discovered=` becomes the field that decides where the 23 went, and the census now predicts it |
-| prediction | `P2 STATS discovered=80 apriori=46/70`, `P2 WALK t=0 seen=80 iter=81 last=EBF342FE-B1D3-4EF8-957C-8048606FF671` |
+| prediction | `P2 STATS discovered=80 apriori=46/70`, `P2 WALK t=0 seen=80 iter=81 last=EBF342FE-B1D3-4EF8-957C-8048606FF671` (`iter=82`: Step 4.102's table is the corrected one, and `apriori=46/70` is the stopped shape — a completed walk reads `apriori=69/70`, Step 4.105) |
 | does not close | the 27 — `P2 ERR` is still the first line to read — and `discovered`, which needs the panel |
 | citations | the `Dispatcher.c:` line numbers in this log are against the **patched** tree; `:556` was an upstream number and is now `:1204`, and the upstream→current offset for every hunk is in the table above |
 | broken tool | `tools/apriori-index.py --seq` raised `NameError` since step 4.37 and is the path step 4.37's verdict is printed from; `entry_at` is now defined and the command exits 0 |
@@ -9208,10 +9236,13 @@ The dispatcher is only ever shown five file types (`mDxeFileTypes`,
 the same filter, and the filter is not cosmetic: without it the record payload
 reports 123 files, and the 43 that are bmp images, panel XMLs, `.cfg` files and
 the Apriori file itself all read as drivers with no depex and no constraints.
-With it, **80** remain — which is exactly the `P2 WALK seen=80` the device
-printed. That agreement is what makes the rest of these numbers comparable to the
-device's at all, and it is why the tool prints the number with the panel's own
-field name beside it.
+With it, **80** remain — which is the number the `P2 WALK t=0 seen=` field would carry
+on this volume (`seen=80 iter=82` by Step 4.102's corrected table), so the offline and
+on-panel counts would be the same measurement, and it is why the tool prints the number
+with the panel's own field name beside it. *Corrected in Step 4.105: this row read "the
+`P2 WALK seen=80` the device printed", which asserts a panel reading that has never been
+taken. The 80 is a host prediction — Step 4.17 wrote it as one, and this step's own
+"does not close" row says the panel reading is untaken.*
 
 ### The answer for the payload of record
 
@@ -9335,7 +9366,7 @@ a-priori drivers failed to load, and that reading still has not been taken.
 | finds | **0** of the 80 dispatcher-visible files in the payload of record are held off by their dependency expression, and 0 are unjudgeable. **5** are held off by the other rule — no depex at all, which requires all thirteen architectural protocols. Every one of the nine missing architectural protocols has a producer in the volume's a-priori array, so their absence is a **load** failure, not a dependency deadlock |
 | mechanism 1 | the a-priori sweep sets `Dependent = FALSE` before anything runs (`Dispatcher.c:2104-2120`), and `CoreIsSchedulable` is only called under `if (DriverEntry->Dependent)` (`:1203-1207`) — so for the 21 a-priori depex-bearing drivers the expression is read and never evaluated |
 | mechanism 2 | a NULL depex is not a free pass: `Dispatcher.c:893-895` marks it `Dependent`, and the UEFI 2.0 branch (`Dependency.c:222-228`) reaches `CoreAllEfiServicesAvailable` (`DxeProtocolNotify.c:81-93`), an AND over all thirteen `mArchProtocols` entries |
-| checkable | the `mDxeFileTypes` filter (`Dispatcher.c:697-703`) takes 123 files to 80, and 80 is the `P2 WALK seen=80` the device printed — the offline and on-panel counts are the same measurement. `P2 APRI`'s `entries=70` agrees too |
+| checkable | the `mDxeFileTypes` filter (`Dispatcher.c:697-703`) takes 123 files to 80, and 80 is the number `P2 WALK seen=` would carry on this volume (`iter=82`, Step 4.102) — the offline count and the on-panel count are then the same measurement. `P2 APRI`'s `entries=70` agrees too. *Corrected in Step 4.105: this row said "the device printed"; no `P2 WALK` line has been read off a panel* |
 | xhci-host | `XhciPciEmulation` waits on eight protocols, each with a named a-priori producer (step 4.50's "waits rather than adding two more `L`s", now measured); `UsbInitDxe` is unjudgeable from the image because no header defines `E722B03F-…` — compatible with step 4.50's finding that a Qualcomm peer may publish it; `XhciDxe` is in the no-depex bucket |
 | withdraws | the heading `CAN NEVER BE SCHEDULED` for a driver gated on a protocol whose producer is in the volume — that state is *waiting*, and naming it "never" turns a P2 diagnosis into a false finding about the driver. Also the two earlier counts, **0** (name-keyed, never matched) and **2** (`CapsuleRuntimeDxe`, `RealTimeClock`, both a-priori and therefore inert) |
 | guard | a GUID in `UNINSTALLED` that no header defines is a hard error and exit 1, so the tool cannot under-report by silently skipping a protocol. Verified by injecting one |
@@ -20340,7 +20371,7 @@ UFS". BDS is what would run the installer, and BDS is reached at `DxeMain.c:606`
 *gBds->Entry (gBds)* — after `CoreAllEfiServicesAvailable ()` at `:582` and its
 `ASSERT_EFI_ERROR` at `:593`. The USB stack is behind the same door by depex. So on this
 platform the P3 work item at `docs/00-plan.md:319`, "Bring up USB host (`UsbBusDxe`) —
-needed to install from a USB stick", is not a driver-addition problem: **the twelve
+needed to install from a USB stick", is not a driver-addition problem: **the eleven
 storage and USB a-priori entries (`ap24` DiskIoDxe, `ap25` PartitionDxe, `ap28` UFSDxe,
 `ap48` UsbPwrCtrlDxe, `ap51` UsbfnDwc3Dxe, `ap52` UsbBusDxe, `ap53` UsbKbDxe,
 `ap54` UsbMassStorageDxe, `ap55` UsbMsdDxe, `ap56` UsbDeviceDxe, `ap57` UsbConfigDxe) and
@@ -20375,6 +20406,40 @@ thinks it is, and `t=0 seen` at or below 49 means the DRIVER scan stopped, with
 `miss=14 PlatformInfoDxeDriver` the value Step 4.17's decoder band already associates
 with exactly 46 promotions.
 
+> **Withdrawn in Step 4.105, in four parts.** The derivation above stands — a complete walk does
+> promote 69 of 70, and `CoreAddToDriverList` does insert every file the walk hands it — but four
+> of the paragraph's claims do not survive measurement:
+>
+> 1. **`apriori=46/70` is not an observation.** No `P2 STATS` line has been read off a panel. The
+>    field that was observed is `P2 SEQ`, 46 characters long, one per promoted entry; the numerator
+>    is 46 only while the 46 photographed characters are the whole line, and the complete-walk
+>    reading of the same panel is `apriori=69/70`. Writing "the observed `apriori=46/70`" upgrades a
+>    prediction to a reading, which is the one error this document's own instrument rule forbids.
+> 2. **"cannot both describe this image" is false.** `P2 WALK t=0 seen=48` and `seen=49` print
+>    `apriori=46/70` *and* a 46-promotion batch at the same time: measured, their `P2 APRI` line
+>    reads `matched=1..69 unhit=24` with `miss=14 09EE56ED-E7FD-5B64-831C-7C32CE88C6E2`. The
+>    predicted walk line and the predicted promotion count are **one world**, not two, and the two
+>    numbers are separated by `80 − 69 = 11` in the complete world and by `80 − 46 = 34` in the cut
+>    world — the 34 is that world's own gap, and it is what `unhit=24` would confirm.
+> 3. **`miss=14` is not a Step 4.17 band value, and it is not a count.** Step 4.17's band pins a
+>    *stop location*; `14` is `PlatformInfoDxeDriver`, DRIVER rank 50 at volume file 52, the first
+>    array entry past the cut, and it is 14 because the cut batch's first hole is at array index 14.
+>    The step associated `miss=47` (`AdcDxe`) with a 46-promotion batch, not `14`.
+> 4. **The shape this document has predicted since Step 4.12 is unreachable.** No walk prefix on this
+>    volume prints `matched=1..46`: `ap1..ap46` occupy DRIVER ranks 0..72 and `ap47..ap69` occupy
+>    ranks 12..70, so the two sets interleave and no prefix of the volume's file order promotes the
+>    head without the tail. The cut prints `matched=1..69`, because `ap66..ap69` are the four console
+>    drivers, at volume files 14, 20, 21 and 22.
+>
+> What this leaves standing in this section: the depex bodies, the nine missing architectural
+> protocols, the "waiting rather than never" correction, and the fact that `XhciPciEmulation` and
+> `XhciDxe` have no route onto the scheduled queue. What it puts a condition on are the sentences
+> that read a letter as a property of a named driver — "five of whose producers carry `L`", "Both are
+> in the record's `L` tail" — since a letter is addressed by Apriori slot and the slot map is the
+> hypothesis under test (Step 4.104). Of those, the `L` tail sentence is about characters at array
+> indices 51 and 57, i.e. slot 50 and 56 of a line whose last captured character is slot 45: it is a
+> prediction about the unread part of the complete-walk line either way.
+
 ### Nothing was built and nothing was flashed
 
 - `docs/08-device-session.md` is the only file this step changes. No `.c`, `.inf`, `.asl`,
@@ -20401,3 +20466,675 @@ with exactly 46 promotions.
 - Standing rules unchanged: `userdata`, the partition table and the firmware LUN are
   untouched; writes go to `boot` only; the control image is read before anything is
   overwritten; and the screen is read before the next flash.
+
+## Step 4.104 — what the four letters mean, what actually paints the panel, and the argument this step was about to make and cannot
+
+### What this step was
+
+Host-only, read-only, over the four payloads the project holds. It was forced by Step 4.103's
+closing block, which hands the batch question to the next `P2 WALK` line. Before that line goes
+into the priority list as *the* decider, this step re-measured the three things the plan rests
+on: what a character of `P2 SEQ` can mean, which a-priori entries can be **dispatched** at all,
+and which layer paints the panel. All three came back different from the notes this session
+started with, and one of the differences voids a whole family of arguments — including one this
+step was about to make.
+
+### The alphabet is `{s, L, S, ?}`, and every letter is one call site
+
+The record has carried "one character per promoted entry" since Step 4.12 without ever naming
+the alphabet. It is four letters, from three sites, and each letter means something narrower
+than the paraphrase:
+
+| letter | site | what it records |
+| --- | --- | --- |
+| `L` | `Dispatcher.c:1111` — `P2Record (&DriverEntry->FileName, 'L', Status)` | the entry was in `mScheduledQueue`, its depex was **satisfied**, and `CoreLoadImage` failed. `DriverEntry->Initialized = TRUE` is set first (`:1100-1110`), so the load is never attempted again: **`L` is terminal.** |
+| `S` | `:1156` — `P2Record (…, 'S', Status)` | the image loaded and `CoreStartImage` failed. |
+| `s` | `:1158` — `P2MarkSeq (…, 's', EFI_SUCCESS)` and `mP2Started++` | the entry point ran and returned success. This is the only site that bumps `mP2Started`. |
+| `?` | the array's initialiser | promoted and never dispatched — the entry is still in `mScheduledQueue` with an unsatisfied depex when the dispatcher stops. |
+
+`P2Record` collapses the phase to a letter (`P2MarkSeq (Guid, (Phase == 'L') ? 'L' : 'S', Status)`),
+so nothing outside `{s, L, S}` is reachable from the dispatcher, and `P2MarkSeq` is
+**GUID-addressed and Apriori-ordered** — it scans `for (Index = 0; Index < mP2Apriori && …)` and
+writes the first slot whose GUID matches, so the character at slot *i* is the load result of the
+driver the array put at index *i*, and a duplicate GUID could not double-write a slot.
+
+Two consequences, both used below:
+
+- **The observed string has no `?` in it.** All 46 of its characters are `s` or `L`, so all 46 of
+  its slots were dispatched to completion — promoted, depex-satisfied, `CoreLoadImage` called.
+  Whatever the batch is, it contains no depex-blocked driver.
+- **The capture's count of `s` is 19** — 18, then three `L`, then one `s`, then 24 `L` — and that
+  number is the *a-priori* success count of the batch's first 46 slots. It is not `P2 STATS
+  started=`, and keeping the two apart is the whole of the third subsection below: the letters are
+  written only on a GUID match, so a non-a-priori driver's success leaves no character, while
+  `mP2Started` is bumped on the dispatch path for every driver there is. The 18 this session's
+  notes carried was `46 − 18 − 4`, an arithmetic that subtracts four console slots from a length
+  that is not a batch size; the number on the capture is 19.
+
+### The four console drivers can be scheduled, and `SimpleFbDxe` waits on `PcdDxe`
+
+The second re-measurement is the one that changes the reading. The four console drivers sit at
+`ap66..ap69` and the GOP producer at `ap60`. Each file's `DXE_DEPEX` section was read **at its own
+FFS offset**, from the roster's `offsets` — the method Step 4.55's retraction established, and the
+only thing that makes a section list evidence:
+
+| ap | file | `DXE_DEPEX` body | decoded |
+| ---: | --- | ---: | --- |
+| 60 | `SimpleFbDxe` | 18 B | `PUSH EFI_PCD_PROTOCOL_GUID; END` |
+| 66 | `SimpleTextInOutSerial` | 18 B | `PUSH EFI_PCD_PROTOCOL_GUID; END` — the identical 18 bytes |
+| 67 | `ConPlatformDxe` | — | no depex section at all |
+| 68 | `ConSplitterDxe` | — | none |
+| 69 | `GraphicsConsoleDxe` | — | none |
+
+`02 f6f0a3134a26f03ef2e0dec512342f34 08` is the whole body of the two that have one: `PUSH`
+(`0x02`), the 16-byte GUID `13A3F0F6-264A-3EF0-F2E0-DEC512342F34` (`EFI_PCD_PROTOCOL_GUID`), `END`
+(`0x08`) — a well-known protocol, not a platform one. And this volume's `PcdDxe` is **DRIVER rank
+0, `phys 2`**: after `DxeCore` and the a-priori file, the first driver in the volume's own FV
+order. The PCD protocol is therefore installed before any a-priori entry is loaded, and both
+`PUSH PCD; END` depexes are satisfied from the start.
+
+So **none of the five is depex-blocked**: three of the four console drivers have no depex
+whatsoever, and the fourth — plus the only GOP producer in the volume — waits on a protocol a
+rank-0 driver installs. Any argument of the form "the console cannot have come up, because those
+depexes are unmet" is false, and that was the argument this session's working notes were
+carrying. The measurement does not touch Step 4.55's census — 27 dispatcher-visible files carry a
+depex, 21 of them named by the array — and this step's five are consistent with it: `ap66` and
+`ap60` are two of the two `ap47..ap69` files Step 4.55's re-measurement lists as carrying one.
+
+### The panel is not ConOut, and the screen is not evidence about the batch
+
+The third measurement voids an argument rather than supporting one. A DEBUG build of this
+platform binds `SerialPortLib` to `SiliciumPkg/Library/FrameBufferSerialPortLib`
+(`SiliciumPkg.dsc.inc:163-164`), so `DEBUG (DEBUG_ERROR, "P2 SEQ [%a]\n", …)` at `:2348` reaches
+the panel through `BaseDebugLibSerialPort` → `SerialPortWrite` → `WriteFrameBuffer`. **There is no
+GOP, no `ConOut`, no `ConSplitterDxe` and no driver of any kind in that path**: the framebuffer is
+the one XBL already painted, located by `GetFrameBufferMemory`, with the cursor kept in its last
+8 bytes (`:143`). Three consequences, in increasing order of how much they change:
+
+1. **No inference runs from "the panel shows X" to "some driver loaded".** The console drivers'
+   letters, `SimpleFbDxe`'s, and the entire BDS story are unrelated to whether the digest is
+   legible. `docs/00-plan.md:20` already carries the load-bearing half of this — "text on the
+   panel is not evidence that BDS ran" — and it is a stronger statement there than it is used as.
+2. **A cut batch does not predict a blank screen.** Under a cut at rank 48/49 `SimpleFbDxe` is
+   `unhit`: never handed to the promotion loop, never queued, its GOP never installed and `ConOut`
+   never built — and the panel is painted anyway, because the painter is a library inside
+   `DxeCore`. So the mere existence of the 2026-09-23 reading excludes nothing.
+3. **This step's own intended argument — "a screen showing `P2 SEQ` cannot be a screen whose slots
+   42..45 failed to load" — is void**, for exactly reasons (1) and (2). It is recorded rather than
+   deleted because it is the second time in this dispute that a link in the chain was assumed
+   instead of read: `tools/fv-census.py`'s closing block assumed a slot map, and this would have
+   assumed a console. Both assumed the answer to the question they were being used to settle.
+
+What the geometry *does* fix, read out of the same library instead of assumed:
+`GetFontScale ()` is `ShorterDimension / 426` = `1080 / 426` = 2, and `GetFbPositions` gives
+`XPos = FB_WIDTH / ((FONT_WIDTH + 1) * scale)` = `1080 / 12` = **90 columns** and
+`YPos = FB_HEIGHT / ((FONT_HEIGHT - 4) * scale)` = `2400 / 24` = **100 rows**. So the record's
+"~90×100" is exactly 90×100, and it is derived from four numbers — 1080, 2400, `FONT_WIDTH` 5,
+`FONT_HEIGHT` 16. A 69-character `P2 SEQ` row is `P2 SEQ [` + 69 + `]` = 78 columns: **one row,
+twelve columns to spare.** Nor can the printer lose characters: `SerialPortWrite` (`:243-278`)
+loops over every byte and returns `NumberOfBytes`; `WriteFrameBuffer` drops only characters
+`>= 127` and a single leading space at column 0 (`:180-190`); and `AdvanceNewLine` (`:101-124`)
+wraps at `XPos >= 90` and clears the whole screen only at row 100. So on the panel's side there is
+no mechanism that turns a 69-match batch into a 46-character row. Under the complete-batch reading
+the 46 is a **capture** — the first 46 characters of a 69-character row — and the digits of
+`P2 APRI` and `P2 STATS` photographed around it are what would corroborate that.
+
+### The two worlds, field by field
+
+Cut world: `seen` 48 or 49, `tools/apriori-prefix.py`'s batch. Complete world: `seen` 73..80, the
+whole array matched. Every value below is either the instrument's arithmetic over the volume or
+marked as unread:
+
+| panel field | cut world | complete world | read yet? |
+| --- | --- | --- | --- |
+| `P2 WALK t=0 seen=` | 48 or 49 | 80 | no |
+| `P2 WALK t=0 iter=` | 50 or 51 | 82 | no |
+| `P2 WALK t=0 last=` | `DALTLMM` / `FeatureEnablerDxe` | `SetupBrowser` | no |
+| `P2 APRI bytes= entries= sum=` | 1120, 70, `a998b263` | identical | no |
+| `P2 APRI first= last=` | `D6A2CB7F…` / `CCCB0C28…` | identical | no |
+| `P2 APRI matched=` | `1..46` | `1..69` | no |
+| `P2 APRI unhit=` | 24 | 1 | no |
+| `P2 APRI miss=` | `14 PlatformInfoDxeDriver` | `none` | no |
+| `P2 SEQ` length | 46 | 69, of which 46 captured | **46 captured** |
+| `P2 STATS apriori=` | `46/70` | `69/70` | no |
+| `P2 STATS started=` | `≥ 19`, larger under this world | `≥ 19` | no — relative only |
+| `P2 STATS diag=` | the failures among all dispatched | larger under this world | no — relative only |
+| `P2 STATS discovered=` | 48 or 49 | 80 | no |
+| `P2 DIAG` rows | the failures among all dispatched, which include this world's four console slots | the same set minus those | no |
+| rows naming `ap66..ap69` | **required**, one per console driver | not required | no |
+
+The two fields that carry **no** information about the question, and should be struck off the
+list rather than ranked low on it: `bytes=`/`sum=`/`first=`/`last=` (all three payloads that could
+have drawn the reading carry the same 1120-byte, 70-entry array, measured in the next step) and
+the letters themselves (a string of length *n* is consistent with every batch of length *n*, which
+is what `tools/apriori-prefix.py --letters` prints).
+
+In **both** worlds the capture's 19 `s` are a **lower bound** on `P2 STATS started=`, and it is a
+bound and not an equality for a reason worth writing down, because it is easy to get wrong in
+either direction. The SEQ's characters are a-priori slot results: `P2MarkSeq` writes only after a
+GUID match, so a non-a-priori driver's success leaves no character anywhere. `mP2Started` and
+`mP2DiagCount` are not that quantity — both are bumped on the dispatch loop's own path for **every**
+driver the dispatcher processes, a-priori or not (`mP2DiagCount++` before the GUID is even looked
+at, `:614-627`), and the second phase routes the discovered-but-unscheduled drivers through the
+same loop. So `started` counts every driver that started and `diag` every driver that failed to
+load or start, over populations that include the 11 non-a-priori DRIVER files this volume holds.
+
+That makes `started` and `diag` **relative** indicators rather than readable numbers: the complete
+walk dispatches the cut's 24 unpublished entries as well, so its `started` is the cut's plus however
+many of those 24 start — `BdsDxe`, `SimpleFbDxe`, the four console drivers and the USB stack are
+all in that 24, and nothing on the host can say how many of them start. A `started` comfortably
+above 19 therefore favours the complete walk, and no value of it decides the question on its own.
+The fields that do are the ones with fixed host-side values: `seen`, `matched`, `unhit`, `miss`,
+`apriori`, `discovered`.
+
+The first number in the table is the one to photograph, and it is a byproduct of the walk rather
+than a diagnosis: `iter = seen + 2` holds in the cut world and `iter = seen + 2` holds in the
+complete world too (Step 4.101's corrected row), so `seen` is the only half of that line that
+decides anything. `> 49` refutes the cut outright; `48` or `49` leaves both worlds standing, with
+`P2 APRI miss=` and `P2 STATS apriori=` as the tie-breaks and `started > 19` as the one-way check
+in the other direction.
+
+### Nothing was built and nothing was flashed
+
+- `docs/08-device-session.md` is the only file this step changes. No `.c`, `.inf`, `.asl`,
+  `APRIORI.inc`, FFS file or payload was written; the build tree and the four payloads were opened
+  read-only.
+- **The device is absent from this host throughout** — `adb devices` empty, no Qualcomm function on
+  the USB bus, no `/dev/ttyUSB*`/`/dev/ttyACM*`. The reading owed on the payload in `boot`
+  (`90B21643…`, rung 7260) under 先读屏，再刷下一次 remains owed, and nothing was flashed.
+- Digests unchanged: record `work/out/p2-4.94/Mu-gauguin-silicon-gzip.img`, 1,144,832 B,
+  `d621f732f4763a303e980c5af04451479c2ace31801e796993a258f226c177a5`; `boot`'s
+  `work/out/p2-variants/Mu-gauguin-silicon-gzip.img`, 1,142,784 B,
+  `90b21643e3450c326fb3d24baf64d58d4692a5d155c36b76d2e020ff04a96b59` — twenty-second step running;
+  candidate 1,169,408 B, `efc8e10d09f0f286011e1aacc638a7edd2ed5fcd86884640b28d14628f58f9f3`,
+  unflashed.
+- Cited, re-read rather than remembered: `Dispatcher.c:143`, `:149`, `:1093-1165`, `:1938-2057`,
+  `:2279-2299`, `:2312-2316`, `:2333-2348`, `:2364`, `:2416-2462`; `FrameBufferSerialPortLib.c:101-156`,
+  `:160-220`, `:243-278`; `FrameBuffer.h:7-9`; `Font.h:34-35`; `SiliciumPkg.dsc.inc:163-164`; and,
+  in this document, `docs/00-plan.md:20`, Step 4.55's depex census and its retraction, and Step
+  4.103's closing block.
+- Standing rules unchanged: `userdata`, the partition table and the firmware LUN are untouched;
+  writes go to `boot` only; the control image is read before anything is overwritten; and the
+  screen is read before the next flash.
+
+## Step 4.105 — the prefix function as a table of what the panel can print: 70 signatures, two of them 46-promotion, and the one line that names all three worlds
+
+### What this step is
+
+Host-side only, read-only, over the four payloads. The device was not attached for any part of it.
+Step 4.104 closed by saying the batch question turns on a `P2 WALK t=0 seen=` value that has never
+been read, and this step writes up the function that turns that value into the batch — as the
+instrument's own arithmetic rather than as the argument of a step. Doing that produced two results
+that change the priority list:
+
+- **The `P2 APRI` line separates all three candidate worlds by itself**, in fields that are computed
+  over the array's own indices and not over the observed string, so they can be read without a slot
+  map. `matched=` and `unhit=` alone do **not** separate the two the dispute is about; `miss=` and
+  `discovered=` do.
+- **The doc's own expected shape — "exactly `ap1..ap46` matched, so the absent 23 are the array's
+  tail" — is not reachable by any walk prefix on this volume**, measured over all 81 values of
+  `seen`. The 46-entry batches that exist are scattered, and the only 24-unhit signature that exists
+  carries `miss=14`, never `miss=47`.
+
+### Where a batch comes from, in the dispatcher's own variables
+
+The promotion loop is `Dispatcher.c:2104-2125`, and it is the whole of the mechanism:
+
+```
+for (Index = 0; Index < AprioriEntryCount; Index++) {
+  for (Link = mDiscoveredList.ForwardLink; Link != &mDiscoveredList; Link = Link->ForwardLink) {
+    DriverEntry = CR (Link, EFI_CORE_DRIVER_ENTRY, Link, EFI_CORE_DRIVER_ENTRY_SIGNATURE);
+    if (CompareGuid (&DriverEntry->FileName, &AprioriFile[Index]) &&
+        (FvHandle == DriverEntry->FvHandle)) {
+      DriverEntry->Dependent = FALSE;
+      DriverEntry->Scheduled = TRUE;
+      InsertTailList (&mScheduledQueue, &DriverEntry->ScheduledLink);
+      if (mP2Apriori < P2BRINGUP_APRIORI_MAX) {
+        CopyGuid (&mP2AprioriGuid[mP2Apriori], &DriverEntry->FileName);
+        mP2AprioriRes[mP2Apriori] = '?';
+      }
+      mP2Apriori++;
+      break;
+    }
+  }
+```
+
+Three things follow, and each is load-bearing below.
+
+1. **The outer loop always scans all `AprioriEntryCount` entries.** `break` leaves the *inner* loop,
+   so a short batch is never a short scan: `entries=70` with a 46-character SEQ is 70 looked at and
+   46 matched, which is why `entries=` is the field that rules out a truncated read and `miss=` is
+   the field that says where the looking stopped finding anything.
+2. **A match requires the entry's file to be in `mDiscoveredList` *and* in the same FV.** The list is
+   filled by the discovery walk and by nothing else, so the batch is a function of the walk's
+   outcome. The walk hands files over in the volume's own file order (Step 4.102's `FvCheck`/
+   `GetNextFile` measurement), so **the batch is a function of one integer** — how many `DRIVER`
+   files the walk was handed — and `tools/apriori-prefix.py` tabulates exactly that function.
+3. **The batch is what `mP2Apriori` counts, and `P2 APRI matched=` is not the same quantity.** The
+   print at `:2290-2298` is `matched=%d..%d` from `mP2ApriMatchFirst`/`mP2ApriMatchLast`, set at
+   `:2190-2191` and `:2194` — a **range**, first and last matched index, not a count. The count is
+   `mP2Apriori`, and it appears as the numerator of `P2 STATS apriori=` and as the length of
+   `P2 SEQ`. `unhit` (`:2184`) is the count of entries that matched nothing, `miss` (`:2185-2187`)
+   is the **first index above 0** that matched nothing, with its GUID. So `matched=1..46 unhit=24`
+   and `matched=1..69 unhit=24` are different readings, and only the second is the cut.
+
+### `iter = seen + 2`, at the derivation site
+
+The four walk counters are `STATIC` per file-type index and are never reset
+(`Dispatcher.c:125-128`), and `CoreFwVolEventProtocolNotify` fires once per FV2 installation, so each
+line of `P2 WALK` is a **sum over every volume the dispatcher walked**. `iter` is incremented before
+each `GetNextFile` call (`:1962`), including the terminating one, so each volume contributes
+`seen + 1` for a type; the FD has two volumes (Step 4.102: `FVMAIN_COMPACT`, 2 files, and `FVMAIN`,
+123 files), the outer one holds no `DRIVER` file, and therefore
+
+```
+t=0:  outer (0 seen, 1 iter) + inner (seen, seen+1 iter)  ->  iter = seen + 2
+```
+
+`iter` adds no information beyond a witness that exactly two volumes were walked: a third FV2
+installation would print `iter > seen + 2`, which Step 4.102 already set down as a third volume and
+not a contradiction. **`seen` is the half of that line that decides anything**, and `last=` is the
+file the walk ended on, written only on success (`:1965`).
+
+### The 46 comes from exactly two `seen` values, and they differ only in `discovered` and `last=`
+
+Measured on the record payload — 123 files, 80 `DRIVER` (0x07), 70 array entries, `ap0` the DXE core
+with no `DRIVER` file and the other 69 all resolving:
+
+```
+123 files, 80 DRIVER(0x07), Apriori 70 entries
+  seen  48..49  ->  46 promoted, last DRIVER seen FeatureEnablerDxe
+  seen  73..80  ->  69 promoted, last DRIVER seen SetupBrowser
+  -> 70 bands; batch sizes reachable: 0..69 (every size, one step at a time)
+  -> seen values giving exactly 46 promotions: [48, 49]
+```
+
+The function is a monotone step function with **70 bands** — one per achievable batch size, every
+size from 0 to 69 reachable one driver at a time — so a `seen` value inside a band is a `seen` value
+for every band member alike, and only the band matters. Two of the four fields on the `P2 WALK`
+line are therefore consumed by reading it at all: `seen` names the band and `last=` names the file
+the walk stopped on, and they are not independent — `seen=48`'s last `DRIVER` is `DALTLMM` (rank 47,
+volume file 49) and `seen=49`'s is `FeatureEnablerDxe` (rank 48, volume file 50).
+
+That is a **three-valued field**, not a two-valued one:
+
+| `P2 WALK t=0 last=` | world |
+| --- | --- |
+| `F6158D7A-1918-5D76-957D-51F1E017B906` `DALTLMM` | cut at 48 |
+| `E5E7BAF3-3D4F-5AD8-BA77-DE8DB3C8BA8E` `FeatureEnablerDxe` | cut at 49 |
+| `EBF342FE-B1D3-4EF8-957C-8048606FF671` `SetupBrowser` | walk complete (at any of `73..80`) |
+
+`seen=48` and `seen=49` produce **byte-identical batches** — the same 46 drivers in the same slots —
+because `FeatureEnablerDxe` is not in the array at all. It is one of the **11 `DRIVER` files the array
+never names**, and their ranks are worth writing down because every one of the numbers below turns on
+them: `30` `PwrUtilsDxe`, `39` `VcsDxe`, `48` `FeatureEnablerDxe`, `69` `MacDxe`, and `73..79`
+`RamManagerDxe`, `SmbiosDxe`, `SmBiosTableDxe`, `AcpiTableDxe`, `AcpiPlatform`,
+`BootGraphicsResourceTableDxe`, `SetupBrowser`. So `seen=48` discovers 46 named + 2 unnamed and
+`seen=49` discovers 46 named + 3 unnamed: same batch, different `discovered`, different `last=`, and
+the **only** two readings that separate them are exactly those two fields.
+
+The cut is also a clean boundary in the volume's own order — and that part is **definitional and not
+measured**: a stopped walk hands over every `DRIVER` file below its stop, so the promoted set is a
+physical prefix by construction, and "every file in the batch is at volume index ≤ 49, every `unhit`
+file at ≥ 51" is the hypothesis restating itself. What is worth having is the *contents*: the boundary
+file is `FeatureEnablerDxe` at volume file 50, and the prefix happens to carry `ap66..ap69` — the four
+console drivers at volume files 14, 20, 21 and 22 — which is why this batch is contiguous in physical
+order and scattered in Apriori index. Step 4.106 is where the consequence is written down: the census's
+long-standing "no physical cutoff exists" argument does not exclude this hypothesis, because under it
+the hypothesis *is* a physical cutoff.
+
+### What the panel can print: the reachable signatures
+
+Every `seen` from 0 to 80 was run through the instrument's own definitions — `matched` as the first
+and last matched index, `unhit` as the count of entries that matched nothing, `miss` as the first
+index above 0 that matched nothing. There are **70 distinct signatures**, one per band, and the ones
+that can produce a 46-promotion batch or a 24-unhit reading are exactly two:
+
+| `P2 APRI` reads | `P2 WALK t=0 seen=` | the world |
+| --- | --- | --- |
+| `matched=1..69 unhit=24` and `miss=14 09EE56ED-E7FD-5B64-831C-7C32CE88C6E2` (`PlatformInfoDxeDriver`) | 48 or 49 | **the cut** |
+| `matched=1..69 unhit=1` and `miss=none` | 73..80 | **the walk completed** |
+
+And the shape the doc has been predicting since Step 4.12 — `matched=1..46 unhit=24 miss=47`
+(`AdcDxe`) — **is not reachable by any walk prefix on this volume**, for a reason that is worth a
+number: the array's first 46 entries occupy DRIVER ranks 0..72 and its last 23 occupy ranks 12..70,
+so the two sets **interleave** and no prefix of the volume's file order can promote the head without
+the tail. The 46-batch that exists is the scattered set
+`ap{1..13, 15..21, 23..34, 36..43, 45, 46, 66..69}` — note `ap66..ap69`, the four console drivers,
+which sit at volume files 14, 20, 21 and 22 and therefore fall *inside* the cut even though they are
+at the array's end. Its complement, the 24 `unhit` entries with rank and volume file:
+
+```
+ap0  DxeCore                no DRIVER file at all   ap47 AdcDxe              rank 56, file 58
+ap14 PlatformInfoDxeDriver  rank 50, file 52         ap48 UsbPwrCtrlDxe       rank 55, file 57
+ap22 ShmBridgeDxe           rank 72, file 74         ap49 QcomChargerDxeLA    rank 54, file 56
+ap35 PmicDxe                rank 52, file 54         ap50 ChargerExDxe        rank 53, file 55
+ap44 BdsDxe                 rank 71, file 73         ap51 UsbfnDwc3Dxe        rank 60, file 62
+                                                     ap52 UsbBusDxe           rank 61, file 63
+ap53 UsbKbDxe               rank 62, file 64         ap58 ButtonsDxe          rank 51, file 53
+ap54 UsbMassStorageDxe      rank 63, file 65         ap59 TsensDxe            rank 57, file 59
+ap55 UsbMsdDxe              rank 64, file 66         ap60 SimpleFbDxe         rank 49, file 51
+ap56 UsbDeviceDxe           rank 65, file 67         ap61 LimitsDxe           rank 58, file 60
+ap57 UsbConfigDxe           rank 66, file 68         ap62 HashDxe             rank 67, file 69
+ap63 CipherDxe              rank 68, file 70         ap64 RngDxe              rank 70, file 72
+ap65 DDRInfoDxe             rank 59, file 61
+```
+
+The lowest `unhit` rank is 49 (`SimpleFbDxe`, volume file 51) and the highest is 72
+(`ShmBridgeDxe`); `miss=14` is `PlatformInfoDxeDriver` and not a count — it is the first hole, and
+the holes are 24. **A `miss=47` reading cannot come back from any stopped walk**, so the doc's own
+falsifier row for it can never fire; and `unhit=24` cannot come from a completed walk, so that field
+alone decides the question the dispute is about.
+
+### The two worlds, in the fields that are computed and not observed
+
+`P2 STATS`'s `discovered` is a second spelling of `seen`: `mP2Discovered` is incremented in
+`CoreAddToDriverList` (`:1546`), which the walk calls for exactly the types it enumerates and no
+others, so on this volume `discovered` = the number of `DRIVER` files handed over = `seen`. Two
+counters, two lines, one number — a disagreement between them is a third volume or a different file
+type mix, and it is the panel's own cross-check on both.
+
+| field | cut (48/49) | complete (73..80) | what it does |
+| --- | --- | --- | --- |
+| `P2 WALK t=0 seen=` | 48 or 49 | 73..80, `80` on this payload | **decides**: `> 49` refutes the cut |
+| `P2 WALK t=0 last=` | `DALTLMM` or `FeatureEnablerDxe` | `SetupBrowser` | **decides**, and separates 48 from 49 |
+| `P2 STATS discovered=` | 48 or 49 | 80 | **decides**; must equal `seen` |
+| `P2 APRI unhit=` | 24 | 1 | **decides** |
+| `P2 APRI miss=` | `14 PlatformInfoDxeDriver` | `none` | **decides** |
+| `P2 APRI matched=` | `1..69` | `1..69` | nothing — identical in both |
+| `P2 APRI bytes=/entries=/sum=` | `1120/70/a998b263` | same | nothing — the same array in every payload |
+| `P2 SEQ` length | 46, the whole line | 69, of which 46 captured | carried, not decided |
+| `P2 STATS started=` + `noload=` | `= 48` or `= 49` exactly | `= 80 − (#S in the full 69)` | a relation, not a value |
+
+Two rows of that table are worth their own sentence, because both are places the doc has read more
+than the code supports.
+
+- **`started + noload = discovered` holds only when the SEQ has no `S`.** `noload` counts
+  `mDiscoveredList` entries with `ImageHandle == NULL`, `ImageHandle` is assigned only on a
+  **successful** `CoreLoadImage`, and an `S` (start failure) is recorded after a successful load —
+  so a start failure is counted in `started`'s complement and not in `noload`, and the identity
+  needs "no `S` anywhere". In the cut world the captured 46 characters *are* the whole SEQ line, so
+  the identity is exact there and `started` is `48 − noload` or `49 − noload`. In the complete world
+  23 characters are unread and `started + noload ≤ 80`. The paragraph at `:2527-2532` states the
+  identity as a property of the instrument; it is a property of an `S`-free run, and the captured
+  prefix is only `S`-free as far as it goes.
+- **`noload` is bounded below by the letters, in both worlds**: every `L` is a promoted entry whose
+  load failed, so `noload ≥ 27`. The cut world's remainder is small and almost fixed — the two or
+  three unnamed discovered files load if and only if their depex resolves, and all three of the ones
+  in question (`PwrUtilsDxe`, `VcsDxe`, `FeatureEnablerDxe`) have **no `DXE_DEPEX` section at all**,
+  which by `:884-897` means `Depex = NULL` and by `Dependency.c:221-234` means schedulable iff
+  `CoreAllEfiServicesAvailable ()` — so `noload` is 27 plus the number of those that did not run,
+  and `started + noload = 48` closes it either way.
+
+### What this makes the owed reading
+
+The reading owed on the payload in `boot` under 先读屏，再刷下一次 is unchanged and still blocked on
+the device, but its priority order is now set by what decides rather than by what is easy to
+photograph:
+
+1. **`P2 APRI miss=` and `unhit=`** — `miss=none` with `unhit=1` is a completed walk; `miss=14
+   PlatformInfoDxeDriver` with `unhit=24` is a cut at 48 or 49; any other pair is neither, and the
+   three together name the mechanism.
+2. **`P2 WALK t=0 seen=` and `last=`** — the same answer in the walk's own counters, and the only
+   place the 48/49 distinction appears.
+3. **`P2 STATS discovered=`** — the cross-check on both of the above.
+4. `P2 SEQ` length, `P2 APRI bytes=/entries=/sum=`, the `P2 NOLOAD` names, `P2 FREE largest=`,
+   `P2 STATS started=`/`noload=` read as a pair against the identity above.
+5. **Struck off**: `matched=` (identical in both worlds — it was the row the doc's tables leaned on),
+   `bytes=`/`sum=`/`first=`/`last=` of the array, and the letters themselves, which no reading can
+   turn into a slot map (`tools/apriori-prefix.py --letters`, whose output under the cut batch is
+   `diffs [17, 21]`, `shift per slot [0, 1, 2, 3, 4, 23]` — a restatement of the batches' difference).
+
+One calibration note for the P3 candidate, measured in the same run: its three added drivers sit at
+DRIVER ranks **61** (`XhciPciEmulation`), **62** (`XhciDxe`) and **69** (`UsbInitDxe`), so its
+complete-walk band is `76..83` and its cut band is still `48..49` with the same 46-entry batch. The
+two payloads therefore share the cut signature exactly and differ only in the complete one, where
+`seen=80` would still give 69 promotions but would no longer be the end-of-walk value. Looking for
+`80` on the candidate would be looking for the wrong rung of the right ladder.
+
+### Nothing was built and nothing was flashed
+
+- `docs/08-device-session.md` is the only file this step changes. No `.c`, `.inf`, `.asl`,
+  `APRIORI.inc`, FFS file or payload was written; the four payloads and the build tree were opened
+  read-only.
+- **The device is absent from this host throughout** — `adb devices` empty, no Qualcomm function on
+  the USB bus, no `/dev/ttyUSB*`/`/dev/ttyACM*`. The reading owed on the payload in `boot`
+  (`90B21643…`, rung 7260) remains owed, and nothing was flashed.
+- Digests unchanged: record `work/out/p2-4.94/Mu-gauguin-silicon-gzip.img`, 1,144,832 B,
+  `d621f732f4763a303e980c5af04451479c2ace31801e796993a258f226c177a5`; `boot`'s
+  `work/out/p2-variants/Mu-gauguin-silicon-gzip.img`, 1,142,784 B,
+  `90b21643e3450c326fb3d24baf64d58d4692a5d155c36b76d2e020ff04a96b59` — twenty-third step running;
+  candidate 1,169,408 B, `efc8e10d09f0f286011e1aacc638a7edd2ed5fcd86884640b28d14628f58f9f3`,
+  unflashed.
+- Cited, re-read rather than remembered: `Dispatcher.c:125-128`, `:884-897`, `:1546`, `:1961-1967`,
+  `:2104-2125`, `:2184-2194`, `:2290-2298`, `:2437`, `:2447-2460`; `Dependency.c:160-175`,
+  `:221-234`; and, in this document, Step 4.102's two-volume table, Step 4.104's alphabet and
+  signature discussion, and `tools/apriori-prefix.py`.
+- Standing rules unchanged: `userdata`, the partition table and the firmware LUN are untouched;
+  writes go to `boot` only; the control image is read before anything is overwritten; and the
+  screen is read before the next flash.
+
+## Step 4.106 — the census's three constants, the comparison it can no longer make, and the argument it carried that a cut satisfies
+
+### What this step is
+
+Host-side only, read-only, and it changes one tool. `tools/fv-census.py` is the instrument Steps 4.12
+onward have leaned on for the `P2 APRI` / `P2 WALK` / `P2 STATS` shapes, and three of its claims did
+not survive the corrections Steps 4.102, 4.104 and 4.105 made against the *document*. This step brings
+the tool to the position the document now holds, and then writes down the one consequence of doing so
+that is not a transcription of an earlier step:
+
+> **The argument the census has used since it was written to exclude a physical cutoff — "file 5
+> failed while file 74 succeeded, so no boundary exists" — does not exclude the cut hypothesis,
+> because under that hypothesis the promoted set *is* a physical prefix.** What excludes it is a field
+> the letters never touched.
+
+Nothing here reads the device, and nothing here changes a payload.
+
+### The three constants
+
+| what the tool said | what the source says | why it survived until now |
+| --- | --- | --- |
+| `EFI_FV_FILETYPE_COMBINED_SMM_DXE = 0xF3` | `0x0C` (`PiFirmwareFile.h:70-71`, where it is `#define`d as an alias of `EFI_FV_FILETYPE_COMBINED_MM_DXE`) | the file count is **0** either way, so the only visible effect was the number printed beside `t=1` — and `0xF3` is a value the header never defines at all (its constants stop at `0x0F`; the only `0xF…` in it is `EFI_FV_FILETYPE_FFS_PAD`, `0xF0`) |
+| `iter = seen + 1` | `iter = seen + 2` (Step 4.102) | the generator was written from the inner `FVMAIN` alone, and the counters are `STATIC` globals summed over **every** FV the dispatcher walked — this FD has two |
+| `t=4 seen=0`, and `P2 STATS apriori=46/70` as the fixed shape | `t=4 seen=1`; the numerator is `46` on a stop and `69` on a completed walk | the first was Step 4.101's table (Step 4.102 corrected it); the second presumed the stopped walk the join was claiming to have refuted |
+
+The generator now carries the outer volume's contribution explicitly instead of assuming one volume —
+
+```python
+OUTER = {0: (0, 1), 1: (0, 1), 2: (0, 1), 3: (0, 1), 4: (1, 1)}
+seen, itr = len(of) + oseen, len(of) + oseen + 2
+```
+
+— one terminating `EFI_NOT_FOUND` per type per volume, plus the outer volume's single type-`0x0B`
+FV-image file, which is the only `seen` it contributes. Its five rows now reproduce Step 4.102's
+corrected table rather than contradicting it: `t=0 80/82`, `t=1 0/2`, `t=2 0/2`, `t=3 1/3`,
+`t=4 1/3`, with `t=4 seen=1` (the row that says the outer volume was walked at all) generated from
+the measurement instead of asserted.
+
+### The comparison the tool can no longer make
+
+The join used to build, for each candidate stop, the string the identity map predicts and print
+`REFUTED at slot(s) [17, 21]`. That comparison is the one Step 4.104 withdrew, and the reason is
+structural rather than numerical: **it needs a slot map — which Apriori entry owns each character —
+and the slot map *is* the batch under test**, so laying the observed string against a candidate's
+array indices in array order assumes the answer. Slots 17 and 21 are where the two maps differ
+(`RpmhDxe`/`NpaDxe` and `DiskIoDxe`/`ShmBridgeDxe`), so the `diffs` were the batches' difference
+restated. Measured on the record payload: the two admissible stops' batches are **byte-identical**,
+because the boundary file at physical 50 (`FeatureEnablerDxe`) is one the Apriori array never names —
+it consumes a `seen` and promotes nothing. So the letters are consistent with both stops and cannot
+choose between them.
+
+What the join prints now is the field block per stop, which is where the answer actually lives:
+
+```
+stop at physical 49  (seen=48):
+    P2 APRI matched=1..69 unhit=24 miss=14 PlatformInfoDxeDriver
+    P2 STATS discovered=48
+    P2 WALK t=0 seen=48 last=F6158D7A-1918-5D76-957D-51F1E017B906 (DALTLMM)
+stop at physical 50  (seen=49):
+    P2 APRI matched=1..69 unhit=24 miss=14 PlatformInfoDxeDriver
+    P2 STATS discovered=49
+    P2 WALK t=0 seen=49 last=E5E7BAF3-3D4F-5AD8-BA77-DE8DB3C8BA8E (FeatureEnablerDxe)
+```
+
+`matched=` is identical in both, as Step 4.105's table says; `unhit=`/`miss=` separate a stop from a
+completed walk; `discovered=` and `seen=` name the same number on two lines; and `last=` is the only
+field that separates the two stops from each other. The tool also prints the two parameterisations as
+one function, because they are: the census indexes by "last physical file" and `tools/apriori-prefix.py`
+by "DRIVER files handed over", and `seen = seen_at[stop]` is the whole of the translation.
+
+### The prediction the tool was making on a shape no prefix can produce
+
+Two blocks predicted `P2 APRI matched=1..46 unhit=24 miss=47` — the array's head promoted and its
+tail not — and called it "the run's shape, and the SEQ matches it by construction". It is unreachable,
+and the tool now computes that instead of asserting the opposite: for the 46 characters that were
+read, the admissible sets are `unhit ∈ {24}` and `miss ∈ {14}`, so `miss=47` is not among them, and
+`matched=` reads `1..69` because `ap69` (`GraphicsConsoleDxe`) sits at volume file 22 and is inside
+the batch even when the batch is a cut. The stated reason is Step 4.105's: the array's head
+(`ap1..ap46`) occupies DRIVER ranks `0..72` and its tail (`ap47..ap69`) occupies ranks `12..70`, so
+the two interleave and no prefix of the file order promotes the head without part of the tail.
+
+### The argument that was carried on the assumption under test
+
+This is the part worth its own step. The census's docstring has said since it was written:
+
+> Measured: **5** (SecurityStubDxe, Apriori 37) failed while **74** (ShmBridgeDxe, Apriori 22)
+> succeeded, so no physical cutoff exists — not as a boundary, not as a suffix, not at all. **The
+> Apriori *index* is the only ordering in which the promoted set is contiguous.**
+
+The measurement is sound and both halves of the conclusion are about **one slot map**. `5` and `74`
+are physical indices of Apriori entries the *identity* map assigns those letters to — and the identity
+map is the batch a completed walk produces. On the cut's own map the sentence reverses:
+
+| | identity map (walk completed) | cut map (stop at 49 or 50) |
+| --- | --- | --- |
+| promoted set contiguity | contiguous in **Apriori index** (`ap1..ap46`) | contiguous in **physical** order (`rank < seen`), scattered in index |
+| files in the promoted set | 0..74 (it contains `ap22` at 74 and `ap44` at 73) | ≤ 49, with `FeatureEnablerDxe` at 50 as the boundary |
+| files in the unmatched set | 51..72, plus nothing below | ≥ 51 — a physical suffix by construction |
+| lowest failed file / highest loaded file | 5 / 74 | 5 / 43 |
+
+So the census's refutation of "the split is a physical cutoff" does not touch the cut hypothesis: the
+cut hypothesis **is** a physical cutoff of the discovery walk, and the census's own `promoted(stop)`
+model — "the walk handed over the entries whose file is at or before `stop`" — has been computing that
+hypothesis all along. The tool's two candidate stops *are* the cut; its `SEQ len` column is what made
+it read them as refuted.
+
+What survives on either map is the conclusion about the **27 failures**: a load at file 5 failed while
+a file at 43 or 74 loaded, so no boundary explains the failures. That is the half of the old claim the
+document can keep, and it is the half the document was actually using it for.
+
+The consequence for the reading list is the same one Step 4.105 arrived at from the other side, and it
+is worth stating in the census's own terms: **the split cannot be dismissed as a cutoff by an argument
+that assumes the walk completed.** The fields that dismiss it — or confirm it — are
+`P2 STATS discovered=` (48/49 against 80), `P2 APRI unhit=` (24 against 1), `P2 APRI miss=`
+(`14 PlatformInfoDxeDriver` against `none`), `P2 WALK t=0 seen=` and `last=`. Step 4.105's line
+calling the cut "a clean boundary measured rather than asserted" has been corrected in place for the
+same reason: the boundary is *definitional* for the hypothesis, and what is worth measuring is which
+entries the prefix carries (`ap66..ap69` at volume files 14, 20, 21 and 22 — the reason this batch is
+physical-contiguous and index-scattered).
+
+### Nothing was built and nothing was flashed
+
+- The files this step changes are `tools/fv-census.py` (five blocks: the module docstring's cutoff
+  paragraph and its second half, the `SEQ join` header and its verdict line, the two prediction
+  blocks, the `miss` decoder's `miss=22` sentence, the `P2 WALK` generator, and the `P2 STATS` block)
+  and the two lines of this document named above. No `.c`, `.inf`, `.asl`, `APRIORI.inc`, FFS file or
+  payload was written; the four payloads and the build tree were opened read-only.
+- The tool was re-run against the record payload after the edit, and its five `P2 WALK` rows now
+  agree with Step 4.102's corrected table.
+- **The device is absent from this host throughout** — `adb devices` empty, no Qualcomm function on
+  the USB bus, no `/dev/ttyUSB*`/`/dev/ttyACM*`. The reading owed on the payload in `boot`
+  (`90B21643…`, rung 7260) remains owed, and nothing was flashed.
+- Digests unchanged: record `work/out/p2-4.94/Mu-gauguin-silicon-gzip.img`, 1,144,832 B,
+  `d621f732f4763a303e980c5af04451479c2ace31801e796993a258f226c177a5`; `boot`'s
+  `work/out/p2-variants/Mu-gauguin-silicon-gzip.img`, 1,142,784 B,
+  `90b21643e3450c326fb3d24baf64d58d4692a5d155c36b76d2e020ff04a96b59` — twenty-fourth step running;
+  candidate 1,169,408 B, `efc8e10d09f0f286011e1aacc638a7edd2ed5fcd86884640b28d14628f58f9f3`,
+  unflashed.
+- Cited, re-read rather than remembered: `PiFirmwareFile.h:62-71`, `:82`; the `ITER`/`seen` semantics
+  from `Dispatcher.c:125-128`, `:1961-1967`, `:2431-2437` and `:2447-2460`; `UINTN
+  mP2AprioriCount` (`:90`) and its `MAX` at `:2073-2074`; and, in this document, Step 4.102's
+  two-volume `P2 WALK` table, Step 4.104's alphabet, Step 4.105's signature table, and
+  `tools/apriori-prefix.py --letters`.
+- Standing rules unchanged: `userdata`, the partition table and the firmware LUN are untouched;
+  writes go to `boot` only; the control image is read before anything is overwritten; and the screen
+  is read before the next flash.
+
+## Step 4.107 — the five live `iter=` readings that still said `seen + 1`, and the two historical rows `miss=47` was resting on
+
+### What this step is
+
+Steps 4.102, 4.105 and 4.106 corrected three things that the earlier steps had stated
+as predictions and that the volume then answered. Each correction was written into the
+step that made it, and each left the *earlier* statements of the same number standing,
+because the document's convention is that a historical step keeps the numbers it was
+written with and gets an annotation instead. That convention had not been applied here:
+four places still said `iter=81` or `iter = seen + 1` with no note, and one historical
+row still said `miss=47` as the reading to look for. Those are not history — they are
+instructions a later run would follow — so they are struck and annotated now, in one
+step, with the step that corrected each named at the point of use.
+
+Nothing about the firmware, the tools or the readings changes. This step edits prose.
+
+### The `iter` readings: five places, one correction
+
+The corrected reading is Step 4.102's, and it rests on one fact: `mP2WalkSeen`,
+`mP2WalkIter` and `mP2WalkErr` are `STATIC` globals and every firmware volume the
+dispatcher walks adds its own terminating `EFI_NOT_FOUND` call to them, so a pass that
+ends by running out of files contributes `seen + 1` **per volume**. This FD has two
+volumes — `FVMAIN_COMPACT` (2 files, no DRIVER) and `FVMAIN` (123 files) — so all five
+`P2 WALK` lines carry `iter = seen + 2`, not `iter = seen + 1`.
+
+| where | said | now reads | why |
+|---|---|---|---|
+| the `P2 WALK` field description, `:1775` | `seen=80 iter=81` | `seen=80 iter=82` | the bullet's own count is right (80 DRIVER files), and the "81st call" it names is one of two |
+| the encoder's self-check, `:2617` | `iter = seen + 1`, test `iter > seen + 1` | `iter = seen + 2`, test `iter > seen + 2` | the test's purpose is unchanged: `iter` still catches a `GetNextFile` failure, `seen` still catches a cut |
+| the `P2 WALK` prediction block, `:3119` | `iter=81`, `t=3` `iter=2`, others `iter=1` | `iter=82`, `t=3` `iter=3`, others `iter=2` | this is the block that reads like a transcript and is not one; the correction is written at the block |
+| Step 4.4x's prediction row, `:8298` | `iter=81`, `apriori=46/70` | `iter=82`; `apriori=46/70` is the *stopped* shape | a completed walk reads `apriori=69/70`, so the row as written named two worlds at once |
+| the historical reading table, `:2568` | `seen=80 iter=81`, `discovered ≤ 57` | `iter=82`; the `≤ 57` bound is withdrawn | the bound came from the `apriori=46` reading Step 4.105 replaced; the row's *decision* survives |
+
+The `seen=` values and the `last=` GUIDs in all five places are unchanged, and that is
+the point of separating them: only the terminating call's counting was wrong. A payload
+read on a panel and found to print `seen=80 iter=81` would now mean something else
+entirely — one volume walked, not two — which is why leaving the old number in place as
+an "expected" reading was worse than an error of arithmetic.
+
+### The two rows `miss=47` was resting on
+
+The same sweep found two rows in the `P2 APRI` reading table (`:2562-2573`) that Step
+4.105 and Step 4.106 make unreachable, and they now carry a struck-row note:
+
+- **`entries=70`, `miss=47`** — the row that names `matched=1..46`, i.e. the array's head
+  promoted and its tail not. It cannot occur on this volume: `ap1..ap46` occupy DRIVER
+  ranks 0..72 while `ap47..ap69` occupy ranks 12..70, so the two interleave and no
+  prefix of the file order promotes the head without part of the tail
+  (`tools/apriori-prefix.py`; the same computation is Step 4.105's). A 46-character
+  `P2 SEQ` admits `unhit=24` with `miss=14 PlatformInfoDxeDriver` and nothing else.
+- **`P2 WALK t=0 seen=80 iter=81`** — the row above it, whose consequence ("`discovered ≤
+  57`") was derived from the same `apriori=46` premise. On a completed walk the pair is
+  `seen=80 discovered=80 apriori=69/70`; on a stopped one, `seen=48/49
+  discovered=48/49 apriori=46/70`. The row's decision is kept, because a `seen` of 80
+  still exonerates the walk — it just has to be read against `discovered=80` and not
+  against `57`.
+
+### What is now consistent, and what still is not
+
+Every *live* statement of either number in this document now carries the corrected
+value or an explicit pointer to the step that corrected it. The historical steps
+(4.99–4.101, 4.47 and the 4.2x–4.4x runs) keep their own numbers, which is the
+convention, and Step 4.102's table at `:20194` remains the authority for the five rows.
+
+What is still not consistent, and is not a matter of prose: **no `P2 WALK` line has ever
+been read off a panel.** Every `seen=80`/`iter=82` above is an offline prediction from
+this volume's own bytes, checked against `tools/fv-census.py`'s generator, which prints
+the same five rows from the payload. The reading owed on the payload in `boot`
+(`90B21643…`, rung 7260) is the first chance to test any of it, and it stays owed.
+
+| | |
+|---|---|
+| image | **none** — nothing was built, staged or flashed; the phone still carries the payload written earlier, and the candidate stays unflashed |
+| changed | `docs/08-device-session.md` only: five `iter=` annotations (`:1775`, `:2568`, `:2597`, `:2617`, `:3119`, `:8298`) and the two struck rows at `:2591-2603` |
+| decided | nothing new. This step exists so that a later run reading the older steps does not follow a number this project has already retracted |
+| does not close | the P3 gate, which remains unmet and is now shown to be further away, not closer; and the owed panel reading, which is still owed |
+| standing rules unchanged | `userdata`, the partition table and the firmware LUN are untouched; writes go to `boot` only; the control image is read before anything is overwritten; and the screen is read before the next flash |
