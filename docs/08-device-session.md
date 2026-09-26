@@ -23336,3 +23336,199 @@ answer is known *before* the pattern is trusted.
 | agrees with | Step 4.22's HOB argument, and strengthens it: the producer search is now known to be platform-independent — none of the 85 platforms that share the flag has a producer either |
 | does not close | the 27 `L`s, the `P2 FREE largest=` reading, or anything the gate waits on |
 | not an action | turning protection on means adding a HOB producer, not flipping the flag — and Step 4.12's four `ProtectUefiImage` allocation sites are the reason that is a P4 task |
+
+## Step 4.118 — the boot-manager combo, the eleven of eighty-five platforms that can supply it, and the two drivers and one library this port does not have
+
+P3's fourth item is the only one that is not hardware work. `docs/00-plan.md:320` reads
+*"4. Bring up `ButtonsDxe`, and a way to choose boot entries"*, and its second half is a
+question about this framework's own convention rather than about gauguin's silicon: by what
+mechanism does a button press reach the boot manager. **This document had never read that
+mechanism.** Before this step, a grep for `keypad`, `KeyCallback`, `SCAN_UP` and `ComboMessage`
+over the tracked tree returned no hit in `docs/`, in `tools/` or in `README.md`; the only match
+outside the firmware tree in `work/` is an unrelated section heading at
+`device/config/uefiplat.cfg:135` (`## Buttons / KeyPad ##`, over a `PwrBtnShutdownFlag`).
+Everything below is the first thing this project has said about the mechanism, and what it
+finds moves P3 item 4.
+
+### The chain, one link per source line
+
+The reader is `PlatformBootManagerAfterConsole` (`BootManager.c:99`). It sets the console
+variables at `:51`, draws the logo at `:108`, and then calls
+
+```
+  Status = RegisterKeyCallback ((EFI_DEVICE_PATH_PROTOCOL *)&KeypadDevicePath);   // :114
+  if (!EFI_ERROR (Status) && GopProtocol != NULL) {                              // :115
+    XPos = (ScreenWidth - AsciiStrLen (ComboMessage) * EFI_GLYPH_WIDTH) / 2;     // :121
+    YPos = ScreenHeight * 48 / 50;                                               // :122
+  }
+```
+
+so the same `Status` decides both whether the key works and whether the message telling the
+user which key to press is ever positioned. `RegisterKeyCallback` (`KeyCallback.c:98`) is
+`SetupKeypad` (`:33`) followed by `RegisterKeyNotify` (`:76`), and the six things that have to
+be true are:
+
+| # | what has to exist | produced by | on this port |
+|---|---|---|---|
+| 1 | a handle offering `gKeypadDeviceProtocolGuid` (`A412C1AC-0295-4AE3-B59F-52231F26554D`, `SiliciumPkg.dec:14`) | `KeypadDeviceDxe.c:21`, `[Depex] TRUE` | **no producer** |
+| 2 | a `ConnectController` on that handle — this is what binds the driver-model consumer | `KeyCallback.c:45` | never reached |
+| 3 | `gEfiSimpleTextInputExProtocolGuid` on **that same handle** | `KeypadDxe.c:306` | **no producer** |
+| 4 | `LocateDevicePath (&gEfiSimpleTextInputExProtocolGuid, &KeypadDevicePath, …)` succeeding | `KeyCallback.c:53` | fails |
+| 5 | `RegisterKeyNotify` with `KeyData.Key.ScanCode = SCAN_UP` (`:85`, `:88`) → `KeyNotify` sets `mEnterBootManager` (`:27`) | `KeyCallback.c:88` | never runs |
+| 6 | `EnterBootManager()` TRUE → the boot-manager menu at `BootManager.c:156-162` | `BootManager.c:156` | unreachable |
+
+Two details of the chain are worth stating because they are what makes it a *convention* and
+not an interface. Link 3 attaches to the handle link 1 created, not to the console: `KeypadDxe`
+is a driver-model driver (`KeypadDxe.inf`, `MODULE_TYPE = UEFI_DRIVER`) and `KeypadDxe.c:306`
+calls `InstallMultipleProtocolInterfaces (&Controller, &gEfiSimpleTextInProtocolGuid, …,
+&gEfiSimpleTextInputExProtocolGuid, …)` on the **controller** — the handle that carries
+`KeypadDevicePath`. That is why link 4 is a `LocateDevicePath` against a *hard-coded* device
+path and not a `LocateProtocol`: `BootDevices.h:31` defines `KeypadDevicePath` as a single
+`HW_VENDOR_DP` node carrying `EFI_KEYPAD_DEVICE_GUID` (`:12-18`,
+`D7F58A0E-BED2-4B5A-BB43-8AB23DD0E2B0`) — a **different GUID** from the protocol at link 1.
+And `BootManager.c:51` puts that same path into the `ConIn` variable, so before any of this
+runs the console input list already names a device that has to exist for the console to be
+well-formed.
+
+`BootDevices.h` defines both paths as non-`static` objects in a header rather than declaring
+them `extern`, so `KeypadDeviceDxe` and `BootManager.c` each link their own copy. That is not
+a defect: `LocateDevicePath` compares device-path nodes by value, and the two copies are
+byte-identical because both were cut from the same macro.
+
+### Three of the six links are supplied by drivers, and this port has none of the three
+
+`KeypadDeviceDxe` and `KeypadDxe` are not gauguin's. The measurement is a count over the tree:
+of **85** platform `.dsc` files, **11** name `KeypadDeviceDxe`, and the same 11 name it in
+`DXE.inc`, in `APRIORI.inc` and in `[Components]`, with `KeypadDxe` beside it in all four
+places. The 11 are the nine Samsung packages and the two MediaTek Xiaomi packages:
+
+| family | platforms | what the library reads | resolved by |
+|---|---|---|---|
+| Samsung | `beyond1lte`, `a7`, `starlte`, `e1s`, `c1s`, `a10`, `r8s`, `gtaxllte`, `x1s` | `gEfiGpioProtocolGuid` (`SamsungPkg/Include/Protocol/EFIGpio.h`) | `KeypadDeviceLib` in each package |
+| Xiaomi (MediaTek) | `lancelot`, `stone` | `gMediaTekGpioProtocolGuid` + `gMediaTekPmicProtocolGuid` (`Protocol/MtkGpio.h`, `MtkPmic.h`) | `KeypadDeviceLib` in each package |
+| Xiaomi (Qualcomm) | **`gauguin`** | — | **nothing** |
+
+`gauguinPkg` names no keypad driver in its `.dsc`, in `DXE.inc` or in `APRIORI.inc` — `grep
+-i keypad` over all three is empty — and the reason runs deeper than the missing `INF`:
+`KeypadDeviceDxe.inf:20` requires `KeypadDeviceLib` as a library class, and `SiliciumPkg.dsc.inc`
+has **no line resolving it**. So there is no default to fall back on and no Qualcomm
+implementation to resolve to: adding the INF to gauguin's DSC would fail at build, not at boot.
+Every one of the 11 platforms supplies that class from its own package, which is what makes
+`KeypadDeviceLib` a *per-vendor* class in the shape of `Silicon/Silicium/SiliciumPkg/Include/Library/KeypadDeviceLib.h`
+— a header with two function declarations, an enum and a context struct, and no implementation.
+
+What a Qualcomm implementation would have to do is visible in the nearest Xiaomi sibling.
+lancelot's `KeypadDeviceLib.c` hard-codes its table — Volume Up is PMIC pin 0 read through
+`mPmicProtocol->HomeButtonPressed`, Volume Down is GPIO 93 through `mGpioProtocol->GetState`,
+Power is PMIC pin 1 — and its constructor returns `RETURN_NOT_FOUND` if either MediaTek
+protocol is not already installed, so a gauguin copy that inherited that constructor unchanged
+would fail to load for a second reason as well as the first. All 11 libraries agree on the one
+thing that has to stay constant for link 5 to be a link: `KeypadDeviceReset` sets
+`ScanCode = SCAN_UP` on the Volume-Up context, and `SetupKeypad`'s `Reset` call at
+`KeyCallback.c:67` is what invokes it. The `SCAN_LEFT`/`SCAN_RIGHT`/`SCAN_ESC` triples at the
+top of each file are not this key — they are the *power-key long-press* reports, pushed only
+when the power key's long-press fires (`KeypadDeviceLib.c:124-138`).
+
+### The port does have the three providers a keypad library would read, and cannot load any of them yet
+
+The lacking piece is glue, not hardware. gauguin's XBL carries `GpiDxe`, `DALTLMM` and
+`PmicDxe` — `device/dxe-inventory.txt:60`, `:65`, `:71`, and `docs/03-firmware-inventory.md:40`
+files the first two under *Buses* — and all three are in the a-priori array, at the positions
+the decode gives:
+
+| a-priori | file | letter |
+|---|---|---|
+| ap32 | `DALTLMM` | `L` |
+| ap35 | `PmicDxe` | `L` |
+| ap45 | `GpiDxe` | `L` |
+
+All three carry **`L`**, so all three are among the 27 files `CoreLoadImage` refuses. That
+makes P3 item 4's second half *ordering*-blocked rather than design-blocked: the keypad
+library would have to read the very providers that do not load. It does not make the item
+unnecessary, and it does not say which of the three a library would use — reading `GpiDxe`'s
+or `DALTLMM`'s protocol surface is a separate piece of work that this step did not do.
+
+### Two of the three absences are invisible and one is loud
+
+The first failure in the chain is silent and the second prints. `KeyCallback.c:41` is
+
+```
+  Status = gBS->LocateHandleBuffer (ByProtocol, &gKeypadDeviceProtocolGuid, NULL, &KeypadCount, &KeypadBuffer);
+  if (!EFI_ERROR (Status)) {                  // :42 — and there is no else
+```
+
+so with no producer the locate fails and **nothing is printed at all** — the `ConnectController`
+loop at `:44-46` simply does not run. `KeyCallback.c:53` is the other kind: its failure is a
+`DEBUG ((EFI_D_ERROR, "%a: Failed to Locate STI Device Path! Status = %r\n", …))` at `:55`
+followed by a `return Status`, and `PcdDebugPrintErrorLevel` is `0x8007EE0F`
+(`SiliciumPkg.dsc.inc:71`), which has `DEBUG_ERROR` set. So the boot-time panel, once BDS runs,
+carries **one** line about this and it is the second failure:
+
+```
+SetupKeypad: Failed to Locate STI Device Path! Status = Not Found
+```
+
+That is a prediction and not a reading — nothing here has been seen on the panel, and this
+step has no device. It is written down because it is falsifiable in one photograph, and because
+it is the only part of this finding that a later session can check without rebuilding anything.
+The same asymmetry runs through the rest of the chain: `RegisterKeyNotify`'s own failure does
+print (`:90`), but it is never reached, and `PlatformBootManagerWaitCallback` (`:175`) returns
+at `:180-182` on `XPos == 0 && YPos == 0`, so the second symptom — the absence of
+`[Volume Up] Boot Manager` (`ComboMessage`, `:35`, drawn at `:196`) — is also silent.
+
+### What this step does not say
+
+- It is not a claim about `ButtonsDxe`. That driver *is* in gauguin's build
+  (`DXE.inc:92`, from the phone's own XBL), and its INF is one of this repository's own
+  extracted stubs: `uefi/Binaries/gauguin/QcomPkg/Drivers/ButtonsDxe/ButtonsDxe.inf` declares
+  only `PE32|ButtonsDxe.efi|DXE_DRIVER` (`:13-14`) where 73 of the other 73 `ButtonsDxe.inf`
+  files in the tree name a `DXE_DEPEX|ButtonsDxe.depex|*` beside theirs, so this one carries no
+  DEPEX section — which makes it one of the 53 files the census finds without one, and ap58
+  puts it among that bucket's 48 a-priori members. Whether it exposes a key-state API that a
+  boot-entry selector could use instead of the keypad stack is a question this step did not
+  ask. It is the obvious next one.
+- It does not say the plan is wrong. "A way to choose boot entries" is still the right item;
+  what changes is that on this port it cannot be the framework's Volume-Up convention, and
+  that the cheapest alternative is a question about `ButtonsDxe` rather than about keypads.
+- It changes no count, no `L` and no input to the gate. All three drivers it names are already
+  inside the 27, and the sequence it reads is the one Step 4.109 read.
+- It does not say the eleven platforms work. It says the eleven carry the three drivers and the
+  library class, which is a statement about the tree and not about any device.
+
+### Read this step
+
+`Silicon/Silicium/SiliciumPkg/Library/BootManagerLib/BootManager.c:29`, `:30`, `:35`, `:51`,
+`:99`, `:108`, `:114`, `:115`, `:121`, `:122`, `:126`, `:156`, `:180-182`, `:196`;
+`…/BootManagerLib/KeyCallback.c:27`, `:33`, `:41-50`, `:53`, `:55`, `:60`, `:67`, `:76`, `:85`,
+`:88`, `:98`, `:109`;
+`Silicon/Silicium/SiliciumPkg/Drivers/KeypadDeviceDxe/KeypadDeviceDxe.c:21` and
+`KeypadDeviceDxe.inf:20`, `[Depex] TRUE`;
+`Silicon/Silicium/SiliciumPkg/Drivers/KeypadDxe/KeypadDxe.c:306` and `KeypadDxe.inf`
+(`MODULE_TYPE = UEFI_DRIVER`, **no `[Depex]` section**);
+`Silicon/Silicium/SiliciumPkg/Include/Protocol/EfiKeypadDevice.h:4`, `:6-12`, `:42-45`, `:47`;
+`Silicon/Silicium/SiliciumPkg/Include/Library/KeypadDeviceLib.h`;
+`Silicon/Silicium/SiliciumPkg/Include/Configuration/BootDevices.h:12-18`, `:31`, `:56`;
+`Silicon/Silicium/SiliciumPkg/SiliciumPkg.dec:14`;
+`Silicon/Silicium/SiliciumPkg/SiliciumPkg.dsc.inc:71`;
+`Platforms/Samsung/SamsungPkg/Include/Protocol/EFIGpio.h`;
+`Platforms/Xiaomi/lancelotPkg/Library/KeypadDeviceLib/KeypadDeviceLib.c:8-9`, `:24-26`, `:124-138`,
+`:190-206`, `:246-262`; `Platforms/Xiaomi/stonePkg/Library/KeypadDeviceLib/KeypadDeviceLib.c:29-31`;
+`Platforms/Samsung/a7Pkg/Library/KeypadDeviceLib/KeypadDeviceLib.c:10`, `:24-26`, `:220`, `:252`;
+`Platforms/Xiaomi/lancelotPkg/lancelot.dsc:78`, `lancelotPkg/Include/DXE.inc:42-43`,
+`lancelotPkg/Include/APRIORI.inc:41-42`;
+`Platforms/Xiaomi/gauguinPkg/Include/DXE.inc:92`, `gauguinPkg/gauguin.dsc`;
+`device/dxe-inventory.txt:60`, `:65`, `:71`;
+`uefi/Binaries/gauguin/QcomPkg/Drivers/ButtonsDxe/ButtonsDxe.inf:13-14` against
+`work/uefi/Mu-Silicium/Binaries/q2q/QcomPkg/Drivers/ButtonsDxe/ButtonsDxe.inf:10`;
+`device/config/uefiplat.cfg:135`; `docs/03-firmware-inventory.md:40`; `docs/00-plan.md:320`;
+in this document `:2222`, `:2232`, `:2245`, `:2254` (the a-priori table rows for ap35, ap45,
+ap58 and ap32), and `:23441-23443`.
+
+| | |
+|---|---|
+| instrument | the six-link chain read from `BootManager.c` / `KeyCallback.c` / `KeypadDeviceDxe.c` / `KeypadDxe.c`, and a count of the tree's 85 platform `.dsc` files by whether they name the keypad pair |
+| shows | the Volume-Up boot-manager combo needs a `KeypadDeviceDxe` + `KeypadDxe` pair and a per-vendor `KeypadDeviceLib`; 11 platforms (9 Samsung, 2 MediaTek Xiaomi) supply all three, `SiliciumPkg.dsc.inc` supplies no default, and `gauguinPkg` supplies none of it |
+| adds | the one predicted panel line (`SetupKeypad: Failed to Locate STI Device Path! Status = Not Found`), and the reason the first absence in the chain prints nothing at all |
+| agrees with | Step 4.109's sequence and Step 4.116's buckets — the three Qualcomm providers a keypad library would read (`DALTLMM` ap32, `PmicDxe` ap35, `GpiDxe` ap45) are all `L`, so P3 item 4 is ordered after the wall |
+| does not close | the 27 `L`s, `P2 FREE largest=`, or anything the gate waits on; and it asks rather than answers whether `ButtonsDxe` can select a boot entry on its own |
+| not an action | nothing was built, nothing was flashed, and the device was absent throughout — the panel line above is a prediction and is labelled as one |
