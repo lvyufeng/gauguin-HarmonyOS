@@ -149,6 +149,19 @@ FFS_ATTRIB_LARGE_FILE = 0x01
 # The panel reading, verbatim: 46 promoted entries, in promotion order. It is
 # indexed by Apriori position k, and SEQ[k] is Apriori entry k + 1 (entry 0 is
 # DxeCore, which the walk never hands to CoreAddToDriverList).
+#
+# That join is the *complete* world's map and is only the right join for slots
+# 0..45, which is all the capture covers: the promotion loop walks the array
+# ascending and every entry but 0 has a DRIVER file, so a walk that reaches the
+# end of the volume promotes ap1, ap2, ap3, ... with no gaps and slot j is
+# ap(j+1) exactly. Under the cut world (a walk stopped at seen 48 or 49) the
+# same 46 letters belong to a different set of 46 drivers - 42 shared, 8 not -
+# and this join is wrong for every slot at or past the first one the cut drops.
+# `tools/apriori-prefix.py --seen 48` prints that batch. Steps 4.104-4.106 are
+# where the fork was established; Step 4.110 is where this comment was
+# qualified. It matters here because the field-vs-letter separating tests below
+# are set-level: they compare the s-set against the L-set, and which drivers are
+# in those two sets is what the map decides.
 SEQ = "s" * 18 + "L" * 3 + "s" + "L" * 24
 
 # Field name -> how to compare it. Strings and ints are both fine; the separator

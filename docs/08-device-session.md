@@ -20619,7 +20619,7 @@ marked as unread:
 | `P2 WALK t=0 last=` | `DALTLMM` / `FeatureEnablerDxe` | `SetupBrowser` | no |
 | `P2 APRI bytes= entries= sum=` | 1120, 70, `a998b263` | identical | no |
 | `P2 APRI first= last=` | `D6A2CB7F…` / `CCCB0C28…` | identical | no |
-| `P2 APRI matched=` | `1..46` | `1..69` | no |
+| `P2 APRI matched=` | `1..69` | `1..69` | no — **this row read `1..46` until Step 4.110**; `matched=` prints a min and a max (`mP2ApriMatchFirst`/`Last`, `:152-153`, `:2190-2194`), and `ap66..ap69` are *inside* the cut, so the max is 69 in both worlds |
 | `P2 APRI unhit=` | 24 | 1 | no |
 | `P2 APRI miss=` | `14 PlatformInfoDxeDriver` | `none` | no |
 | `P2 SEQ` length | 46 | 69, of which 46 captured | **46 captured** |
@@ -21451,6 +21451,18 @@ version of it. `NpaDxe` — at 81,966 B the **largest** promoted image — is di
 succeeds. `PdcDxe`, at 36,864 B, is dispatch 19 and fails, while `ShmBridgeDxe` asks the
 identical 36,864 B at dispatch 21 and succeeds.
 
+> **Step 4.110 corrects the last leg of that.** These three slot attributions hold under
+> the **complete** map and not under the cut. `NpaDxe` is `ap18` — in the cut batch at slot
+> 16, in the complete batch at slot 17 — so "dispatch 17" is at best "16 or 17", and it is
+> the greater of the two that the sentence needs, so the leg survives. `PdcDxe` is `ap20` —
+> cut slot 18, complete slot 19 — so "dispatch 19" is "18 or 19", and both are `L`, so that
+> leg survives too. **`ShmBridgeDxe` is `ap22`, and `ap22` is in the cut batch's `unhit`
+> list**, so under the cut it is not promoted at all and the `s` at position 21 belongs to
+> `ap24` `DiskIoDxe` (`tools/apriori-prefix.py --seen 48`, slots 18-22: `PdcDxe`, `ClockDxe`,
+> `ScmDxe`, `DiskIoDxe`). The "identical size, opposite results" leg is therefore
+> complete-map-only. What is map-free is the shape plus the two surviving legs: the largest
+> promoted image succeeds before the wall, and a 36,864 B image fails inside it.
+
 A monotone "the heap is full" curve fails the big request before the small one and never
 lets anything through after it starts failing. Neither holds here. So the consumed state is
 not a scalar remainder; what survives as a candidate is **contiguity** — whether a run of
@@ -21466,6 +21478,18 @@ attempt (`:655-686`).
 to the same map question as the SEQ's. Its **letter counts are not**: the multiset of
 letters on that line is invariant under any relabelling of the slots, so it is readable
 whatever the map turns out to be.
+
+> **Step 4.110 corrects the rest of this section, and it is the correction this step
+> most needs.** The counts are map-free — that is right. But they are not new: `P2 ERR
+> <status name> x<count>` (`Dispatcher.c:2396-2403`, `DEBUG_ERROR` at `:2403`) prints
+> exactly these counts, in words, once per distinct status, and Step 4.15 added it for
+> precisely this reason — `:2815-2818` says the line "is not a new measurement, it is the
+> existing one in a form that survives being read once" and that it "cannot be truncated,
+> it cannot be half-photographed, and it does not need the `SEQ` line to mean something". So this is
+> not "the first map-free reading of the load failures this project has had": it is the
+> *second*, and it is the worse of the two, because it requires photographing forty-six
+> unbroken characters off a phone — the failure mode `P2 ERR` exists to avoid. The order
+> in the section below is corrected accordingly.
 
 That is a genuinely new instrument for this project, and it is cheap. If the phase
 transition at dispatch 19 is one mechanism, `P2 WHY` should carry **one repeated letter**
@@ -21486,11 +21510,15 @@ inserts one more field, and it goes second:
 
 1. **`P2 ARCH`'s `<name> Arch Protocol not present!!` lines** — a direct reading of the
    gate, no map (Step 4.108).
-2. **`P2 WHY`'s letter counts** — the *distribution*, not the positions; the first
-   map-free reading of the load failures this project has had.
-3. `P2 APRI miss=` and `unhit=` — the fields that decide the walk (Steps 4.105-4.106).
-4. `P2 WALK t=0 seen=` and `last=`; then `P2 STATS discovered=`.
-5. Then Step 4.105's remaining order unchanged.
+2. **`P2 ERR`'s `<status name> x<count>` lines** — the counts Step 4.109 put `P2 WHY` in
+   this slot for, in words, on a line that cannot be half-photographed. This is where the
+   line has stood since Step 4.15 and it is unchanged by the correction above; what changed
+   is that Step 4.109 had silently moved it down. (Step 4.110.)
+3. `P2 WHY`'s letter counts — redundant with 2 and harder to capture; worth taking only in
+   the same photograph, as a checksum on 2.
+4. `P2 APRI miss=` and `unhit=` — the fields that decide the walk (Steps 4.105-4.106).
+5. `P2 WALK t=0 seen=` and `last=`; then `P2 STATS discovered=`.
+6. Then Step 4.105's remaining order unchanged.
 
 Struck off, unchanged: `matched=`, the array's `bytes=`/`sum=`/`first=`/`last=`, and the
 SEQ's letters as *attributions* to named drivers. The SEQ's letters as a *shape* are now
@@ -21514,6 +21542,177 @@ worth reading, and that is the distinction this step adds.
   `:1111`, `:1158`, `:1189-1215`, `:1205`, `:1242-1299` (`:1276`), `:2037-2041`, `:2062-2096`,
   `:2113`, `:2116`, `:2120`; `DxeMain.c:119`; `tools/pe-facts.py`; and, in this document,
   Step 4.37's field census, Steps 4.43-4.46, and Steps 4.104-4.108.
+- Standing rules unchanged: `userdata`, the partition table and the firmware LUN are
+  untouched; writes go to `boot` only; the control image is read before anything is
+  overwritten; and the screen is read before the next flash.
+- **The P3 gate remains unmet and is now shown to be further away, not closer.**
+
+## Step 4.110 — the row that outlived its own correction, the counts that were already printed, and the third leg of Step 4.109's exhaustion argument that needed a map
+
+### What this step is
+
+Three defects, all found by re-reading rather than by building, and all in the two places
+this project is most likely to leave them: a table row that a later part of its own section
+silently contradicts, a claim of novelty for an instrument forty steps old, and a
+counter-example that borrows a slot map after the step that wrote it spent its opening
+paragraph saying no slot map is available.
+
+Nothing was built, staged, flashed or written to any partition. The three inline
+annotations this step owes were applied to Steps 4.104-4.106's field table and to Step
+4.109's exhaustion and owed-reading sections; this heading is the record of them.
+
+### The row eighty lines from its own correction
+
+`docs/08-device-session.md:20622`, inside Steps 4.104-4.106's own field-by-field table,
+read:
+
+```
+| `P2 APRI matched=` | `1..46` | `1..69` | no |
+```
+
+Eighty lines later, in the same section, `:20871` reads `1..69` in **both** columns and
+`:21016-21020` explains why: "`matched=` reads `1..69` because `ap69` (`GraphicsConsoleDxe`)
+sits at volume file 22 and is inside" the cut's 48/49. The two rows cannot both stand, and
+the arithmetic settles it without a device:
+
+- `matched=` is not a count and not a contiguous range. It prints `mP2ApriMatchFirst` and
+  `mP2ApriMatchLast` (`Dispatcher.c:152-153`), assigned at `:2190-2194` as the first and
+  last `Index` the outer loop found a match for. It is a **min and a max**.
+- The cut batch, read off `tools/apriori-prefix.py --seen 48`, has slots 42..45 =
+  `ap66..ap69`: `SimpleTextInOutSerial`, `ConPlatformDxe`, `ConSplitterDxe`,
+  `GraphicsConsoleDxe`. `ap1` is slot 0. So the min is 1 and the max is 69.
+- The complete batch promotes every entry with a DRIVER file, `ap1..ap69`, in array order.
+  Min 1, max 69.
+
+So `matched=1..69` in both worlds, and `matched=` decides nothing — which is what `:20871`
+already said. Row `:20622` was a survivor of the `ap1..ap46` shape Step 4.105 refuted, left
+behind when the rest of the table was rewritten around it. It now reads `1..69` with a note
+naming this step, so the next reader does not have to find `:20871` to be told.
+
+### `P2 ERR` was already the instrument
+
+Step 4.109's section "The reading this buys, and it is the first map-free one" claimed the
+`P2 WHY` letter multiset as "a genuinely new instrument for this project" and "the first
+map-free reading of the load failures this project has had". The first half is true — the
+*line* `P2 WHY` has never been read. The second half is false, and `Dispatcher.c` says so
+in the same digest block:
+
+```
+2396        Same = 0;
+2397        for (Prior = 0; Prior < SeqLen; Prior++) {
+2398          if (mP2ApriSt[Prior] == mP2ApriSt[Index]) {
+2399            Same++;
+2400          }
+2401        }
+2402
+2403        DEBUG ((DEBUG_ERROR, "P2 ERR %r x%d\n", mP2ApriSt[Index], Same));
+```
+
+`P2 ERR <status name> x<count>` is the same counts, over the same `mP2ApriSt[]`, from the
+same `SeqLen`, on the same `DEBUG_ERROR` channel — grouped and **named, in words**, one short
+line per distinct status. It sits between `P2 WHY` (`:2349`) and `P2 STATS` (`:2429`) in the
+same digest. And it was added for this exact purpose at Step 4.15, whose own record
+(`:2815-2818`) says the line "is not a new measurement, it is the existing one in a form
+that survives being read once", that it "cannot be truncated", "cannot be half-photographed",
+and "does not need the `SEQ` line to mean something".
+
+The document has ranked it first ever since. `:3678` and `:4473` open their lists with
+"**`P2 ERR`** — still first, still never read, still the line that answers the 27"; `:4968`
+names it as "the line the phase turns on"; `:5086` as the line that "names" the 27 and is
+"**still unread on the device**". Step 4.109's re-prioritised list demoted it
+below a strictly worse spelling of its own numbers, because the step did not notice that
+`P2 WHY`'s counts and `P2 ERR`'s counts are the same quantity in two encodings. The list is
+corrected in place: `P2 ARCH` (Step 4.108), then `P2 ERR`, then `P2 WHY` as a checksum on
+`P2 ERR` and worth taking only in the same photograph.
+
+There is a second reason `P2 ERR` is the better line and it is not about length. Its
+`x%d` counts over the batch, so the **sum of its counts** is the batch's failure total —
+`SeqLen` minus its successes. Under the cut world that is exactly 27 (`SeqLen` 46, 19 `s`).
+Under the complete world it is 27 plus however many of positions 46..68 failed, so it is
+**≥ 27, and greater than 27 unless all twenty-three uncaptured dispatches succeeded** —
+which the captured tail (`L` `L` `L` `s` then twenty-four `L`) makes vanishingly unlikely.
+So the one number separates the worlds outright: **27 is the cut, anything above 27 is the
+complete walk growing past the capture.** `P2 WHY`'s letters cannot give that, because their
+visible total is 46 by construction in both.
+
+### The third leg: `ShmBridgeDxe` is `unhit` under the cut
+
+Step 4.109's exhaustion section places three drivers on three dispatch positions:
+
+> `NpaDxe` — at 81,966 B the **largest** promoted image — is dispatch 17 and succeeds.
+> `PdcDxe`, at 36,864 B, is dispatch 19 and fails, while `ShmBridgeDxe` asks the identical
+> 36,864 B at dispatch 21 and succeeds.
+
+Each of those attributions resolves a driver name against a slot, which is the join Steps
+4.104-4.106 withdrew and which Step 4.109's own opening paragraph restates as unavailable.
+Checked against `tools/apriori-prefix.py --seen 48` (`ap18`, `ap20` and `ap22` are the three
+indices):
+
+| claim | cut batch | complete batch | verdict |
+|---|---|---|---|
+| `NpaDxe` = `ap18` succeeds at dispatch 17 | slot 16 | slot 17 | survives as "16 or 17", and 16 is inside the 18-`s` prefix |
+| `PdcDxe` = `ap20` fails at dispatch 19 | slot 18 | slot 19 | survives as "18 or 19" — both are `L` |
+| `ShmBridgeDxe` = `ap22` succeeds at dispatch 21 | **`unhit`, not in the batch** | slot 21 | **complete-map only** |
+
+`ap22` is in the cut batch's `unhit` list (`ap[0, 14, 22, 35, 44, 47..65]`), so under the cut
+`ShmBridgeDxe` is never promoted and cannot be the `s` at position 21; that slot is `ap24`
+`DiskIoDxe`. The "identical size, opposite results" leg therefore holds under one of the two
+worlds, and the sentence presented it as a reading of the volume. What is left map-free after
+the correction is weaker but real: **the largest promoted image succeeds before the wall**
+(no later than dispatch 17 under either world), and **a 36,864 B image fails inside it**
+(dispatch 18 or 19 under either world). A monotone "the heap is full" curve has to explain
+both, and neither is a property of the images — which is Step 4.109's actual point and it
+does not need the third leg.
+
+### What this does not change, and one thing it does
+
+`tools/pe-facts.py`'s constant block (`:149-152`) states its map as a fact:
+
+```
+# The panel reading, verbatim: 46 promoted entries, in promotion order. It is
+# indexed by Apriori position k, and SEQ[k] is Apriori entry k + 1 (entry 0 is
+# DxeCore, which the walk never hands to CoreAddToDriverList).
+```
+
+and `:374-376` implements it (`a = k + 1; gs = apriori[a]`). That is **not** an error, and
+this step does not correct it: `k + 1` is exactly the **complete** world's map for slots
+0..45, because the promotion loop walks `Index` ascending and every array entry except 0 has
+a DRIVER file, so the complete batch in dispatch order is `ap1, ap2, ap3, …` with no gaps.
+The tool is right; its docstring just does not say *which* of the two worlds it is right
+about. Under the cut world the same 46 letters belong to the 46 drivers
+`tools/apriori-prefix.py --seen 48` prints — a set that shares 42 entries with the complete
+one and differs in eight.
+
+That qualifier matters because Step 4.109 cites Step 4.37's null result as map-free support
+for the dispatch-order hypothesis ("a property of a *file* cannot separate two sets that are
+divided by a property of a *moment*"). The null result is a *set-level* statement — it asks
+whether a field's value separates the `s`-set from the `L`-set, and which drivers are in
+those two sets is what the map decides — so it is one map's answer, not the mechanism's. Both
+readings of it survive (the file-property argument is about the wrong object under either
+map), and the qualifier is cheap, so it was written into `tools/pe-facts.py`'s own constant
+block as a comment. No code changed; the tool's output is identical.
+
+### Nothing was built and nothing was flashed
+
+- `docs/08-device-session.md` — three inline annotations plus this heading — and
+  `tools/pe-facts.py`'s constant-block comment, which is the one non-document edit and is
+  comment-only; the tool's output is byte-identical and it was re-run to confirm. No `.c`,
+  `.inf`, `.asl`, `APRIORI.inc`, FFS file or payload was written, and the build tree was
+  opened read-only.
+- **The device is absent from this host throughout** — `adb devices` is empty, `lsusb` shows
+  no Qualcomm function, and there is no `/dev/ttyUSB*`/`/dev/ttyACM*`. The reading owed on
+  the payload in `boot` (`90B21643…`, rung 7260) remains owed, and nothing was flashed.
+- Digests unchanged: record `work/out/p2-4.94/Mu-gauguin-silicon-gzip.img`, 1,144,832 B,
+  `d621f732f4763a303e980c5af04451479c2ace31801e796993a258f226c177a5`; `boot`'s
+  `work/out/p2-variants/Mu-gauguin-silicon-gzip.img`, 1,142,784 B,
+  `90b21643e3450c326fb3d24baf64d58d4692a5d155c36b76d2e020ff04a96b59` — twenty-seventh step
+  running; candidate 1,169,408 B,
+  `efc8e10d09f0f286011e1aacc638a7edd2ed5fcd86884640b28d14628f58f9f3`, unflashed.
+- Cited, re-read rather than remembered: `Dispatcher.c:152-153`, `:2190-2194`, `:2349`,
+  `:2396-2403` (`:2403`), `:2429`; `tools/pe-facts.py:149-152`, `:374-376`;
+  `tools/apriori-prefix.py --seen 48` run against
+  `work/out/p2-4.94/Mu-gauguin-silicon-gzip.img`; and, in this document, `:20622`, `:20871`,
+  `:21016-21020`, `:2815-2818`, `:3678`, `:4473`, `:4968`, `:5086`, and Steps 4.104-4.109.
 - Standing rules unchanged: `userdata`, the partition table and the firmware LUN are
   untouched; writes go to `boot` only; the control image is read before anything is
   overwritten; and the screen is read before the next flash.
