@@ -22544,6 +22544,16 @@ of them. 74 of the 75 platform directories carry both `UsbConfigDxe.efi` and
 - **What the panel would have said.** Nothing here is measured on the device, and the owed
   reading on the payload in `boot` remains owed.
 
+> **Step 4.114 corrects the first bullet above.** "Nothing bound to a block device is reached"
+> is true under the complete batch and false under the cut: in the cut batch `DiskIoDxe` is SEQ
+> position 21 and the character there is `s`, so it loaded and started — a fact this document
+> recorded when Step 4.110 wrote it into the blockquote at `:21493-21503`. What survives
+> without a map, and what Step 4.114 puts in its place, is narrower and sufficient — five of
+> the six disk files, `PartitionDxe` through `Fat`, are `L` under **both** batches. The
+> a-priori positions above — the six disk rows and the USB run at 52–58 — are also the census's
+> 1-based prose convention and not the document's `ap`/`pos`, which is 0-based; `DiskIoDxe` is
+> `ap24`, not 25, and `UsbfnDwc3Dxe` is `ap51`, not 52. Both corrections are in Step 4.114.
+
 ### What was written, and what was not
 
 - `docs/08-device-session.md` — this section and nothing else. No tool was changed, no
@@ -22572,4 +22582,170 @@ of them. 74 of the 75 platform directories carry both `UsbConfigDxe.efi` and
 - **The P3 gate remains unmet.** This step removes the last way the storage half could have
   been the obstacle — it is not, and it never was — and leaves the gate exactly where Step
   4.108 and Step 4.109 put it: eighteen loads, then a wall at `DxeMain.c:593`.
+
+## Step 4.114 — the one disk file the two batches disagree about, and three ways this document counts the same a-priori entry
+
+### What this step is
+
+Step 4.113 was committed, and then read back against the instruments that already existed for
+the question it answers. Three things came out of that: one claim in it is true under one of
+the two candidate batches and false under the other, one citation in it names the wrong step,
+and its a-priori positions are in a convention the rest of this document does not use.
+
+All three are the same failure and it is not a measurement failure. **In each case the
+document had already written down the answer, near the claim and above it, and Step 4.113 read
+past it.** The blocks that had it are `:21493-21503` for the first, `:18476-18480` for the
+third, and Step 4.55's own body for the second — so the correction is less "this step was
+wrong" than "this step was written without reading the three paragraphs that would have made
+it right", which is the failure this document has the most practice at naming.
+
+It is host-only and **read-only**, like the step it corrects. The instrument is the one Step
+4.109 built for exactly this: `tools/apriori-prefix.py`, which tabulates the scan prefix
+against the batch it promotes and prints both candidate batches rather than arguing about
+which one the panel saw.
+
+### `DiskIoDxe` loaded and started, under one of the two batches
+
+`tools/apriori-prefix.py work/out/p2-4.94/Mu-gauguin-silicon-gzip.img --seen 80` and
+`--seen 48` give the two batches. `seen=80` is the complete scan (`80 DRIVER` files, batch of
+69 promoted plus `DxeCore` unmatched); `seen=48` is the cut that also produces a batch of 46,
+which is the length of the photographed `SEQ`. In each, the six disk files:
+
+| file | `ap` | complete batch: `pos` | char | cut batch: `pos` | char |
+|---|---|---|---|---|---|
+| `DiskIoDxe` | 24 | 23 | `L` | 21 | **`s`** |
+| `PartitionDxe` | 25 | 24 | `L` | 22 | `L` |
+| `EnglishDxe` | 26 | 25 | `L` | 23 | `L` |
+| `SdccDxe` | 27 | 26 | `L` | 24 | `L` |
+| `UFSDxe` | 28 | 27 | `L` | 25 | `L` |
+| `Fat` | 29 | 28 | `L` | 26 | `L` |
+
+Both readings are against the published string, `s`×18 then `L`×3 then `s` then `L`×24: in the
+complete batch `pos` 23–28 all land in the final run of `L`, and in the cut `pos` 21 is the
+isolated `s` and 22–26 land in the run after it.
+
+So **`DiskIoDxe` is the one file of the six the two batches disagree about**, and Step 4.113's
+sentence — *nothing bound to a block device is reached* — is a complete-batch statement. This
+is not a discovery: Step 4.110 established it when it retired the *"identical size, opposite
+results"* leg, and it said so in as many words at `:21498-21501` — *"`ShmBridgeDxe` is `ap22`,
+and `ap22` is in the cut batch's `unhit` list, so under the cut it is not promoted at all and
+the `s` at position 21 belongs to `ap24` `DiskIoDxe`"*. The run above reproduces that sentence
+from the tool rather than replacing it, and what Step 4.113 did was to write the opposite of a
+line its own section had already quoted.
+
+What survives, and it survives without a map, is that the other five fail to load under
+**both** candidate batches. The storage half of the gate does not fail on its depex chain,
+which is never evaluated, and does not fail for want of a producer, which is in the volume: it
+fails at `CoreLoadImage` — the same wall the SEQ's last twenty-four characters are.
+
+That puts the disk files in the same band as BDS itself. `BdsDxe` is `ap44`, `pos` 43 in the
+complete batch, character `L`; under the cut it is not in the batch at all, since `ap44` is in
+`unhit`. Either way BDS does not start, and that is already recorded — `:1501`,
+`:18493` — so the disk half is not a second, independent reason the gate fails. It is the same
+wall, seventeen to twenty-two positions earlier in the queue.
+
+### One a-priori entry, three numbers, and the one that is the document's
+
+`DiskIoDxe` is `24`, `25` and `ap24` in three places in this repository, and all three are
+arithmetically right:
+
+| where | value | convention |
+|---|---|---|
+| `tools/apriori-order.py`'s listing | `24` | 0-based over the 70 array entries, `DxeCore` at `0` |
+| this document's tables, `:18476-18480` | `ap24` / `pos 23` | 0-based, and `pos` = `ap` − 1 for a complete batch |
+| `tools/depex-census.py`'s prose | `25` | 1-based, the a-priori *entry number* |
+
+Step 4.113's table used the third form, so every position in it is one greater than the `ap`
+this document's tables use — `UFSDxe` reads `29` there and `ap28` here, and the same
+off-by-one applies to all six rows and to the USB run it names in prose: `UsbfnDwc3Dxe` at
+`52` there is `ap51`, and `UsbConfigDxe` at `58` is `ap57`. Which form belongs in a table of
+this kind is settled by the document and not by this step: `ap`/`pos` is what Step 4.95's
+thirteen-protocol table uses at `:18460-18473` and what Step 4.105's prefix table uses at
+`:20864`, while the 1-based form is what appears wherever the census's own output is quoted,
+as in Step 4.55's block at `:9305`.
+
+`tools/depex-census.py`'s comment gives its reason for the 1-based choice: *"Index is
+1-based to match the way `P2 SEQ` positions are counted off the panel."* The tool is not wrong
+to count entries from one when it writes "at a-priori 32" — that is the a-priori entry number
+and it is a legitimate thing to print. What is wrong is the comment's reason, because the
+quantity it names is not 1-based: `SEQ[k]` is indexed by `pos`, `:21441` states the join as
+"for j = 0..45", and `:18476-18480` says both of its columns are 0-based. So the driver the
+census annotates "at a-priori 32" sits at SEQ position 30, and the census's number and the
+panel's position are two apart rather than the same number.
+
+**The document already carried the join, and Step 4.113 did not use it.** `:18477` says in as
+many words that `ap31` "is entry 32 of the table of 70, which is the numbering step 4.12 and
+the **4.55 region** quote in the one-based form" — naming the region `:9305` sits in, and
+naming the convention Step 4.113's table then used anyway. So this correction is not that a
+convention went unrecorded; it is that the record was one line below the table whose numbers
+Step 4.113 should have taken, and a step assembled to reconcile three conventions in one
+document did not read the paragraph that had already reconciled two of them.
+
+### `:9325` is Step 4.55's sentence, not Step 4.95's
+
+Step 4.113 traced the "nine blobs" number forward to "Step 4.95" and cited `:9325` for it.
+`:9325` is in **Step 4.55** — *nothing in the payload of record is gated by its depex, and "no
+depex" is the most constrained depex there is* — whose census output block runs `:9255-9349`
+and whose conclusion the sentence is part of. The neighbouring "`BdsDxe` at 45. That is
+**eight** producers for nine protocols" at `:9275` is Step 4.55's too. The correction is to the
+attribution and not to the measurement: `:8565-8567` is Step 4.50's scoped scan, `:9325` is
+Step 4.55 quoting it in the wider form, and nothing in Step 4.95 is involved. That is the same
+shape as the three corrections before it in this run — a citation that is right about the
+document and wrong about which part of it.
+
+### The three corrections are one, and that is the part worth keeping
+
+Each of them is a case of a claim written without the paragraph that settles it, and in each
+case the paragraph was **in the same document, above the claim, and written by an earlier
+step that had done the harder work**:
+
+| Step 4.113 said | the document already said | where |
+|---|---|---|
+| nothing bound to a block device is reached | under the cut, the `s` at position 21 is `ap24` `DiskIoDxe` | `:21498-21501`, a blockquote Step 4.110 wrote inside §4.109 |
+| a-priori positions 25–30 | `ap` and `pos` are 0-based, and `ap31` is the 1-based form of entry 32 | `:18476-18480` (Step 4.95) |
+| Step 4.95's `:9325` | the sentence is Step 4.55's, whose census block runs `:9255-9349` | Step 4.55's own body |
+
+The pattern is worth naming because the remedy is not "measure more carefully". All three of
+these were found by *reading*, not by measuring — the tool run in the first section only
+reproduced a sentence that was already there. This document is 22,700 lines and it is now
+long enough that its own earlier steps are the most likely place for an answer to be and the
+least likely place for a later step to look. That is the cost of the form, and the counter is
+the one Step 4.113 used for citations and Step 4.112 used for the shelf: resolve the question
+against the artifact, and search the document for the question before writing the answer.
+
+### What this does not change
+
+- **Step 4.113's finding.** The disk stack is a contiguous run with no depex anywhere, it is
+  promoted unconditionally, and its failure is not a dependency failure. All of that is
+  untouched; what changes is that the run is `ap24`–`ap29`, and that five of its six files are
+  `L` under both candidate batches — a map-free statement where Step 4.113's was a
+  complete-batch one.
+- **The P3 gate.** Unmet, and this step does not move it.
+- **The record and the candidate.** `work/out/p2-4.94/Mu-gauguin-silicon-gzip.img` at
+  `d621f732…` and `work/out/usb-host/Mu-gauguin-xhci-host-gzip.img` at `f1a7106b…` are both
+  untouched; nothing was built, and nothing was flashed.
+
+### What was written, and what was not
+
+- `docs/08-device-session.md` — this section and one correction blockquote inside Step 4.113,
+  placed at the clause it corrects. No tool was changed. The blockquote sits below every
+  citation Step 4.113 makes, so the two anchors it cites (`:8565-8567`, `:9325`) did not move.
+- The three corrections are recorded together because they are one failure and not three: each
+  was answered by a paragraph already in this document, above the claim and written by an
+  earlier step. Recording them separately would hide that, and it is the only part of this step
+  a future step can act on.
+- Read this step: `tools/apriori-prefix.py --seen 80` and `--seen 48` on the record;
+  `docs/08-device-session.md:1501`, `:9275`, `:9325`, `:18476-18480`, `:18493`, `:21441`;
+  `tools/apriori-order.py`'s index comment; `tools/depex-census.py`'s `producer_index` comment.
+- **No partition was written.** `boot` still holds `work/out/p2-variants/Mu-gauguin-silicon-gzip.img`,
+  `90b21643e3450c326fb3d24baf64d58d4692a5d155c36b76d2e020ff04a96b59` — rung 7260, thirty-first
+  step running.
+- **The device is absent**, so the owed reading under 先读屏，再刷下一次 remains owed.
+- Standing rules unchanged: `userdata`, the partition table and the firmware LUN are untouched;
+  writes go to `boot` only; the control image is read before anything is overwritten; and the
+  screen is read before the next flash.
+- **The P3 gate remains unmet.** The storage half now has a map-free statement of how it
+  fails — five of the six files are `L` under both candidate batches, at the same
+  `CoreLoadImage` wall BDS itself hits — where Step 4.113 had a statement true of only one
+  batch. The wall is unmoved, and so is the device.
 
