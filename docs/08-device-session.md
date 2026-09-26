@@ -25450,6 +25450,13 @@ out of its `uefiplat.cfg` by way of `MemoryMapLib.c`) so that `smem_type=402` an
 `smem_type=404` both succeed — then re-run and read `K 17`'s letters. If `SU` becomes `Ss`,
 the seed caused it and the seeded mirror is not a faithful model at that index. If it stays
 `SU`, the build did, and the phone's `s` is the older build's behaviour.
+**[Both alternatives are now settled and neither is what happened, in step 4.133: the ladder's
+fourth rung is not this SMEM extension but the AOP record, and it turns `SU` into `Ss` — so the
+seed caused it, and this paragraph's premise that the build half "cannot be reached" is what step
+4.132 withdrew. Run the other way, on the phone's own payload, the same ladder prints the `Error:`
+row under the SMEM seed and none once the AOP record is seeded, with `CmdDbDxe` byte-identical in
+the two builds — so the phone's `s` is not "the older build's behaviour" either, and the phone's
+build is not a variable in that row at all.]**
 
 The control is already on disk and needs no new flash: the current capture *is* the control,
 and per *对照的那张必须在覆盖之前读* it was read before any change is made to the stub. The
@@ -25476,7 +25483,7 @@ regular files under `work/`.
 | shows | that the phone's run and the seeded mirror's can be compared at exactly eighteen Apriori indices, that seventeen of them agree, and that the eighteenth is Apriori 17 = `CmdDbDxe`, where the phone's `EntryPoint` returned `EFI_SUCCESS` and the mirror's returned `EFI_UNSUPPORTED` |
 | adds | the side-by-side table of the two runs over their one overlapping region; the `s`-vs-`Ss`-vs-`SO` vocabulary mapping, with `DALSYS`'s `SO` shown to be an agreement and not a second disagreement; the four `EFI_UNSUPPORTED` sites in this core with two of them eliminated by the capture's own silence and one by being in `CoreUnloadImage`; the conclusion that the printed status is the `EntryPoint`'s own return, printed by `CoreExit` and not by `CoreStartImage`; `CmdDbDxe`'s complete set of three self-built error values, with `EFI_UNSUPPORTED` excluded as a literal, as a 64-bit pair and as a 32-bit value; and the fact that the phone's payload is on no disk here, 228,483 files hashed **[withdrawn in step 4.132: the payload is on this disk as the compressed kernel inside `work/out/boot-before-p2walk.img` (md5 `a2963f46…`, the only such payload under `work/`), because the search hashed files and the payload is not a file]** |
 | corrects | that the phone's `L` at Apriori 19 and the mirror's stop at Apriori 19 are the same failure: they are one entry index reached by two mechanisms, a failed load there and a loaded driver asserting inside itself here, and the coincidence of index is not corroboration; and the reading of the `Error: … start failed` row as the core's decision, which it is not |
-| does not close | whether the seed or the build is why `CmdDbDxe` returns `EFI_UNSUPPORTED` — the two are confounded in every capture here and the payload that would separate them is absent **[corrected in step 4.132: the payload is present, as the compressed kernel of `work/out/boot-before-p2walk.img`, so this item is open and unblocked rather than blocked on an absent artifact]**; the P3 gate and the owed panel reading of the flashed 4.74 set; `SO`'s value, which needs `P2 WHAT`; and everything from Apriori 19 on, which neither record reaches by the same route |
+| does not close | whether the seed or the build is why `CmdDbDxe` returns `EFI_UNSUPPORTED` — the two are confounded in every capture here and the payload that would separate them is absent **[corrected in step 4.132: the payload is present, as the compressed kernel of `work/out/boot-before-p2walk.img`, so this item is open and unblocked rather than blocked on an absent artifact] [closed in step 4.133: the phone's payload was run under the same two stubs as the mirror's, and it prints `Error: Image at 0009C56B000 start failed: Unsupported` under the SMEM seed and **no** `Error: Image` row at all once the AOP record is seeded — while `CmdDbDxe`'s own PE32 is byte-identical in the two builds (sha256 `ea9cf6bf…`, 32,768 B, GUID `D461A719-…`), so it is the seed and not the build, decided on the phone's image rather than on the mirror's]**; the P3 gate and the owed panel reading of the flashed 4.74 set; `SO`'s value, which needs `P2 WHAT`; and everything from Apriori 19 on, which neither record reaches by the same route |
 | not an action | nothing was built, nothing was flashed, no partition was written, and the stub was not modified — the seed extension is designed here and not built |
 
 ## Step 4.127 — The AOP seed turns `K 17 SU` into `K 17 Ss`, and the SMEM seed's two corrections turn the `404` row off without moving that one
@@ -25821,7 +25828,7 @@ written, and the device was absent.
 |---|---|
 | instrument | the launcher's AOP read-back with the widened dump, its `block_for_ipa`/`l2_plan` lookup, the stub's two SMEM corrections, four runs of one payload under four stub variants, `EnvDxe`'s own instructions and data, the two seeded captures' streams side by side, and hashes over the payload, the image and every stub — nothing was built, flashed or written |
 | shows | that the AOP seed is written where the driver looks and reads back consistently, the mailbox word being a pointer (`0x42bf000c` holds `0x0c3f0014`, the record at `+8` holding `1` and `0x0c0330db`); that the ladder moves exactly one row — `K 17 SU 16/69` to `K 17 Ss 17/69` — and removes the payload's own `Error: Image at 0009C565000 start failed: Unsupported` row, so `EFI_UNSUPPORTED` was the absent AOP record; that rungs 3 and 4 stop in the same two rows seed 5 stopped in; and that the corrected SMEM seed removes the `smem_alloc` `404` row and leaves the `smem_get_addr` `402` row where it was |
-| adds | the `aop_words` unpacking with the guard the record's position needs and the one-block bound that replaces an assumption; the ladder table with each rung's stub hash and ceiling; the demonstration that `EFI_UNSUPPORTED` was the absent AOP record — not the build, which is the same payload bytes in both rungs that matter, and not SMEM's heap, which is still failing in the rung that removed the `U`; the two SMEM corrections with the instructions that require them, and the measurement that they take the `404` row off and not the `402` one, which is half of what the stub's own comment predicted; and the `CB29F4D1-…` bytes found at RVA `0xE018` of `RpmhDxe.efi`'s `.data` against `RpmhDxe`'s `FILE_GUID` of `60F4DF83-…` |
+| adds | the `aop_words` unpacking with the guard the record's position needs and the one-block bound that replaces an assumption; the ladder table with each rung's stub hash and ceiling; the demonstration that `EFI_UNSUPPORTED` was the absent AOP record — not the build, which is the same payload bytes in both rungs that matter, and not SMEM's heap, which is still failing in the rung that removed the `U` **[sharpened in step 4.133: "the same payload bytes in both rungs" is the mirror against itself across two stubs, which the rung design already gives; the *build* confound step 4.126 named is mirror against phone, and it took the phone's own payload — found in step 4.132 — to run. That run agrees: the phone prints `Error: Image at 0009C56B000 start failed: Unsupported` under the SMEM seed and no `Error: Image` row at all with the AOP record, and `CmdDbDxe`'s PE32 is byte-identical in the two builds (sha256 `ea9cf6bf…`), so the conclusion here holds on both builds and not only on this one]**; the two SMEM corrections with the instructions that require them, and the measurement that they take the `404` row off and not the `402` one, which is half of what the stub's own comment predicted; and the `CB29F4D1-…` bytes found at RVA `0xE018` of `RpmhDxe.efi`'s `.data` against `RpmhDxe`'s `FILE_GUID` of `60F4DF83-…` |
 | corrects | the working note that read this step's runs as a new regression one Apriori entry past seed 5: rung 3's last twelve rows are seed 5's last twelve rows, text for text, and the ceiling did not move when the seed did; step 4.126's paragraph at `:25286-25288` claiming the file at `/tmp/gauguin-kernel.raw` is not the mirror's payload — it is, and `90b21643…` is `work/out/p2-variants/Mu-gauguin-silicon-gzip.img`; the earlier reading that the AOP seed's read-back disagreement meant the seed was miswritten, when it was the read that unpacked three words from zero; the reading of `0x8e84` as an abort, which is the walker's `0xFFFFFFFE` "type" return — its other return, `0xFFFFFFFC` at `0x8e8c`, is what an empty descriptor produces, and the stub's own account has the flag-only seed reaching that one; the frame in which the `0xD830` descriptors are values a seed could supply, when that address is inside the driver's loaded image `.data` and the image's load writes it, so the descriptor has to be produced by the driver's initialiser and the seed's job is the TOC that initialiser reads; and step 4.126's experiment proposal, which this ladder shows would not have answered the question it was designed for |
 | does not close | the P3 gate and the owed panel reading of the flashed 4.74 set; why the `smem_get_addr` `402` row survives the corrected seed, with the block scan's `+2` id at `0x90C0` as the candidate and no run yet that separates it from the alternative; what `CmdDbDxe` does once started, since the command database at `0x80860000` is absent here; the second entry into the payload that seed 5's capture holds and rung 3's does not — the two-attempt stream and this step's one-attempt stream correlate with the `404` row's presence and with nothing else this step measured, and no mechanism is claimed; `SO`'s value, which needs `P2 WHAT`; and the phone's own `K` rows, which remain the only record that could confirm this ladder against the device |
 | not an action | nothing was built for the device, nothing was flashed and no partition was written; the changes are to the launcher's read-back and to the stub's SMEM seed, and every run that judged them is a QEMU run |
@@ -27059,5 +27066,191 @@ is the denominator.
 | shows | that **the walk cannot end early**: `FvCheck` builds a volume's FFS list in full or the volume loses its `FirmwareVolume2` protocol entirely (`FwVol.c:676` → `CoreFreePool`), `FvGetNextFile` returns `EFI_NOT_FOUND` only at the end of the list (`FwVolRead.c:311`), `CoreAddToDriverList`'s only early return is `EFI_OUT_OF_RESOURCES` behind an assert (`Dispatcher.c:1524-1526`), and the `SEQ` line is printed by `CoreDisplayDiscoveredNotDispatched` *after* `CoreDispatcher` returns (`DxeMain.c:562` → `:576`), so a printed `SEQ` is itself evidence that every walk had returned — which makes `mP2WalkSeen[0]` read 80 on this volume and step 4.130's stops at 48 or 49 unreachable rather than merely unmeasured; that over all 142 `.img` files under `work/`, `FvCheck`'s strictness and `tools/fv-inventory.py`'s permissiveness produce **the same file list** (zero deleted files, zero non-`DATA_VALID` states, zero bad header checksums, every tail erased) and that **126 of 127 volumes promote exactly 69 of 70** on a complete walk with the 127th being another board's build at 70 of 71, so neither a short volume nor a short walk describes an artifact here; that the build that drew the reading is on this disk as `work/out/boot-before-p2walk.img` (1,142,784 B, sha256 `fb697f47…`, payload 3,145,840 B md5 `a2963f46…`, the value step 4.11's table pins and the only such payload under `work/`), which withdraws step 4.126's *"it hashes to no file here"* and unblocks the `CmdDbDxe` comparison as a device-free experiment; that this build carries **six of the twenty-seven** `P2` rows — `P2 SEQ` ×2, `P2 DIAG`, `P2 STATS`, `P2 NOLOAD` ×2 — and **no `P2 WALK`, `P2 FREE`, `P2 APRI`, `P2 WHY` or `P2 ERR`**, so three of the four rows the owed lists name cannot be produced by rebooting it; and that `P2 STATS`'s denominator is `mP2AprioriCount` = the entries the run actually read and not, as `:951` says, a literal 70 — so the `SEQ` length and the `STATS` numerator are one number printed twice and a 46-character line is a **47**-entry array read in full |
 | adds | the walk's totality as a proof from the source rather than an inference from an archive, which is what converts step 4.130's two admissible stops from "unmeasured" to "unreachable"; the `FvCheck`-semantics audit that makes the reader's file count the code's file count on this archive; the archive-wide promotion histogram (126 × 69 of 70) that closes the short-volume explanation; the identification of the reading's own build on disk and the withdrawal of the "no disk here" claim that stood in the plan and twice in this document; the exact instrument census of that build, which separates the owed rows into "obtainable by a reboot" (none of the four) and "requires the next flash" (all of them); the correction that makes `P2 STATS`'s denominator a measurement, and with it the arithmetic 46 matches ⇔ 47 entries; the two surviving readings R1 and R2 stated as a table with the code path each requires and the map each implies; and the re-derived `seen`/`unhit` table for R2, which confirms 4.130's 48/49 and retires the 39-against-34 estimate |
 | corrects | `docs/00-plan.md:131-133`'s *"md5 `a2963f46…` … is **on no disk here** (228,483 files under `work/` hashed, 130 of them images)"*, which is false and false for a stated reason: the search hashed files and the payload exists only as the compressed kernel of `work/out/boot-before-p2walk.img`; the same claim at five further sites, all annotated in place: `docs/08:25426-25434` (step 4.126's heading *"The artifact that would separate build from boot path is not on this disk"* and its *"It hashes to no file here"*), that step's `adds` row (*"the phone's payload is on no disk here, 228,483 files hashed"*) and its `does not close` row (*"the payload that would separate them is absent"*), the opening of step 4.127 (*"4.126 could not run it because the phone's payload is on no disk here"*), and `:25789-25800` (*"the phone's payload … is still on no disk here"*), with §"The build that drew the 46 characters is on this disk" as the replacement and the payload's location as the correction — `work/out/boot-before-p2walk.img`, reached by decompression rather than by hashing files; the join asserted at `docs/08:1498` (*"Hence index 0 of `P2 SEQ` = `PcdDxe`"*), which is R1's map and is annotated there as conditional on the `apriori=` denominator; `docs/08:951`'s *"`STATS` prints the denominator as the literal 70 because that is a constant in the macro text"*, whose consequence — that the two lines "should not be compared to each other" — is the reason the cheapest open row in the record was never read for; the comment above `mP2ApriEntries` in `Dispatcher.c`, whose 736-byte example is 46 entries and would print 45 characters where a 46-character line is 47; step 4.130's mechanism (*"physical 49 and 50"*) as a state the walk can be in, leaving its arithmetic standing and its premise withdrawn, since R2's *list was short* is what those stops describe and §1 forbids the walk that would produce it; and `:6164`'s *"The batch ran to the end of the array; nothing was skipped"*, which is true under R1 and false under R2 and was already flagged by 4.130 — it now has a named conditional rather than a withdrawal |
-| does not close | which of R1 and R2 the phone's run was, and therefore whether the record's decode tables and step 4.130's map displacement stand — the row that decides is `P2 STATS`'s denominator, which is not on any photograph this record holds, the record stating the row's shape with every field an `N` at `:945` and holding the `SEQ` line alone as a transcription (`:1458-1464`); the phone's `P2 APRI entries=`/`sum=`/`first=`/`unhit=`/`miss=`, `P2 WALK t=0 seen=`, `P2 FREE largest=`, `P2 ERR`, `P2 RETRY bs9=`, the four `P2 BIN` lines and `P2 WHAT`, all of which need a build that carries them on the glass under *先读屏，再刷下一次*; the `CmdDbDxe` comparison the unblocked payload makes possible but which this step does not run; and the P3 gate, with P3's display, USB-host and buttons items unfinished and P4 and P5 not begun |
+| does not close | which of R1 and R2 the phone's run was, and therefore whether the record's decode tables and step 4.130's map displacement stand — the row that decides is `P2 STATS`'s denominator, which is not on any photograph this record holds, the record stating the row's shape with every field an `N` at `:945` and holding the `SEQ` line alone as a transcription (`:1458-1464`); the phone's `P2 APRI entries=`/`sum=`/`first=`/`unhit=`/`miss=`, `P2 WALK t=0 seen=`, `P2 FREE largest=`, `P2 ERR`, `P2 RETRY bs9=`, the four `P2 BIN` lines and `P2 WHAT`, all of which need a build that carries them on the glass under *先读屏，再刷下一次* **[narrowed in step 4.133: the group splits, because `P2 STATS discovered=%d apriori=%d/%d …` is one of the six `P2` format strings in the `DxeCore` already flashed — so the `apriori=` denominator, the row that decides R1 from R2, needs a re-read of the screen the phone already draws and not a new build. The `P2 APRI` block, `P2 WALK`, `P2 FREE`, `P2 ERR`, `P2 RETRY`, the four `P2 BIN` rows and `P2 WHAT` are genuinely absent from that core and still need one]**; the `CmdDbDxe` comparison the unblocked payload makes possible but which this step does not run **[run in step 4.133: the seed, not the build, and on the phone's own payload]**; and the P3 gate, with P3's display, USB-host and buttons items unfinished and P4 and P5 not begun |
 | not an action | nothing was built for the device, nothing was flashed, no partition was written; every reading here is off files already on disk or off the sources, and no device is attached to this machine. Three tracked files change: this document, `docs/00-plan.md`'s absent-payload sentence, and `uefi/patches/mu-basecore-local.patch`, regenerated with `tools/regen-mu-basecore-patch.sh` because it had fallen out of sync — it did not yet carry step 4.130's correction of the `P2 SEQ` mapping comment, and this step's correction of the same block's 736-byte illustration (now 752, the size that yields a 46-character line) is folded into the same regeneration. Both are **comment-only** deltas, so the firmware the patch describes compiles to the same bytes as the image already on the phone; no image was rebuilt and the device was not touched. The porting goal is not advanced by it: the end state is still a Windows tablet, and P4's `userdata`-destroying install and P5's peripherals are not begun |
+
+## Step 4.133 — the `CmdDbDxe` gate is the seed's and not the build's, on the phone's own payload; and the two builds differ in three files with a byte-identical Apriori array, so no build here can shorten `P2 SEQ` — while the row that decides R1 from R2 turns out to be printed by the payload already on the phone
+
+Step 4.132 found the phone's payload on this disk and, with it, unblocked the one device-free
+experiment step 4.126 could name but not run. This step runs it, and then runs the comparison the
+other way round, because the two payloads turned out to be two builds of one tree two days apart
+and the difference between them is small enough to enumerate file by file. The result is that the
+confound step 4.126 left open — *"whether the seed or the build is why `CmdDbDxe` returns
+`EFI_UNSUPPORTED` — the two are confounded in every capture here"* — is decided, and decided on the
+phone's own image rather than on the mirror's; that the build cannot be what made the recorded
+`P2 SEQ` line 46 characters long; and that the single row which decides which of R1 and R2 that line
+was is on the glass of the payload already flashed, so the cheapest open question in the record
+needs a re-read and not a rebuild.
+
+### The ladder, re-run from the archived payloads and then extended to the phone's
+
+Step 4.127's four-rung ladder was built on the *mirror* payload, and it is the reason its conclusion
+is about the mirror. The archived payload for the phone is `/tmp/phone-payload.raw` (3,145,840 B, md5
+`a2963f46faeb27fe601022c3a67aa738`, magic `810300100f000014`), decompressed out of
+`work/out/boot-before-p2walk.img`; the mirror's is `/tmp/mirror-payload.raw` (3,145,840 B, md5
+`0e5226c062935eb0465b3409eba74c39`, sha256 `0dcfbd6a…`), out of
+`work/out/p2-variants/Mu-gauguin-silicon-gzip.img`. Both run under the same instrument as before:
+machine `virt,secure=on,virtualization=on,gic-version=2`, `-cpu max`, `-m 4096`, payload loaded at
+`0x48000000`, the EL3 stub at `0x48010000`, `--el3-zero-mem` on in every run so that an undecoded
+register reads zero, and the console read off the "Display Reserved" region at `0xa0000000` by
+`tools/qemu-panel-read.py`. Four runs were captured and archived:
+
+| # | payload | stub sha256 | seeds | capture | screens, last row |
+|---|---|---|---|---|---|
+| 1 | mirror | `f567b832220ccac7512e41412c24357ad75c1de0894eb7d0af863cf00fb2f34d` | `--el3-seed-smem` | `work/out/qemu-panel-4.133-rung3-mirror.txt` | 180 over 45.1 s, 93 |
+| 2 | mirror | `a082b796fb13861fbe62bbcd59f8ca796d20c5b0070285e2387127f07d1d2ba2` | `+ --el3-seed-aop` | `work/out/qemu-panel-4.133-rung4-mirror.txt` | 180 over 45.1 s, 92 |
+| 3 | phone | `f567b832…` | `--el3-seed-smem` | `work/out/qemu-panel-4.133-rung3-phone.txt` | 180 over 45.1 s, 392 |
+| 4 | phone | `a082b796…` | `+ --el3-seed-aop` | `work/out/qemu-panel-phone-payload.txt` | 479 over 120.1 s, 498 |
+
+Runs 1 and 2 are step 4.127's rungs 3 and 4, rebuilt from the archived payload rather than from the
+work tree, and they are the control: the rows the record already holds come back unchanged, so what
+follows is read against an instrument that is known to reproduce itself.
+
+| | rung 3, SMEM seed only | rung 4, and the AOP record |
+|---|---|---|
+| the `Error:` row | `Error: Image at 0009C565000 start failed: Unsupported` | **absent from the capture** |
+| Apriori 17's tick | `K 17 SU 16/69 free=1024 D461A719-F2EC-5C77-A7AF-045F17ED012C` | `K 17 Ss 17/69 free=1024 D461A719-F2EC-5C77-A7AF-045F17ED012C` |
+| Apriori 18's tick | `K 18 Ss 17/69 free=1024 40256211-624E-580B-97ED-3011FB3CB9A3` | `K 18 Ss 18/69 free=1024 40256211-624E-580B-97ED-3011FB3CB9A3` |
+| last rows | `K 18` then `ERROR: C90000002:V03000007 I0 CB29F4D1-…` and the `DebugLib.c +78` assert | the same two, with no `Error:` row before them |
+
+The tick row's two letters are `Phase` and `P2WhyLetter (Status)` (`Dispatcher.c:677-684`), and its
+`%d/%d` is `mP2Started` over `mP2Apriori`. So `SU` and the `Error:` row are one status printed twice
+by two unrelated code paths, and rung 4 moves both together: the same GUID's row goes from `SU` to
+`Ss` **and** the core's own line stops appearing. An absence on its own would not be a finding — an
+absence whose companion counter moves by exactly one is.
+
+Runs 3 and 4 are the phone's payload under the same two stubs, and they behave the same way:
+
+```
+rung 3 (SMEM only)          387 |Loading driver at 0x0009C56B000 EntryPoint=0x0009C56C000 CmdDbDxe.efi|
+                            388 |Error: Image at 0009C56B000 start failed: Unsupported|
+
+rung 4 (SMEM + AOP)         405 |Loading driver at 0x0009C56B000 EntryPoint=0x0009C56C000 CmdDbDxe.efi|
+                            — and zero `Error: Image` rows in all 479 sampled screens
+```
+
+The address differs from the mirror's (`0x9C56B000` against `0x9C565000`) because the two images
+size differently and the allocator places the driver elsewhere; the load row, the entry point and the
+status do not. `Error: Image at %11p start failed: %r` is printed at `Image.c:1925` from
+`Image->Status`, which is the status the image's **entry point returned** — so `Unsupported` is
+`CmdDbDxe`'s own `EFI_UNSUPPORTED` and not a load failure, which is the reading step 4.126 had
+already corrected and this confirms on a second build.
+
+### The two images are not two builds of `CmdDbDxe`
+
+The confound is only broken if the driver is the same on both sides. It is, exactly:
+`CmdDbDxe`'s FFS file is 32,818 bytes at physical index 31 in both volumes, GUID
+`D461A719-F2EC-5C77-A7AF-045F17ED012C` — which is also the GUID on `K 17`'s row — and the PE32
+extracted from each is 32,768 bytes with sha256
+`ea9cf6bfd81d12bfde3125b3176f228876a42de56b70ea77b51ee35a5c0691fb` **in both**. So the image that
+returns `EFI_UNSUPPORTED` under the zeroed AOP window running from the phone's own volume is the same
+bytes as the image that returned `s` on the device. The build is not a candidate for its status, and
+nothing about the phone's recorded `s` at Apriori 17 is evidence about the phone's build.
+
+### And the build difference is three files, one of them not a driver
+
+Step 4.126 could not compare the builds because it had one of them. The per-file diff over both
+volumes, by name, size and body hash:
+
+| | phone (`work/out/boot-before-p2walk.img`) | mirror (`work/out/p2-variants/Mu-gauguin-silicon-gzip.img`) |
+|---|---|---|
+| files, DRIVERs | 122, 80 | 123, 80 |
+| `DxeCore` | 170,032 B | 172,592 B |
+| `SmBiosTableDxe` | 27,734 B | 27,734 B, **9 bytes different** |
+| `AcpiTables` | absent | 6,638 B, type `0x02` FREEFORM |
+| everything else | 119 named files, byte-identical | |
+
+The 9 bytes in `SmBiosTableDxe` are the build stamp: the ASCII date `09/23/2026` against
+`09/25/2026`, and the five bytes of the RSDS PDB GUID beside it. That is the whole of that file's
+difference, and it dates the two builds. `AcpiTables` is type `0x02` — FREEFORM, not one of
+`mDxeFileTypes` — so it is invisible to the dispatcher's walk and does not touch the 80-driver
+count on either side. What is left is `DxeCore`, and on the shape of its difference the "same tree,
+two days apart" reading is the wrong one to lean on:
+
+| section | phone | mirror | |
+|---|---|---|---|
+| `.text` | 0x1da00 | 0x1e200 | +0x800, and the phone's bytes are not the mirror's shifted: eight 64-byte probes at 0x4000 intervals match at deltas 0, −180, +260 and +2740, and four match nowhere |
+| `.rdata` | 0x8200 | 0x8400 | +0x200, the strings |
+| `.data` | 0x2a00 raw / 0x6e70 virt | 0x2a00 raw / 0x75d0 virt | +0x760 of BSS, no new raw bytes |
+| `.pdata` | 0xa00 / 0x918 | 0xa00 / 0x930 | +0x18 of unwind data |
+| `.reloc` | 0x400 / 0x23c | 0x400 / 0x23c | same |
+
+Three independent insertions rather than one, and the explanation is the instrumentation, which is
+*inside* `DxeCore`: the phone's core carries **six** `P2` format strings and the mirror's carries
+those six plus fifteen.
+
+| the phone's `DxeCore` prints | `P2 SEQ [%a]`, `P2 SEQ (no Apriori entries were promoted)`, `P2 DIAG %c %g %r`, `P2 NOLOAD %g dep=%d sched=%d unt=%d`, `P2 NOLOAD total=%d shown=%d`, `P2 STATS discovered=%d apriori=%d/%d started=%d diag=%d noload=%d` |
+| **and the mirror's adds** | `K %d %c%c %d/%d free=%d %g`, `P2 APRI bytes= entries= sum=`, `P2 APRI first= last=`, `P2 APRI matched=.. unhit=`, `P2 APRI matched=none unhit=`, `P2 APRI miss= %g`, `P2 APRI miss=none`, `P2 BIN` ×4, `P2 ERR %r x%d`, `P2 ERR none`, `P2 FREE largest=%d pages`, `P2 FWHY`, `P2 FWTY`, `P2 RETRY rc16= rc48= rc112= rd16= bs9= bs16=`, `P2 WALK t=%d seen=%d iter=%d last=%g`, `P2 WHY [%a]` |
+
+This is the same six rows `tools/probe-fingerprint.py --rows` found in the phone's image, now
+explained by the image's own format strings rather than by a text scan for row names — and it is why
+runs 3 and 4 print no `K` row at all while runs 1 and 2 print eighteen: the tick format does not exist
+in the phone's core. The record's earlier framing of the `K` rows as something the phone's payload
+could be rebooted to produce is wrong for that reason and was already withdrawn in step 4.132; what
+this step adds is the ground truth, the strings, rather than the census.
+
+### No build on this disk can shorten `P2 SEQ`
+
+If the 46 characters came from a build that offered a shorter Apriori array, that would be an
+innocent explanation and the record would have one less problem. Both builds are read by
+`tools/fv-census.py`, and the array is the same bytes in both:
+
+```
+bytes 1120  entries 70  sum 0xa998b263
+first D6A2CB7F-6A18-4E2F-B43B-9920A733700A  last CCCB0C28-4B24-11D5-9A5A-0090273FC14D
+section header 64 04 00 19 -> declared size 1124 (type 0x19 = EFI_SECTION_RAW)
+```
+
+and the same census reports `Apriori entries with no file in the volume: []` for both. So
+`AprioriEntryCount = SizeOfBuffer / sizeof (EFI_GUID)` is 70 in a run of either payload, whichever
+build the phone's 46-character line came from, and the array is not the variable. That closes the
+last way of attributing the line to a build — leaving the read, which is R1's *752 of 1120 bytes*,
+as the only mechanism left standing, exactly as step 4.132's `apriori=` argument requires.
+
+There is a second, independent measurement of the same arithmetic in the ladder itself. The tick
+row's `%d/%d` is `mP2Started` over `mP2Apriori`, and in every one of the eighteen tick rows of runs 1
+and 2 — `K 1` through `K 18` — the denominator reads **69** against a 70-entry array. Step 4.132 derived the N − 1 from the
+DXE_CORE branch of the promotion loop and from the archive-wide census of 126 volumes at 69 of 70.
+Here, in eighteen rows of two runs, it is printed by running code on the mirror's payload: a complete
+walk over a 70-entry array promotes 69. The phone's 46 characters are 23 short of that, which is `69 − 46` and is the same 23
+the record has been trying to explain since it first counted the unnamed drivers.
+
+### The row that decides R1 from R2 is printed by the payload already on the phone
+
+Step 4.132 left the deciding row unread and grouped the owed readings together as ones that "need a
+build that carries them on the glass". The format strings separate that group in two:
+
+| owed row | in the phone's `DxeCore`? | how it is obtained |
+|---|---|---|
+| `P2 STATS discovered=N apriori=N/N started=N diag=N noload=N` | **yes** | re-read the panel the phone already draws — no build, no flash |
+| `P2 APRI entries=`/`sum=`/`first=`/`unhit=`/`miss=` | no | a build carrying the `P2 APRI` block |
+| `P2 WALK t=0 seen=` | no | a build carrying `P2 WALK` |
+| `P2 FREE largest=`, `P2 ERR`, `P2 RETRY bs9=`, the four `P2 BIN` rows | no | a build carrying each |
+
+The second number on `P2 STATS` is `mP2AprioriCount`, the entries the run read, and it is the row
+that chooses between R1 (`46/47`, the identity map, `unhit=0 miss=none`) and R2 (`46/70`, the
+displaced batch, `unhit=24 miss=14 PlatformInfoDxeDriver`). It needs no new image. The `P2 APRI`
+group would have given the same answer from the other end — `bytes=` and `entries=` against 1120 and
+70 — and it is not there, which is why the record's own preference for reading the two lines
+together is not available on this build.
+
+One limit has to be stated with it, because it is this step's own and not a property of the device:
+**not one of the seventeen captures under `work/out/` contains a single `P2 …` row.** These four
+runs end at `ERROR: C90000002:V03000007 I0 CB29F4D1-7F37-4692-A416-93E82E219766` and
+`ASSERT DebugLib.c +78: Format != ((void *) 0)`, an assert inside `DebugLib` reached long before
+`CoreDisplayDiscoveredNotDispatched` (`DxeMain.c:576`) runs; three older captures end at the same
+assert and the other ten at one of three earlier ones — `DefaultExceptionHandler.c(339)`,
+`smem_target.c +435` and `smem.c +659`/`+671` — so the instrument has never had a run in which
+`P2Digest` executed at all. So the ladder settles which build can print which row and that the AOP
+gate is seed-determined; it says nothing about the value of the 46 characters, and nothing in it
+narrows R1 against R2. The row is reachable on the device and not under this instrument, and that
+asymmetry is the whole reason the owed reading is a power-on.
+
+| | |
+|---|---|
+| instrument | `tools/qemu-panel-read.py` sampling the "Display Reserved" region at `0xa0000000`, four runs — two payloads × stub hashes `f567b832…` (SMEM seed only) and `a082b796…` (SMEM + AOP), the same machine, the same `-m 4096`, the same `--el3-zero-mem`, both control runs being the ones whose readings the record already holds; the two payloads materialised from `work/out/boot-before-p2walk.img` and `work/out/p2-variants/Mu-gauguin-silicon-gzip.img`; a per-file diff of the two volumes by name, size and body hash with `tools/fv-inventory.py`; `tools/pe-facts.py`'s `pe32_section` descent to extract `CmdDbDxe`'s and `DxeCore`'s PE32 from each FFS file, then the section tables and a 64-byte-probe alignment test over `.text`; `grep -a` for the `P2` and `K` format strings in both extracted `DxeCore`s; `tools/fv-census.py` over both images for the Apriori RAW section's bytes, entries, sum, first and last; `Image.c:1925` with its `DEBUG_CODE_BEGIN` and `Image->Status`, `Image.c:1693-1703` for the entry point's return, `Dispatcher.c:655-684` for `P2Tick` and its two call sites at `:1122` and `:1167`; `DxeMain.c:576`; and `docs/08` steps 4.126, 4.127 and 4.132 — nothing was built for the device, nothing was flashed, no partition was written, and no device is attached to this machine |
+| shows | that the confound step 4.126 declared open and step 4.127 closed on the mirror alone is closed on **the phone's own payload**: the same image under the SMEM seed prints `Loading driver at 0x0009C56B000 EntryPoint=0x0009C56C000 CmdDbDxe.efi` and then `Error: Image at 0009C56B000 start failed: Unsupported`, and under the same seed plus the AOP record prints the load row and **zero** `Error: Image` rows in 479 sampled screens, with the driver's `K`-row letters moving from `SU` to `Ss` beside it on the mirror's matched pair — and that `CmdDbDxe`'s PE32 is **byte-identical** in the two builds (sha256 `ea9cf6bf…`, 32,768 B, GUID `D461A719-…`, physical 31 in both), so the build is not a candidate and the phone's recorded `s` at Apriori 17 carries no information about its build; that `Error: Image at %11p start failed: %r` (`Image.c:1925`) prints `Image->Status`, the status the **entry point returned**, so the row is `CmdDbDxe`'s own `EFI_UNSUPPORTED` and the same status appears as the `U` of `K 17 SU` — one status, two prints, moving together; that the two volumes differ in exactly three files — `DxeCore` (170,032 → 172,592 B, PEs 169,984 → 172,544), `SmBiosTableDxe` (27,734 B both, differing in **9 bytes**: the build date `09/23/2026` → `09/25/2026` and the RSDS PDB GUID) and a mirror-only `AcpiTables` (6,638 B, type `0x02` FREEFORM, not one of `mDxeFileTypes`, so invisible to the walk and to the 80-driver count) — with the other 119 named files byte-identical; that the `DxeCore` difference is **not a shift and not a stamp**: `.text` +0x800 with **eight** 64-byte probes at 0x4000 intervals matching the phone's bytes at deltas 0, −180, +260 and +2740 and matching nothing at four of the eight, `.rdata` +0x200, `.data` +0x760 of virtual size against an unchanged raw size, `.pdata` +0x18 — and that its explanation is the instrumentation, the phone's core carrying **six** `P2` format strings and the mirror's carrying those six plus **fifteen** (`K %d %c%c %d/%d free=%d %g`, the six `P2 APRI` rows, four `P2 BIN`, two `P2 ERR`, `P2 FREE`, `P2 FWHY`, `P2 FWTY`, `P2 RETRY`, `P2 WALK`, `P2 WHY`), which is the same six `tools/probe-fingerprint.py --rows` found and is why runs 3 and 4 print no `K` row where runs 1 and 2 print fifteen; that the Apriori RAW section is **byte-identical in both builds** — 1120 bytes, 70 entries, `sum 0xa998b263`, `first D6A2CB7F-…`, `last CCCB0C28-…`, `entries with no file: []` — so no build here offers an array shorter than 70 and the build cannot be what made the line 46 characters, leaving the short read as the only mechanism; that a live run prints `mP2Apriori` = **69** against the 70-entry array in all eighteen tick rows — `K 1` through `K 18` — of both mirror runs, which is step 4.132's N − 1 arithmetic measured on running code and 69 − 46 = 23 back to the count the record has been trying to explain; and that `P2 STATS discovered=%d apriori=%d/%d started=%d diag=%d noload=%d` is one of the phone's six strings, so the denominator that decides R1 from R2 is printed by the payload already on the phone, while `P2 APRI`, `P2 WALK`, `P2 FREE`, `P2 ERR`, `P2 RETRY` and the four `P2 BIN` rows are not |
+| adds | the four-run matched ladder as an archived artifact, two of whose runs are the record's own rung 3 and rung 4 rebuilt from the archived payloads and reproducing them row for row, which makes the ladder's determinism a measurement rather than an assumption; the phone's payload as a second, independent test of the AOP seed's prediction, at its own load address; the closure of step 4.126's confound on the artifact step 4.132 found, with the byte-identity of the driver as the control that makes the closure valid; the per-file, per-section census of what "the build" even means here — three files, nine bytes in one of them, one file that is not a driver — so that the build is no longer an unexamined variable in any later step; the format-string inventory of both cores as the ground truth for which rows a build can print, which replaces a text scan with the strings themselves; the observation that the deciding row needs a re-read and not a rebuild, which moves one item out of the owed-flash group; and the measurement of `mP2Apriori` = 69 on live code, which is a second and independent route to step 4.132's arithmetic |
+| corrects | step 4.132's `does not close` row, which groups `P2 STATS`'s denominator together with `P2 APRI entries=`/`sum=`/`first=`/`unhit=`/`miss=`, `P2 WALK t=0 seen=`, `P2 FREE largest=`, `P2 ERR`, `P2 RETRY bs9=` and the four `P2 BIN` lines under *"all of which need a build that carries them on the glass"* — the denominator does not: it is in the format string of the payload already on the phone, so that group splits and the reading which decides the record's largest open question is obtained by re-reading a screen the device already draws; step 4.126's `does not close` item *"whether the seed or the build is why `CmdDbDxe` returns `EFI_UNSUPPORTED` — the two are confounded in every capture here"*, which is now decided for the image and decided by the phone's own payload rather than by the mirror's, annotated in place; and the framing that runs the same way through 4.126 and 4.127, where the difference between the two payloads stood for "the build" as a single unresolvable thing — it is three files and nine bytes, and the one that drives the dispatcher is the core carrying the probes |
+| does not close | which of R1 and R2 the phone's 46-character `P2 SEQ` was, which is the record's largest open question and is not touched here: the deciding row is `P2 STATS`'s denominator, no QEMU capture reaches any `P2 …` row because every run asserts in `DebugLib` first, and no photograph this record holds carries the line — the record states the row's shape with every field an `N` at `:945` and holds the `SEQ` string alone as a transcription (`:1458-1464`), with `:1784` recording that the line was never captured at all; the phone's `P2 APRI bytes=`/`entries=`/`sum=`/`first=`/`unhit=`/`miss=`, `P2 WALK t=0 seen=`, `P2 FREE largest=`, `P2 ERR`, `P2 RETRY bs9=` and the four `P2 BIN` lines, all of which still need a build carrying `P2BRINGUP` rows the flashed payload does not have, under *先读屏，再刷下一次*; the cause of the `DebugLib` assert that ends every QEMU run and therefore the instrument's whole ability to reach the digest; and the P3 gate, with P3's display, USB-host and buttons items unfinished and P4 and P5 not begun |
+| not an action | nothing was built for the device, nothing was flashed, no partition was written, no stub was modified and no firmware source was changed; every reading is off the sources, off files already under `work/`, or off the QEMU instrument on this host, and no device is attached to this machine. The four captures are new files under `work/out/` (94, 93, 393 and 499 rows), and `work/` is gitignored, so the tracked tree gains one file: this document, plus the four annotations that the `corrects` row names — two in step 4.126's section, one in step 4.127's and one in step 4.132's, at `:25453`, `:25486`, `:25831` and `:27069`. The porting goal is not advanced by any of it: the end state is still a Windows tablet, the modem and the cameras are still undrivable, and P4's `userdata`-destroying install and P5's peripherals are not begun |
