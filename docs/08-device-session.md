@@ -22268,10 +22268,10 @@ is the three files' 172,478 B less 446 B of section padding, and the old candida
   remove one reason the candidate could not be the experiment: the project now holds
   `record + USB host stack + the record's own ACPI`, which is the artifact the gate's
   wording needs, instead of one that would have rolled the device tree back past Step 4.65.
-- **Step 4.103's conclusion that the USB stack cannot come up.** Two of the three drivers
-  are unschedulable on the record's driver set, and the third waits on the same thirteen
-  architectural protocols the P2 assert is about. A payload with a correct `DSDT` and
-  unsatisfiable USB depexes still cannot see a USB stick.
+- **Step 4.103's conclusion that the USB stack cannot come up.** One of the three drivers
+  is unschedulable on the record's driver set (`XhciPciEmulation`), a second waits on the
+  same thirteen by the no-depex rule (`XhciDxe`), and the third the image cannot judge
+  (`UsbInitDxe`) — so a payload with a correct `DSDT` still cannot see a USB stick.
 - **The record.** `work/out/p2-4.94/Mu-gauguin-silicon-gzip.img` is untouched, 1,144,832 B,
   `d621f732f4763a303e980c5af04451479c2ace31801e796993a258f226c177a5`.
 - **The ACPI read-back census and the twenty-eight epilogues** that say the candidate is
@@ -22331,8 +22331,8 @@ is the three files' 172,478 B less 446 B of section padding, and the old candida
   untouched; writes go to `boot` only; the control image is read before anything is
   overwritten; and the screen is read before the next flash.
 - **The P3 gate remains unmet.** This step makes the candidate usable; it does not make
-  the gate passable, and the nine absent architectural protocols and the two unschedulable
-  USB drivers are what stand between the two.
+  the gate passable, and the nine absent architectural protocols and the three USB host
+  drivers held off by three different routes are what stand between the two.
 
 ## Step 4.113 — the six files the record promotes before it can read a disk, and the one protocol its volume carries no producer for
 
@@ -22989,3 +22989,175 @@ in the neighbourhood where the smaller number is not an error.
   `:376-382`; `tools/arch-protocol-census.py:14-17`; and `tools/make_uefi_platform.py:611`,
   `:671`.
 
+## Step 4.116 — the count on the gate's own paragraph, and the bucket `tools/depex-census.py` grew so as not to place the third driver
+
+### What this step is
+
+`docs/00-plan.md`'s P3 gate blockquote is the port's standing statement of how far the gate
+is, and it carries one sentence with two counts in it. Step 4.115 corrected the *second*
+count twelve minutes ago (`fe3668e` 09:52:59, "eight architectural protocols the P2 assert is
+about" → nine, in the same sentence this step edits). This step is the *first* count: Step 4.112
+wrote it and no step has measured it since:
+
+> … and **the gate is still unmet** — two of the three new drivers' dependency expressions
+> cannot evaluate on this driver set, and nine architectural protocols the P2 assert is about
+> are still absent …
+
+Nothing was built, staged, flashed or written to any partition. The correction is not to a
+number. It is that the count has two readings, and each reading misplaces a different one of
+the three drivers.
+
+### The two readings, and the driver each one misplaces
+
+"Two of the three new drivers' dependency expressions cannot evaluate on this driver set" can
+be parsed two ways, and the sentence does not say which:
+
+| the two are … | then this is true of | and this is what goes wrong with the third |
+|---|---|---|
+| the two that **carry** a dependency expression — `XhciPciEmulation` (234 B) and `UsbInitDxe` (18 B) | both: one names eight absent protocols, the other names a GUID nothing defines | `XhciDxe` carries **no** expression, so it is not in the count at all, and the next clause ("and nine architectural protocols … are still absent") names its route without saying that it does |
+| the two that **cannot run** — `XhciPciEmulation` and `XhciDxe` | both cannot run, by the two mechanisms below | the noun is wrong for `XhciDxe`: it has no expression to evaluate, and what holds it is UEFI 2.0's default, not a stored depex |
+
+Both readings leave the sentence reading as a closed count of a set it has not enumerated.
+The reason to care is not stylistic: a reader who takes the first reading concludes the third
+driver is unaffected, and a reader who takes the second concludes that fixing a depex would
+fix `XhciDxe` — and there is no depex in it to fix.
+
+### The measurement, which is a bucket delta and not a sentence
+
+`tools/depex-census.py` sorts every dispatcher-visible driver that is not a-priori into three
+buckets, and the three new drivers land **one in each**. The two payloads are the record and
+the candidate, both read in this session:
+
+| bucket (the tool's own heading) | record — `p2-variants/Mu-gauguin-silicon-gzip.img`, `90b21643…`, the payload in `boot` | candidate — `usb-host/Mu-gauguin-xhci-host-gzip.img`, `f1a7106b…`, unflashed |
+|---|---|---|
+| `non-a-priori, gated on a protocol that is not installed` | 0 | **1** — `XhciPciEmulation` |
+| `gated, and the depex names a protocol no header defines` | **the bucket is not printed** | **1** — `UsbInitDxe` |
+| `no depex section, not a-priori` | 5 | **6** — the five, plus `XhciDxe` |
+
+**The middle row's zero is an absence and not a printed `(0)`**, because the tool prints that
+section only when it is non-empty. That matters for anyone diffing the two runs: the
+candidate's output has **three** bucket headings where the record's has **two**, so a
+side-by-side read shows one new section and two changed counts — and reading "one section is
+new" as "one bucket changed" would undercount the change by two. This is the same trap
+Step 4.105 recorded for the `DiskIoDxe` index, and it is why the deltas are written out
+(`0→1`, `0→1`, `5→6`) rather than left to a diff.
+
+Binaries of the three, for the record rather than the argument: `XhciPciEmulation` 45,362 B
+with a 234-byte `0x13` section, `UsbInitDxe` 32,846 B with an 18-byte one, `XhciDxe` 94,270 B
+with none — the FFS sizes Step 4.112 measured, unchanged, since all three are staged sibling
+blobs whose bytes cannot move.
+
+### Why "unschedulable" is the wrong word for the third one, in the tool's own words
+
+The measurement above is not an interpretation of the tool's output; it is the tool's
+design. `tools/depex-census.py` says at `:97-106` that `UsbInitDxe`'s GUID is
+
+> not a header-defined protocol and therefore not judgeable from the image. Drivers in that
+> position are reported separately rather than counted either way.
+
+and that the reason it has a bucket of its own is that "calling it 'gated, nothing
+known-missing' would print an unknown as reassurance". So the one tool in this repository
+built to answer the question refuses to answer it for that driver, and it refuses in the
+direction of *not* calling it blocked.
+
+Step 4.105 is where the question was left open, and it is narrow: the record's two candidate
+publishers of `E722B03F` are `UsbfnDwc3Dxe` (a-priori 52) and `UsbConfigDxe` (58), both
+depex-less and promoted in the first round, so "if the wait is satisfied at all it is
+satisfied in time"; and "what remains open is the one thing the image cannot answer: whether
+either candidate installs it". That is the status the plan's paragraph should carry. It is
+*unjudged*, not *blocked*, and the difference is not academic — it decides whether the next
+step on the gate is a driver change or a reading.
+
+### The four sites
+
+| where | said | now reads |
+|---|---|---|
+| `docs/00-plan.md`, appended at `:348-363` | nothing — the paragraph above it | a dated paragraph naming the two readings, the three routes and the bucket deltas; **added, not substituted** |
+| this document, `:22271-22274` — §4.112 | "Two of the three drivers are unschedulable on the record's driver set, and the third waits on the same thirteen architectural protocols the P2 assert is about" | one unschedulable (`XhciPciEmulation`), one by the no-depex rule (`XhciDxe`), and one the image cannot judge (`UsbInitDxe`) |
+| this document, `:22333-22335` — §4.112's tail | "the nine absent architectural protocols and the two unschedulable USB drivers" | "the three USB host drivers held off by three different routes" |
+| `tools/depex-census.py:94-95` | "its one depex-gated driver is in the same wait as the rest of the volume" | "all three of its new drivers are in the same wait, one in each of the three buckets this tool prints" |
+
+**Two of the four are inside §4.112, and one of those is the second correction to the same
+three lines.** Step 4.115 changed "the eight absent architectural protocols" to nine in
+`docs/08:22334`; this step changes the noun beside it. That is not a re-litigation — the two
+steps are correcting different words in the same bullet, four hours apart, and the fact that
+the bullet needed both is the point: a summary sentence that compresses three mechanisms into
+a count will need one correction per mechanism, and each one looks complete on its own.
+
+**The three substitutions are line-neutral and the plan paragraph is not.** All four sites
+keep their line count except the plan's, which gains sixteen lines, and it is appended at
+`:348` — below every line-number anchor the plan's own citations point at (`:20`, `:22`,
+`:23-25`, `:26`, `:319`, `:336`, all cited from this document at `:20416`, `:20608`, `:20706`,
+`:22816-22817`, `:22883`, `:22943`, `:22987`). So no citation in either document moves, which
+is the same check Step 4.115 ran for its own one-line insertion and the reason both were
+placed where they were.
+
+### Two sites that carry the same claim and were left as they stand
+
+**`docs/08:20272` — Step 4.103's heading, "…and two of the three cannot be scheduled at
+all".** Step 4.108's blockquote inside that section already refutes the claim for `XhciDxe`
+("not worse, and not better — synchronised"), and the heading keeps it regardless. That is
+deliberate and it is this document's convention, not an oversight: a step heading is the
+record of what that step claimed. `docs/08:734` — "## Step 4.9 — The eight names…" — is the
+same case two corrections old, and Step 4.115 listed it in the group of sites where "eight"
+is right *because* it is about the historical reading. Editing a heading to match a later
+correction would delete the evidence that the correction was needed.
+
+**`docs/08:22433`** — "The candidate's contribution is the producer, `XhciDxe`, which
+arrives with no depex and no a-priori entry and is therefore unschedulable for the reason
+Step 4.108 gave." One driver, named, with the corrected reason attached: right as it stands,
+and left.
+
+### What was written, and what was not
+
+- `docs/00-plan.md` — 16 lines added at `:348-363`: a dated paragraph in the P3 gate
+  blockquote, in the form the two paragraphs above it already use. No existing line changed.
+- `docs/08-device-session.md` — this section (172 lines, `:22992-23163`), plus two in-place
+  substitutions of the same length (`:22271-22274`, `:22333-22335`), so the document stood at
+  **22,991** lines until this section was appended and no citation into it moves. Both edited
+  lines were written by Step 4.112.
+- `tools/depex-census.py` — one sentence at `:94-95`, substituted in place. `python3 -m
+  py_compile` passes; the tool's buckets, its `UNINSTALLED` set and its logic are untouched.
+  Its output on either payload is byte-identical to before this step.
+- **No payload was built and nothing was flashed.** `work/out/usb-host/Mu-gauguin-xhci-host-gzip.img`
+  is still `f1a7106b76f98e11bb2608557e76085e1b3dcba86fda472c89bcefa1783f1c84`, still unflashed,
+  and still may not stand in for the payload in `boot`.
+- **The device is absent**, so the reading owed under **先读屏，再刷下一次** is still owed:
+  `adb devices` is empty, `lsusb` shows nothing but the Huawei mouse and the two root hubs,
+  and there is no `/dev/ttyUSB*` or `/dev/ttyACM*`.
+- **`boot` is untouched** and still holds `90b21643…` — measured again in this step as the
+  record side of the bucket table. Standing rules unchanged: `userdata`, the partition table
+  and the firmware LUN are untouched; writes go to `boot` only; the control image is read
+  before anything is overwritten; and the screen is read before the next flash.
+- **The P3 gate remains unmet.** This step moves no firmware and no diagnostic. It corrects
+  the gate's own paragraph so that the three drivers it counts are counted the way the tool
+  that measures them counts them.
+
+### The step's own two errors, and how each was caught
+
+**The first reading of the sentence was that it was defensible.** Under the "two drivers that
+carry a dependency expression" reading, the clause is true of both of its subjects, and the
+following clause covers `XhciDxe` — so the sentence can be read as complete. What decided it
+was not argument but the bucket table: three drivers, three buckets, one each, and the tool
+refusing to place the third. A sentence whose two readings each misplace a different driver
+is not wrong by one count, and no amount of re-reading it would have shown that. The
+measurement is what made the site real, and the sentence had been in the plan since Step 4.112
+without anyone asking the census for the candidate — which was measured for the first time in
+this session.
+
+**`Dependency.c:221-236` was written from the shape of an earlier quote, and the branch ends
+at `:234`.** Step 4.103 cites "`Dependency.c:214-234`" for `CoreIsSchedulable`, and writing
+the new paragraph from that pattern put the NULL-depex branch two lines past its closing
+brace. Reading `:218-240` gave `:221` for the `if`, `:225` for the `CoreAllEfiServicesAvailable`
+call, `:233` for the `return TRUE` and `:234` for the close. The line range in the plan was
+corrected before the step was written; the near-miss is recorded because the first version
+was plausible enough to have survived review.
+
+### Read this step
+
+`Mu_Basecore/MdeModulePkg/Core/Dxe/Dispatcher/Dependency.c:221-234` (the NULL-depex branch),
+`:214-234` (`CoreIsSchedulable`, for contrast); `DxeMain/DxeProtocolNotify.c:81-94`
+(`CoreAllEfiServicesAvailable`, which requires all thirteen) and `DxeMain/DxeMain.c:562`,
+`:582`, `:593`, `:606`; `tools/depex-census.py:62-71`, `:73-89`, `:91-95`, `:97-106`, `:108-114`;
+in this document `:734`, `:20272`, `:22271-22274`, `:22333-22335`, `:22433`, `:22816-22818`;
+`docs/00-plan.md:335-338`, `:348-363`; `tools/build-apriori-variant.sh:36-45`.

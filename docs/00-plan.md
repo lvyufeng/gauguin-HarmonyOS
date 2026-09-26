@@ -345,6 +345,22 @@ Work:
 > not pass, because what the gate waits on is upstream of it — the `ASSERT_EFI_ERROR` at
 > `DxeMain.c:593` that Step 4.108 and Step 4.109 located, which fires before BDS is entered.
 > So "item 1 is done for UFS" below is true of the firmware and not yet true of the device.
+>
+> **Step 4.116 measured the trio the sentence above counts, and the count has no reading
+> that fits all three.** "Two of the three new drivers' dependency expressions cannot
+> evaluate on this driver set" is true if the two are the drivers that *carry* an expression
+> — and then the third reads as unaffected, which it is not; and it is true if the two are
+> the drivers that cannot run — and then the word "expression" is wrong for `XhciDxe`, which
+> has none. Measured on the candidate, the three land **one in each of the three buckets
+> `tools/depex-census.py` prints**, and that is why no pair of them shares a route:
+> `XhciPciEmulation`'s stored depex is a thirteen-term AND naming eight of the nine absent
+> protocols; `XhciDxe` carries no depex at all and is held by the UEFI 2.0 rule that requires
+> all thirteen (`Dependency.c:221-234`); and `UsbInitDxe`'s one-term depex names
+> `E722B03F-…`, defined by no header in the tree, so whether it is schedulable **cannot be
+> judged from the image** — Step 4.105 narrowed its publisher to `UsbfnDwc3Dxe` and
+> `UsbConfigDxe` and left that one question open. The bucket deltas from the record to the
+> candidate are the measurement, not the prose: `0→1` waiting, `0→1` unjudgeable, `5→6` held
+> by the no-depex rule. Nothing about the gate changes — none of the three can run.
 
 **Status (2026-09-25): item 1 is done for UFS, USB, the PMIC family, the GPIO controller,
 the Type-C controller and I2C, and every one of those nodes answers a shipped driver — it is

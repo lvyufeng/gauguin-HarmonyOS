@@ -91,8 +91,8 @@ payloads report zero of those.**
 That is also what `tools/build-apriori-variant.sh` means when it says the
 `xhci-host` payload "is not the payload that answers the open P2 question and
 must not take the place of the one in boot": its contribution cannot be read off
-the panel until P2 passes, because until then its one depex-gated driver is in the
-same wait as the rest of the volume.
+the panel until P2 passes, because until then all three of its new drivers are in the
+same wait, one in each of the three buckets this tool prints.
 
 `UsbInitDxe` is a second, independent defect in the same trio and is why this
 tool has a separate list for it. Its whole depex is `PUSH E722B03F-B250-42CE-
