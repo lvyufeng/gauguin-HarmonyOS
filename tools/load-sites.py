@@ -70,9 +70,17 @@ LEDGER = [
     (
         "page",
         IMAGEC,
-        "Status = CoreAllocatePages (\n                   AllocateAddress",
+        "if (EFI_ERROR (Status) && !Image->ImageContext.RelocationsStripped) {\n"
+        "        Status = CoreAllocatePages (\n                   AllocateAnyPages",
         "CoreLoadPeImage",
-        "reachable - the page allocator refusing a typed request",
+        "reachable, and it is the branch every load in this volume takes - the "
+        "page allocator refusing a typed request. The type is the image's own "
+        "ImageCodeMemoryType: EfiBootServicesCode for a DXE_DRIVER and "
+        "EfiRuntimeServicesCode for a DXE_RUNTIME_DRIVER (`Image.c:632-640`), so "
+        "the request to compare against is one of those two and not "
+        "`P2 FREE largest=`, whose ladder is EfiBootServicesData. The "
+        "`AllocateAddress` branch above it is *not* reachable here and the entry "
+        "below says why",
     ),
     (
         "pool",
@@ -190,8 +198,17 @@ LEDGER = [
         PAGEC,
         "// Page 0 is not allowed to be allocated as it is reserved for null pointer detection",
         "CoreInternalAllocatePages",
-        "reachable - AllocateAddress at 0 is refused before anything is searched, "
-        "which is the branch a reloc-stripped image with ImageBase 0 takes",
+        "live, but no load in this volume arrives at it. `AllocateAddress` at 0 is "
+        "refused before anything is searched, and that request is only made from "
+        "`CoreLoadPeImage`'s first branch, which needs "
+        "`PcdImageLargeAddressLoad && ImageAddress >= 0x100000` or "
+        "`RelocationsStripped` (`Image.c:719-721`); the PCD is TRUE by default "
+        "(`MdeModulePkg.dec:1379`), and all 80 of this volume's driver files have "
+        "ImageBase 0x0 with RELOCS_STRIPPED clear (`tools/pe-facts.py`), so the "
+        "test fails on the address and the AllocateAnyPages fallback runs instead. "
+        "The site stays in the ledger because it is how a load failure's status "
+        "would read if the branch were taken; what changed is that this volume "
+        "does not take it",
     ),
     (
         "fragmentation",

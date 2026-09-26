@@ -24985,15 +24985,20 @@ the second entry is not in the capture: a reset in this configuration re-enters 
 and the payload from the stub's own entry, so its rows would look exactly like this, and so
 would a payload that was entered twice for any other reason.
 
-The highest number on the panel is 17 starts, and it is worth stating against the reading it
+The last clear number on the panel is 17, and it is worth stating against the reading it
 replaces. An earlier attempt to say where the run got to put it at *"eight drivers and
-stopped at the ninth"*, and no capture supports that: the mirror never reaches a nineteenth
-`K` row, and the batch's ceiling here is Apriori **18**, with Apriori **19** — `RpmhDxe`,
-`60F4DF83-C758-52B5-9AA0-92EA560EDB8F` — the entry the run dies on. The stub's own comment
+stopped at the ninth"*, and no capture supports that. Corrected in step 4.128: the batch is
+**69 entries** (70 in the Apriori file less `DxeCore`, which is never added to the discovered
+list), the last `K` row is tick **18** = `NpaDxe` = Apriori **18**, and the entry the run dies
+on is the next one — `RpmhDxe` at index 19 / Apriori **19**, whose GUID in *our* array is
+`60F4DF83-C758-52B5-9AA0-92EA560EDB8F` (the gauguin INF's `FILE_GUID`) and whose caller id in
+its own `.data` is `CB29F4D1-…9766`. **The stop is not an Apriori ceiling**: 69 entries were
+promoted and only 18 were dispatched, so the run died 18 ticks into a full batch, in the
+driver's own entry point, and no `K 19` row exists because that entry point never returned. The stub's own comment
 said the ninth, and that line has been corrected in the source rather than left standing
 beside this table.
 
-### The last two rows are one assert, printed by two different modules
+### The last two rows are one assert, printed twice by one module
 
 ```
 K 18 Ss 17/69 free=1024 40256211-624E-580B-97ED-3011FB3CB9A3
@@ -25001,8 +25006,12 @@ ERROR: C90000002:V03000007 I0 CB29F4D1-7F37-4692-A416-93E82E219766
 ASSERT DebugLib.c +78: Format != ((void *) 0)
 ```
 
-The two rows after the last `K` row are one `DebugAssert` reported twice, and the two
-printings come out of two different modules.
+The two rows after the last `K` row are one `DebugAssert` reported twice, and both printings
+come out of the **same** module — `RpmhDxe`, whose own `DebugLib.c` holds the guard at file
+offset `0x19c0` (`DebugLib.c`, line 78, `Format != ((void *) 0)`) and the `DebugAssert` it
+tail-calls at `0x19e0`, and whose `gEfiCallerIdGuid` is the GUID on the `ERROR:` row. Step
+4.128 reads this out of the image's instructions; an earlier revision of this section called
+the two printings *"two different modules"*, which is wrong.
 
 The `ERROR:` row is the status-code handler's.
 `Mu_Basecore/MdeModulePkg/Universal/StatusCodeHandler/RuntimeDxe/SerialStatusCodeWorker.c:87`
@@ -25063,7 +25072,11 @@ So the failing image is `RpmhDxe`, and the run stops entering it. This closes an
 identification that had been carried as unresolved: the caller GUID is the module's own, it
 is not an `AutoGen.c` caller id, and it is not a driver the batch had already started.
 
-### Why the machine stops: an error branch in `rpmh_image_os.c`
+### Why the machine stops: a print reached with a null format inside `RpmhDxe`
+
+Step 4.128 corrects this section's title and its conclusion. The terminal row is not a branch
+of `rpmh_image_os.c`; it is `DebugLib.c` line 78, inside `RpmhDxe`'s own `DebugLib`, and the
+`rpmh_image_os.c` sites below are the candidates that did *not* fire.
 
 The DebugLib the image was built with is not the one in this tree. This tree prints an
 assert in one of two spellings and the image's is a third: `"ASSERT [%a] %a(%d): %a\n"` is
@@ -25113,12 +25126,15 @@ So the shape is an error branch in the module, reached because the mirror's RPMH
 where the device's does not. Three of the four named sites print with a null format before
 asserting, and on those the machine dies on the print rather than on the assert: DebugLib's
 own guard fires first and spins, which is why the panel's last row names `DebugLib.c` and
-line 78 and not `rpmh_image_os.c`. **Which of the four was reached is not established here**
-— the panel shows the guard and not the branch condition — and it is not claimed. What the
-step does establish is that the terminal row is a branch of the payload's own code and not a
-missing register or a fabricated word: the seed put the words the earlier steps lacked in
-place, the run went eighteen Apriori entries further for it, and it stopped at a place the
-image itself considers fatal.
+line 78 and not `rpmh_image_os.c`. **Step 4.128 answers the question this paragraph left open:
+none of the four was reached.** All four build their message from the file at `0xbdea`,
+`rpmh_image_os.c`, and would print `ASSERT rpmh_image_os.c +84: 0` (or `+175`, `+187`, `+197`);
+the panel prints `DebugLib.c +78`, so the row is a *print* reached with a null format somewhere
+else in the module, and which of its 22 `DebugPrint` sites that was is not established — the
+guard is what the panel shows and it does not record its caller. What the step does establish
+is that the terminal row is the payload's own code and not a missing register or a fabricated
+word: the seed put the words the earlier steps lacked in place, the run went eighteen Apriori
+entries further for it, and it stopped at a place the image itself considers fatal.
 
 ### The honesty the seed requires
 
@@ -25697,8 +25713,11 @@ The row's caller id is `RpmhDxe`'s, and this step can show it in bytes rather th
 The sixteen bytes of `CB29F4D1-7F37-4692-A416-93E82E219766` occur in exactly two files under
 `Binaries/gauguin`: `RpmhDxe.efi`, at file offset `0xe018` — inside its `.data` section, which is
 VMA `0xe000`, so the constant sits at RVA `0xE018` of that image — and one `RawFiles` entry
-beside it. No `FILE_GUID` in the tree's INF/DSC/DEC declarations is that value; `RpmhDxe`'s is
-`60F4DF83-C758-52B5-9AA0-92EA560EDB8F`. So a `K 19` row for `RpmhDxe` would carry `60F4DF83-…`,
+beside it. No *gauguin* `FILE_GUID` is that value; `RpmhDxe`'s is
+`60F4DF83-C758-52B5-9AA0-92EA560EDB8F`. (Step 4.128 corrects the wider form of that sentence:
+`CB29F4D1-…9766` *is* the `FILE_GUID` of 57 INFs in the tree — every one of them another
+board's `RpmhDxe.inf`, as the paragraph below says — and the value the stock firmware gave its
+own RpmhDxe file.) So a `K 19` row for `RpmhDxe` would carry `60F4DF83-…`,
 and the `ERROR:` row carries something else — the image's own name for itself, printed by the
 status-code path. That is the reading step 4.125 gave this pair — one `DebugAssert` in
 `RpmhDxe`, printed once through the status-code handler and once by DebugLib — reached here from
@@ -25751,3 +25770,273 @@ written, and the device was absent.
 | corrects | the working note that read this step's runs as a new regression one Apriori entry past seed 5: rung 3's last twelve rows are seed 5's last twelve rows, text for text, and the ceiling did not move when the seed did; step 4.126's paragraph at `:25286-25288` claiming the file at `/tmp/gauguin-kernel.raw` is not the mirror's payload — it is, and `90b21643…` is `work/out/p2-variants/Mu-gauguin-silicon-gzip.img`; the earlier reading that the AOP seed's read-back disagreement meant the seed was miswritten, when it was the read that unpacked three words from zero; the reading of `0x8e84` as an abort, which is the walker's `0xFFFFFFFE` "type" return — its other return, `0xFFFFFFFC` at `0x8e8c`, is what an empty descriptor produces, and the stub's own account has the flag-only seed reaching that one; the frame in which the `0xD830` descriptors are values a seed could supply, when that address is inside the driver's loaded image `.data` and the image's load writes it, so the descriptor has to be produced by the driver's initialiser and the seed's job is the TOC that initialiser reads; and step 4.126's experiment proposal, which this ladder shows would not have answered the question it was designed for |
 | does not close | the P3 gate and the owed panel reading of the flashed 4.74 set; why the `smem_get_addr` `402` row survives the corrected seed, with the block scan's `+2` id at `0x90C0` as the candidate and no run yet that separates it from the alternative; what `CmdDbDxe` does once started, since the command database at `0x80860000` is absent here; the second entry into the payload that seed 5's capture holds and rung 3's does not — the two-attempt stream and this step's one-attempt stream correlate with the `404` row's presence and with nothing else this step measured, and no mechanism is claimed; `SO`'s value, which needs `P2 WHAT`; and the phone's own `K` rows, which remain the only record that could confirm this ladder against the device |
 | not an action | nothing was built for the device, nothing was flashed and no partition was written; the changes are to the launcher's read-back and to the stub's SMEM seed, and every run that judged them is a QEMU run |
+
+## Step 4.128 — the run stops on Apriori 19 because that entry never returned, and the assert that says so is `RpmhDxe`'s own `DebugLib.c:78`
+
+Step 4.125 called the stop *"on Apriori 19, in `rpmh_image_os.c`"*. The entry is right and the
+file is not. This step re-derives both through the decompressed volume rather than through the
+compressed payload, and the re-derivation moves three numbers and one file name.
+
+### The Apriori array is 70 entries, and the tick number is the array index
+
+The payload's FV is LZMA-compressed, which is why earlier steps read GUIDs out of the raw file
+and missed ones that are plainly there. Everything below is read out of `/tmp/FVMAIN-raw.fv`,
+the decompressed inner `FVMAIN` — 0x704000 bytes, 123 FFS files.
+
+The Apriori file is **file#0** of that volume: GUID `FC510EE7-FFDC-11D4-BD41-0080C73C8881`
+(`gAprioriGuid` in `Guid.xref`), type `0x02` (FREEFORM), size `0x47c`, offset `0x78`, state
+`0xf8`. Its 1124-byte body is an 8-byte header — `64 04 00 19`, i.e. size `0x464` and type
+`0x19` — followed by **one `EFI_SECTION_RAW` of 1120 bytes, which is exactly 70 GUIDs**. All 70
+name a real file in the same volume.
+
+`tools/apriori-order.py` reads the same array from the still-compressed payload and prints its
+own count and order:
+
+```
+gauguin-kernel.raw: FVMAIN 123 files, Apriori file 70 GUIDs
+    0  D6A2CB7F-6A18-4E2F-B43B-9920A733700A  DxeCore
+    ...
+   17  D461A719-F2EC-5C77-A7AF-045F17ED012C  CmdDbDxe
+   18  40256211-624E-580B-97ED-3011FB3CB9A3  NpaDxe
+   19  60F4DF83-C758-52B5-9AA0-92EA560EDB8F  RpmhDxe
+   20  C4D86DF4-D250-5062-8078-1DA30EA6D240  PdcDxe
+    ...
+   69  CCCB0C28-4B24-11D5-9A5A-0090273FC14D  GraphicsConsoleDxe
+INF roots walked: 3 -> 1676 distinct INF names
+
+the array is exactly the INF order of APRIORI.inc: 70 entries, zero mismatches
+```
+
+So the array is 70, and the earlier reading of *"58 entries, 2 + 55 + a 12-byte terminator"* is
+withdrawn. It came from dumping the raw file's header region and reading GenFv's `0x0E` padding
+byte at body offset 2 as a size byte; there is no terminator and no 58.
+
+**The tick number on a `K` row is an array index.** The row is built at
+`Dispatcher.c:677` — `"K %d %c%c %d/%d free=%d %g"` with `mP2Tick, Phase, P2WhyLetter (Status),
+mP2Started, mP2Apriori, P2LargestAlloc (), Guid` — and the GUID it prints is
+`mP2AprioriGuid[n]`, filled in file order by the promotion loop. Checked against the array for
+every row of the capture this step reads:
+
+| row | GUID on the row | array index | name |
+|---|---|---|---|
+| `K 1` | `80CF7257-…` | 1 | PcdDxe |
+| `K 10` | `94527566-…` | 10 | SmemDxe |
+| `K 17` | `D461A719-…` | 17 | CmdDbDxe |
+| `K 18` | `40256211-…` | 18 | NpaDxe |
+
+All 17 rows match their index; there are no mismatches. The tick is not an index but a plain
+sequence number — `mP2Tick++` at `Dispatcher.c:665`, whose own comment says it is *"a sequence
+number so that a stall is visible as a number that stops advancing"* — and it equals the array
+index here because the promotion loop builds the scheduled queue in array order and the
+dispatcher drains it in that order, so the first dispatch is index 1 (`DxeCore` at index 0 being
+a `DXE_CORE` file that is never scheduled). So `K 18` is **NpaDxe at Apriori 18**, and Apriori
+19, the entry step 4.125 named, is `RpmhDxe` at index 19 — one past the end, dispatched and never
+returned, which is why there is no row for it. This document's "Apriori N" is the array index,
+so `CmdDbDxe` is Apriori 17 and `NpaDxe` is Apriori 18.
+
+**The four counters on the row are not all the same count**, and the difference is measurable
+across the captures. `mP2Tick` counts *dispatch attempts*; `mP2Started` counts *successes*, and
+it is incremented only in `P2MarkSeq`'s branch (`:1163`), on the `!EFI_ERROR (Status)` side. So
+the two agree only on a rung where every start succeeded. They do not on the unseeded rungs:
+`/tmp/lad3.txt` and `/tmp/lad5.txt` both end `K 18 Ss 17/69`, and the AOP-seeded `/tmp/lad4.txt`
+ends `K 18 Ss 18/69` — one more success at the same tick, which is exactly CmdDbDxe's `U` turning
+into `s`. That is step 4.127's ladder read off the second counter instead of the first, and it
+is a check on it rather than a restatement: a `K` row's tick and its started count are two
+different numbers, and the row on the panel is the pair of them.
+
+### Every `K` row is a start that returned, and the denominator is not a ceiling
+
+`P2WhyLetter` (`Dispatcher.c:556-591`) is a table of exact statuses, and it is the only thing
+that produces the second letter:
+
+```
+EFI_SUCCESS            -> 's'      EFI_DEVICE_ERROR        -> 'D'
+EFI_OUT_OF_RESOURCES   -> 'R'      EFI_LOAD_ERROR          -> 'E'
+EFI_NOT_FOUND          -> 'N'      EFI_INVALID_PARAMETER   -> 'P'
+EFI_SECURITY_VIOLATION -> 'X'      EFI_UNSUPPORTED         -> 'U'    (:588-589)
+                                   (anything else)         -> 'O'
+```
+
+Two consequences, one of them a correction to this window's own working note:
+
+* `U` is `EFI_UNSUPPORTED`, exactly — so step 4.127's sentence that the AOP seed removed
+  `EFI_UNSUPPORTED` and that this was the absent AOP record **stands**, now read off the source
+  rather than inferred from the row. What is withdrawn is the alternative: that the `U` was a
+  `(Status & 0x80000402)` class. That mask does exist in `RpmhDxe.efi` at RVA `0x1978` — but it
+  is inside that image's own `DebugLib`, which prints a different row entirely. A letter on a
+  `K` row is Dispatcher's table and nothing else.
+
+  `P2Tick` is called on the failure branch at `:1122` (`'L'`, after a load failure, immediately
+  before `continue`) and on the start branch at `:1167` (`'S'`, `Phase`). The second one is
+  emitted **after** `CoreStartImage` at `:1157` and after the `P2Record`/`P2MarkSeq`/`mP2Started++`
+  block at `:1158-1164`. So a row's second letter describes a start that has already returned,
+  and a `K n … Ss` row means driver *n* ran and its entry point came back.
+
+* The denominator is `mP2Apriori`, which increments **only** in the promotion loop's match
+  branch (`:2116-2120`), and that loop walks the whole array before the dispatch loop begins. It
+  is 69 on every row: 70 entries, of which entry 0 (`DxeCore`) is a `DXE_CORE` file that is never
+  added to the discovered list. So `18/69` means *the eighteenth of sixty-nine promoted entries*,
+  and **the batch did not run out of Apriori slots** — 50 entries were still queued behind it.
+
+Put together: the run's last `K` row is the eighteenth of a sixty-nine-entry batch, and the row
+after it is the pair below. Index 19 is `RpmhDxe`; it was dispatched, `CoreStartImage` was
+entered, and it never returned — which is why there is no `K 19` row to print. The stop is
+inside `RpmhDxe`, and the two rows that follow are how the machine says so.
+
+### The two terminal rows are one `DebugAssert`, inside `RpmhDxe`'s own image
+
+Both strings the pair is made of, and the status constants it reports, are in
+`device/dxe/RpmhDxe.efi`:
+
+```
+0xa696  "DebugLib.c"
+0xa6a1  "Format != ((void *) 0)"
+0xa6b8  "ASSERT %a +%d: %a\n"
+0xbdea  "rpmh_image_os.c"
+```
+
+and the two call sites in that image, both inside its own `DebugLib.c`:
+
+```
+19c0: adrp x0, 0xa000 ; add x0, x0, #0x696      ; FileName   = "DebugLib.c"
+19cc: mov  w1, #0x4e                            ; LineNumber = 78
+19d0: adrp x2, 0xa000 ; add x2, x2, #0x6a1      ; Description= "Format != ((void *) 0)"
+19d4: bl   0x19e0                               ; the image's own DebugAssert
+19d8: b    0x19d8                               ; and it does not come back
+
+19e0: DebugAssert:
+1a14: and  w8, w0, #0xff ; cbz w8, 0x1a34       ; DebugPrintEnabled
+1a1c: mov  w0, #0x2   ; 1a24: movk w0, #0x9000, lsl #16     ; 0x90000002
+1a20: mov  w1, #0x7   ; 1a28: movk w1, #0x300,  lsl #16     ; 0x03000007
+1a2c: bl   0x81cc                               ; report status code, with gEfiCallerIdGuid
+1a40: adrp x2, 0xa000 ; add x2, x2, #0x6b8      ; "ASSERT %a +%d: %a"
+1a5c: bl   0x8418                               ; format, then print
+```
+
+The constants are the row's: `0x90000002` is `EFI_ERROR_CODE | EFI_ERROR_UNRECOVERED` and
+`0x03000007` is `EFI_SOFTWARE_UNSPECIFIED | EFI_SW_EC_ILLEGAL_SOFTWARE_STATE`. The caller id on
+the row, `CB29F4D1-7F37-4692-A416-93E82E219766`, is this image's `gEfiCallerIdGuid`, which is why
+it is in the image's `.data` at RVA `0xE018`. So the panel's `ERROR:` row and its `ASSERT` row
+are one call of `DebugAssert` **in `RpmhDxe`**, and the file and line the assert names are
+`DebugLib.c` line 78 — this image's own guard, `ASSERT (Format != NULL)`, with its `CpuDeadLoop`
+at `0x19d8`.
+
+The event is therefore a `DebugPrint`/`DebugVPrint` reached with a **null format string** from
+somewhere in `RpmhDxe`. What is not established is *which* of the module's 22 `DebugPrint` call
+sites it was: the guard is what the panel shows, and the guard does not record its caller.
+
+**And it is not one of `rpmh_image_os.c`'s four.** Those four sites decode to a different
+message. Each builds `DebugAssert` with the file at `0xbdea` — `rpmh_image_os.c` — at line
+`84`, `175`, `187` and `197`, and with the description at `0xb4d4`, which reads back as the
+one-character literal `0`. That description is what `ASSERT (0)` stringifies to: `__FILE__`,
+`__LINE__` and the expression text `"0"`, the tripwire form rather than a null check. Any of the
+four firing would print `ASSERT rpmh_image_os.c +84: 0` — or `+175`, `+187`, `+197`. The panel
+prints `ASSERT DebugLib.c +78: Format != ((void *) 0)`. So none of the four was reached, and
+step 4.125's section *"Why the machine stops: an error branch in `rpmh_image_os.c`"* is about the
+wrong file. Step 4.125's open question — *"which of the four was reached is not established
+here"* — is answered: none of them.
+
+Two details of the decoding stand as recorded and are worth repeating because they are what made
+the wrong file plausible. `Format != ((void *) 0)` occurs **twice** in `RpmhDxe.efi`, at `0xa6a1`
+and `0xd09d`; the earlier search missed the second because it searched the compressed payload.
+And the two assert spellings in this volume are disjoint and complementary: `ASSERT %a +%d: %a`
+occurs in **42 of its 123 files**, `ASSERT [%a] %a(%d): %a` in the other **42**, and no file
+holds both. `DxeCore`'s file is among the second set — which is how an earlier step took this
+pair for a DxeCore assert. It is not one: DxeCore cannot print the row's spelling, and the
+caller id independently places the call in `RpmhDxe`.
+
+### The names on both sides of the same driver
+
+`60F4DF83-C758-52B5-9AA0-92EA560EDB8F` is not a generated value: it is the `FILE_GUID` line
+(line 9) of `Binaries/gauguin/QcomPkg/Drivers/RpmhDxe/RpmhDxe.inf`, and it is what our volume
+names file#33 with. `CB29F4D1-7F37-4692-A416-93E82E219766` is the id the prebuilt PE inside that
+file was compiled with, and the PE is the project's untouched copy of the device's own blob:
+
+```
+device/dxe/RpmhDxe.efi                                        65536 B  sha256 616686e2…3f4088
+Binaries/gauguin/QcomPkg/Drivers/RpmhDxe/RpmhDxe.efi          same sha256
+volume file#33 body, PE at file offset 0x1c                   same bytes
+```
+
+The stock firmware named *its* RpmhDxe file `CB29F4D1-…9766` — the first sixteen bytes of
+`device/dxe/RpmhDxe.ffs` are `d1f429cb377f9246a41693e82e219766` — and its Apriori table carries
+the same GUID at index 19. So the stock build names these files with the module's own id and
+ours names them with the INF's `FILE_GUID`; the value `CB29F4D1-…9766` is in fact the
+`FILE_GUID` of **57** INFs in the tree, every one of them another board's `RpmhDxe.inf` and none
+of them gauguin's. Step 4.127's *"No `FILE_GUID` in the tree's INF/DSC/DEC declarations is that
+value"* is wrong as written and should have read *no gauguin INF declares it*. The stock table
+being 74 entries with `RpmhDxe` at 1-based position 20 is also what makes *"Apriori 19 is
+`RpmhDxe`"* true of the stock firmware as well as of ours.
+
+### The 46-letter `P2 SEQ` this record also carries
+
+The same counter that gives `18/69` gives the length of `P2 SEQ` (`Dispatcher.c:256, :2333`), and
+this record carries a 46-letter `P2 SEQ` reading with 19 `s` and 27 `L`. 46 is neither 69 nor 46
+of 70 with 24 unhit — it is a reading of a different image, from before `APRIORI.inc` reached its
+present length, and `P2BRINGUP_APRIORI_MAX` is 128, so no print cap is involved. This step does
+not attempt to reconcile the two: it reads one capture, that capture is self-consistent at 69,
+and the phone's own `K` rows and `SEQ` remain the only record that could say which image the 46
+came from.
+
+### The phone is not stopping where the mirror stops, and the source says which line is which
+
+The two runs have been read as the same stop in the same place since 4.125 — *"the same entry
+index at which the device's `P2 SEQ` records its first failure, though by the other mechanism"*
+(`docs/00-plan.md:64-66`). The second half of that is right and the first half is not, and the
+tree settles it without a device.
+
+`docs/08:675` records the phone's panel ending in
+
+```
+ASSERT [DxeCore] DxeMain.c(593): !(((RETURN_STATUS)(Status)) >= 0x80000000000000ULL)
+```
+
+and `DxeMain.c` says what that line is: `:562 CoreDispatcher ();`, `:568
+CoreDisplayMissingArchProtocols ();`, `:582 Status = CoreAllEfiServicesAvailable ();`, `:593
+ASSERT_EFI_ERROR (Status)`. So the phone reached line 582 — **the dispatcher returned and its
+whole batch ran** — and what it then failed was the architectural-protocol check, with the
+missing names already printed on the rows above it. The mirror, at the same point in the same
+source, never gets there: it dies at `K 18`'s successor, inside `RpmhDxe`. The two stops are
+different events in different modules, and the mirror's is the *earlier* one by the whole rest of
+the batch.
+
+That is worth stating plainly because of what it implies for where the work is. `RpmhDxe`'s stop
+in the mirror is not a driver that the device cannot run — the phone runs past it — and the
+instrument that produces it is a QEMU stub standing in for the AOP and the RPMH fabric with one
+word of an interface this step already seeds by hand. The phone's own blocker is the one the
+plan's P2 row has named all along: nine architectural protocols absent, on eight `L` producers.
+Chasing the mirror's `RpmhDxe` assert further is chasing a place where the mirror and the device
+disagree; the P3 work that moves the device is the protocols, the display, the USB host and the
+buttons.
+
+Which of the two the 46-letter `P2 SEQ` belongs to is still open, and it matters for exactly one
+number here: whether the phone's completed batch was 46 entries or 69. The assert at `:593` does
+not depend on it.
+
+
+### Read this step
+
+Instruments: `tools/fv-inventory.py`'s `fv_files`/`guid_str` over `/tmp/FVMAIN-raw.fv`
+(123 files) with the Apriori file located as file#0 and its `0x19` RAW section read as a GUID
+array; `tools/apriori-order.py` over `/tmp/gauguin-kernel.raw` with `--xref
+Build/gauguinPkg/DEBUG_CLANGPDB/FV/Guid.xref` and `--expect
+Platforms/Xiaomi/gauguinPkg/Include/APRIORI.inc`; a row-by-row join of the capture's 17 `K` rows
+against the array's index/name table; `Mu_Basecore/MdeModulePkg/Core/Dxe/Dispatcher/Dispatcher.c`
+at `:89`, `:111`, `:556-591`, `:605-608`, `:677-682`, `:2074`, `:2095-2126`, `:1122`, `:1157-1167`,
+`:2260-2300`, `:2333`; `aarch64-linux-gnu-objdump -d` over `device/dxe/RpmhDxe.efi` at `0x19c0`,
+`0x19d8`, `0x19e0` and its four `DebugAssert` sites; a byte search of both assert spellings across
+the 123 inner files; `sha256sum` over `device/dxe/RpmhDxe.efi`, the tree's copy, and the PE
+inside volume file#33; the `FILE_GUID` line of the gauguin `RpmhDxe.inf` and a case-insensitive
+count of the 57 INFs declaring `CB29F4D1-…9766`; and `head -c 16` of `device/dxe/RpmhDxe.ffs`.
+Nothing was built for the device, nothing was flashed, no partition was written, and no device is
+attached to this machine — `lsusb`, `adb devices`, `fastboot devices` and the serial device nodes
+are all empty.
+
+| | |
+|---|---|
+| instrument | the decompressed inner volume read as a file table and as a GUID array, the tree's own `APRIORI.inc` as the order's oracle, `Dispatcher.c`'s promotion loop and both `P2Tick` call sites, the prebuilt `RpmhDxe.efi` disassembled at its guard and its `DebugAssert`, a byte census of the two assert spellings across all 123 files, and hashes over the three copies of the same PE — nothing was built, flashed or written, and no device is attached |
+| shows | that the payload's Apriori array is **70** GUIDs — file#0 `FC510EE7-…`, body `0x464`, one `0x19` RAW section of 1120 bytes — exactly matching `APRIORI.inc`'s INF order with zero mismatches, and that every `K` row's tick number equals the array index of the GUID printed beside it (17 rows, 17 matches): `K 17` is `CmdDbDxe` at index 17 and `K 18` is **`NpaDxe` at index 18**, so Apriori **19** is `RpmhDxe`, at index 19, one past the last row; that the two counters on a row are two different counts — `mP2Tick` (dispatch attempts, `:665`) and `mP2Started` (successes, `:1163`) — so the unseeded rungs end `K 18 Ss 17/69` and the AOP-seeded one ends `K 18 Ss 18/69`, one more success at the same tick, which is CmdDbDxe's `U` turning into `s` read off the second counter; that the denominator 69 is `mP2Apriori`, the number of *promotions* (70 entries less `DxeCore`, which is a `DXE_CORE` file), so the batch stopped 18 ticks into 69 and did not exhaust its Apriori slots; that `P2Tick ('S', …)` runs after `CoreStartImage`, so each row reports a start that returned and the missing `K 19` says `RpmhDxe`'s entry point did not; and that the two terminal rows are one `DebugAssert` **inside `RpmhDxe`'s own `DebugLib.c`** — the guard at `0x19c0` naming `DebugLib.c`, line `78` and `"Format != ((void *) 0)"`, tail-calling the image's `DebugAssert` at `0x19e0` whose constants are the row's `0x90000002`/`0x03000007` and whose caller id is the row's `CB29F4D1-…9766`; and that the phone and the mirror stop in **different places** — the phone reaches `DxeMain.c:593`, which is `ASSERT_EFI_ERROR` on `CoreAllEfiServicesAvailable ()` at `:582`, so its dispatcher returned and its whole batch ran, while the mirror never gets past `RpmhDxe` — which makes the mirror's `RpmhDxe` stop an artefact of the stub and leaves the phone's real blocker where the plan has always put it, on the absent architectural protocols |
+| adds | the array's identity as a *file object* in the volume (file#0, its GUID, its `0x464` body and its single 1120-byte section) rather than a byte pattern in a payload; the index↔tick join, which is the instrument the record has been missing for every `K` row it has quoted; the two `P2Tick` call sites read off the source, which is what makes a `K` row a completed start rather than an attempted one; the decode of the four `rpmh_image_os.c` sites as `ASSERT (0)` tripwires at lines 84 / 175 / 187 / 197, whose description `"0"` is the stringified expression and whose message would have named that file and not `DebugLib.c`; the byte census that splits the volume's files 42/42 across the two assert spellings with no file in both, which is why a spelling can attribute a row to a set of images; and the three-way identity of the prebuilt PE (`device/dxe/RpmhDxe.efi` = the tree's copy = the PE in volume file#33) with the two naming conventions named on each side |
+| corrects | this window's own working note that the `U` in `K 17 SU` was a `(Status & 0x80000402)` class rather than `EFI_UNSUPPORTED` — `P2WhyLetter` (`Dispatcher.c:588-589`) returns `'U'` for `EFI_UNSUPPORTED` and nothing else, so step 4.127's reading stands and the retraction it proposed is not written; step 4.125's *"in `rpmh_image_os.c`"*, which is the wrong file, and its *"which of the four was reached is not established"*, which is answered *none*; the reading that the two terminal rows come from two different modules, when both are one `DebugAssert` in one image; the earlier reading of the last `K` row as `CmdDbDxe` at Apriori 18, which is one off — `CmdDbDxe` is `K 17`; the earlier claim that the Apriori array holds 58 entries with a 12-byte terminator, which came from reading GenFv's padding byte as a size and is deleted; and step 4.127's *"no `FILE_GUID` in the tree … is that value"*, which is the `FILE_GUID` of 57 other boards' `RpmhDxe.inf` |
+| does not close | the P3 gate and the owed panel reading of the flashed 4.74 set; *which* of `RpmhDxe`'s 22 `DebugPrint` call sites passed the null format — the guard is what the panel shows and it does not record its caller; what `RpmhDxe` was doing at that point, since the AOP mailbox this instrument seeds is one word of an interface the driver goes on to read more of; whether the 46-letter `P2 SEQ` in this record is a reading of an older image, which is the only reading consistent with a 70-entry array and a 69-entry denominator but which no capture here confirms; and the phone's own `K` rows, which remain the only record that could confirm this ladder against the device |
+| not an action | nothing was built for the device, nothing was flashed and no partition was written; every reading in this step is off files that were already on disk, and no device is attached to this machine. The porting goal is not advanced by it: P3's display, USB-host and buttons items remain unfinished and P4 and P5 are not begun |
