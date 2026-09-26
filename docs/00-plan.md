@@ -38,11 +38,21 @@ What blocks progress now is one step further in: **the nine are absent because
 their producers never loaded**, and the producers are eight of the 27
 `CoreLoadImage` failures the volume's own `P2 SEQ` string measures. The string is
 `ssssssssssssssssssLLLsLLLLLLLLLLLLLLLLLLLLLLLL` — 46 matches, 19 started, 27
-failed to load, and not one `?`, so the batch drained rather than stopping. The
-failure begins at **SEQ 18 = Apriori 19 = `RpmhDxe`**; from there to the end of
-the string 27 of the 28 matches failed to load, the one exception being
-`ShmBridgeDxe` (SEQ 21), which loads and starts exactly where `PdcDxe` (SEQ 19)
-fails on a byte-identical request. One `P2 DIAG` line rendered **Out of
+failed to load, and not one `?`. The counts stand and the ordinary reading of the
+last clause does not: a 46-character line **is** the stopping. Every build on this
+disk carries the same 70-entry array with nothing missing and the core file at
+index 0, so a completed walk promotes 69 entries and prints 69 characters
+(`docs/08` step 4.130); the only stops this volume allows that give exactly 46 are
+physical 49 and 50, both `miss=14 PlatformInfoDxeDriver` and `unhit=24`. Zero `?`
+says the 46 promoted drivers were all *attempted* — a statement about the drain,
+not about the walk. The names move too, because `P2 SEQ`'s slot *k* belongs to the
+*k*-th entry that **matched** and a stopped walk's batch is not `ap1..apN`: at
+those two stops 33 of the 46 slots name a different entry than the identity map
+does, from slot 13 on. So the failure begins at slot 18, which is **Apriori 20 =
+`PdcDxe`**, not `RpmhDxe`; from there to the end of the string 27 of the 28
+remaining slots are `L`, the one exception being slot 21, which is **Apriori 24 =
+`DiskIoDxe`** — `ShmBridgeDxe` (ap22) is *unhit* at that stop, so it was never
+promoted and never loaded. One `P2 DIAG` line rendered **Out of
 Resources**, which is the status that pairs with `P2 FREE largest=` — `docs/08`
 steps 4.18 onward are the analysis of that pair, and step 4.129 closes its
 mechanical half: `FindFreePages`' third rung searches the **whole** map below
@@ -78,9 +88,12 @@ value was fabricated: three writes into three addresses (the pointer, the SMEM
 target-info structure it names, and the `SMEM + 0xC0` flag) buy the mirror past
 `smem_target.c +435`, then `smem.c +659`, then `smem.c +671`. With those in place
 the run walks the Apriori batch in order, prints `K 1` through `K 18` with a name
-for each row, and dies on **Apriori 19 = `RpmhDxe`** — the same entry index at
-which the device's `P2 SEQ` records its first failure, though by the other
-mechanism: there the image fails to load, here it loads, starts, and then asserts
+for each row, and dies on **Apriori 19 = `RpmhDxe`** — the same *slot* the
+device's `P2 SEQ` records its first failure in, though by the other mechanism and
+in the adjacent entry: the string's 19th character belongs to Apriori 20 =
+`PdcDxe` once the batch is read as the loop fills it, so the two runs fail at the
+same position and not at the same driver (`docs/08` step 4.130). There the image
+fails to load, here it loads, starts, and then asserts
 inside its own error branch. The last two panel rows decode — `EFI_SOFTWARE |
 EFI_SW_EC_ILLEGAL_SOFTWARE_STATE`, reported under `RpmhDxe`'s own baked-in caller
 id, and then a `DebugLib` guard firing because a print was reached with a null
@@ -98,16 +111,21 @@ The digest is still absent for the original reason: this run dies
 inside the batch too.
 
 Step 4.126 is the one place in the record where the two runs can be held against each
-other, and it settles part of that. `P2 SEQ`'s index *i* is Apriori entry *i + 1* and
-the mirror's `K` rows count the same loop, so the phone's 46 letters and the mirror's
-18 rows cover the same eighteen indices: **seventeen agree and one does not** —
+other, and it settles part of that. `P2 SEQ`'s slot *k* belongs to the *k*-th entry
+the promotion loop **matched**, which is Apriori entry *k + 1* only on a completed
+walk — and this batch is not one, so the phone's eighteen slots here hold Apriori
+1..13 and then 15..19, with ap14 `PlatformInfoDxeDriver` *unhit* at that stop
+(`docs/08` step 4.130). The comparison survives the shift because all eighteen of
+those letters are `s`: the mirror's `K` rows count the same loop, so the phone's
+letters and the mirror's 18 rows still cover the same eighteen starts, **seventeen
+agree and one does not** —
 Apriori 17 = `CmdDbDxe`, where the phone's `EntryPoint` returned `EFI_SUCCESS` and the
 mirror's returned `EFI_UNSUPPORTED`. The letters differ at Apriori 11 as well (`SO`
 against `s`) and that is not a second disagreement: `s` means the start did not fail,
 not that the status was zero, and `DALSYS`'s status was non-zero with bit 63 clear.
-Two things follow. First, the coincidence of index 19 is **not** corroboration — the
-phone fails to *load* `RpmhDxe` there, and the mirror loads it and asserts inside it,
-which is one entry index reached by two mechanisms. Second, the mirror's `CmdDbDxe` is
+Two things follow. First, the coincidence of the 19th position is **not** corroboration —
+the phone fails to *load* `PdcDxe` there, and the mirror loads `RpmhDxe` and asserts inside
+it, which is one slot occupied by two adjacent entries reached by two mechanisms. Second, the mirror's `CmdDbDxe` is
 a genuine divergence and it is confounded: the seed's SMEM has no heap, which two
 earlier entries say in SMEM's own words — `EnvDxe` at Apriori 2 cannot read the
 partition table, `DALSys`'s allocation fails at Apriori 11 — and the phone's payload —
@@ -118,7 +136,13 @@ capture is already its control.
 
 Two readings are therefore owed to the phone, and both are short — `P2 WHAT` for
 the value behind `K 11 SO`'s non-error, non-`EFI_STATUS` letter, and
-`P2 APRI unhit=` for the one Apriori name that matches nothing in this volume.
+`P2 APRI unhit=` for how many Apriori entries the walk never handed to the
+promotion loop, which is a *discovery* count and not a presence one: no name is
+missing from any of the 121 volumes measured, so the number is 1 on a completed
+walk (index 0 alone) and 24 at a 46-promotion stop. Its twin, `P2 APRI first=`,
+now has a single admissible value on this disk —
+`D6A2CB7F-6A18-4E2F-B43B-9920A733700A` — which makes the phone's own array row the
+cheapest instrument the record is missing (`docs/08` step 4.130).
 Neither blocks building. The payload that carries the `P2` digest literals is
 already built and hashed — `work/out/p2-variants/Mu-gauguin-silicon-gzip.img`,
 `90b21643…` — and still owes its first reading, under *先读屏，再刷下一次*.

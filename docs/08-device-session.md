@@ -26435,3 +26435,231 @@ partition was written, and no device is attached to this machine — `lsusb`, `a
 | corrects | step 4.128's `docs/08:1651-1656`, in all three of its claims beyond the first: `883CC780-0281-F0F6-A313-4A26F03EF2E0` is **not a GUID and is not required by `WatchdogTimer` or `RealTimeClockRuntimeDxe`** — it is the byte-wise reading of a 16-byte window inside three 36-byte bodies that straddles the tail of a `…0080C73C8881`-suffixed arch-protocol GUID, the `0x02` `PUSH` opcode and the head of `gEfiPcdProtocolGuid`, it occurs exactly 3 times in the volume (file#8, #16, #25 — the three files that pairing predicts), 0 times in every built image and 0 times anywhere in the tree including `Build/`; the same paragraph's *"25 of the 27 that have one are the bare `(TRUE)`"*, when **none** of the 27 is — `(TRUE)` is what the INFs write and the library merge replaces it; and the paragraph's conclusion that there is a *"second missing-provider signal"*, when the census finds **no unsatisfiable dependency in the volume at all**; this step's own first two drafts of the reader, which keyed sections on `0x02` and aligned them to 8 bytes and each reported a confident, well-formed census that was wrong; and the reading of a `[Depex]` line in an INF as a statement about the built artifact, which the `WatchdogTimer` pair (one INF term, two section terms) refutes in both directions |
 | does not close | the P3 gate and the owed panel reading of the flashed 4.74 set; whether `E722B03F-…` is installed as a protocol by `UsbConfigDxe` or `UsbfnDwc3Dxe`, since the bytes occurring in those two files show a candidate producer in the image and not an installation; which of the 27 `L` letters each `K` row's `free=` value belongs to, which needs `P2 FREE largest=` from the device; the phone's own `K` rows and its 46-letter `P2 SEQ`, unchanged; and the display variant, which is built and unflashed — the switch is measured but the firmware it produces has never been read off a panel |
 | not an action | nothing was built for the device, nothing was flashed and no partition was written; every reading in this step is off files already on disk, and no device is attached to this machine. The porting goal is not advanced by it: P3's display, USB-host and buttons items remain unfinished and P4 and P5 are not begun |
+
+
+## Step 4.130 — every archived payload's array is 70 entries with nothing missing, so the 46 characters are a stopped walk and the letters are not array indices
+
+Step 4.128 left one question open in as many words: *"whether the 46-letter `P2 SEQ` in this
+record is a reading of an older image, which is the only reading consistent with a 70-entry array
+and a 69-entry denominator but which no capture here confirms."* The question has a device-free
+half, and it is the last one in the record that does: whether any build on this disk carries an
+array the 46 characters could be a **completed** walk of. This step reads all 135 distinct `.img`
+contents under `work/` and answers it — no — and then, because that answer forces the string to be
+a *stopped* walk instead, reads the promotion loop's own slot map and finds that the map the record
+has been using is not the loop's, and that 33 of the 46 slots move. Nothing here is device work:
+every reading is off a file already on disk, and no device is attached to this machine.
+
+### The array, over every artifact on the disk
+
+`tools/apriori-order.py` and `tools/fv-inventory.py` read together, per file, over all 135 distinct
+`.img` contents under `work/`. **121 of them carry an Apriori section**, and all 121 read the same
+five values:
+
+| what | value | spread over 121 payloads |
+|---|---|---|
+| array length | **70** entries | one value (the 122nd is `Mu-surya.img`, another board's build, at 71) |
+| entries naming a file the volume does not have | **0** | one value |
+| file type of entry 0 | **`0x05` `DXE_CORE`** | one value |
+| file type of entries 1..69 | **`0x07` `DRIVER`** | 8,350 = 121 × 69 entries, no other type |
+| the array's first / last GUID | `D6A2CB7F-6A18-4E2F-B43B-9920A733700A` / `CCCB0C28-4B24-11D5-9A5A-0090273FC14D` | one value each |
+
+The type histogram is exact and has nothing else in it: `(index 0, DXE_CORE) 121`,
+`(index > 0, DRIVER) 8350`, and **no entry beyond index 0 whose file is not a `DRIVER`** — not a
+`FREEFORM`, not a `FV_IMAGE`, not a duplicate GUID. So on every archived build the array is the
+70-name a-priori front of one volume, entry 0 is the core file, and every one of the other 69 names
+a distinct driver that is present.
+
+That fixes the denominator and the numerator both, because the two are not independent:
+`CoreAddToDriverList` is called for every file the walk returns that is neither a core nor a
+volume image (`Dispatcher.c:2049-2054`; the `DXE_CORE` branch at `:1972-1990` fills
+`gDxeCoreLoadedImage->FilePath` instead and adds nothing), and the promotion loop matches with
+`CompareGuid (&DriverEntry->FileName, &AprioriFile[Index]) && (FvHandle == DriverEntry->FvHandle)`
+(`:2104-2124`). Entry 0 is `gDxeCoreFileName`, so it can never be in `mDiscoveredList`; entries
+1..69 all can, and each matches once. **A completed walk of any archived build therefore promotes
+69 entries, prints a 69-character `P2 SEQ`, and — because `unhit` is `entries - apriori` by
+construction — reads `unhit=1`, the 1 being index 0 alone.**
+
+That is the plan's owed `P2 APRI unhit=` in its completed-walk form, and it is derived rather than
+awaited. It also disposes of step 4.128's question in the direction the capture does not:
+`P2 SEQ` is `mP2Apriori` characters long (`SeqLen = mP2Apriori`, `Dispatcher.c:2333-2342`), so a
+46-character line from a completed walk would need a 47-entry array. **No build on this disk has
+one**; the shortest array here is 70, and `APRIORI.inc` has held the same 72 INF lines (70 active,
+two under `!if`) since the commit that created it. The 46 characters are not an older image. They
+are a walk that stopped.
+
+### The loop's map is not the record's map
+
+`P2 SEQ` is filled *inside the match*, in the loop's own index order (`Dispatcher.c:2115-2120`), so
+slot *k* belongs to the **k-th entry that matched** — in increasing Apriori index, skipping the ones
+that did not. Step 4.12 quotes exactly that mechanism and then draws a wider conclusion from it:
+
+> `P2 SEQ`'s index *i* is Apriori entry *i + 1*, and the reason is in the promotion loop … the array
+> is walked in order and the ring buffer is filled **inside the match**
+
+The reason is right and the conclusion needs one more premise: *i + 1* holds only if entries
+1..*i*+1 **all** matched, i.e. only if the matched set is the contiguous prefix {1..N}. A stopped
+walk's matched set is not that. It is the *cut* — every entry whose file the walk got as far as,
+which on this volume is a scattered set, because `APRIORI.inc`'s order is the INF order and the
+volume's is the link order and the two interleave: ap66..ap69 sit at physical 14, 20, 21 and 22,
+while ap47..ap61 sit at 51..72.
+
+`tools/fv-census.py` already says the identity map is "an assumption and not a reading"
+(`:432-439`) and that the letters "cannot choose between the two maps" (Step 4.104/4.105), and
+`tools/apriori-prefix.py` prints the cut batch explicitly. What neither was in a position to do is
+*measure* which of the two the stopped walk actually has, because that needs the array read whole
+over the whole archive — which is the section above. With it, the choice is arithmetic:
+
+| | payload volume (123 files) | build-tree `FVMAIN.Fv` (126 files) |
+|---|---|---|
+| stops whose promotion count is exactly 46 | physical **49** and **50**, both `miss=14 PlatformInfoDxeDriver`, `unhit=24` | the same two |
+| slots where the two maps name different entries | **33 of 46** | **33 of 46** |
+| first slot that differs | **13** | **13** |
+
+At both stops the matched set is `{1..13, 15..21, 23..34, 36..43, 45, 46, 66, 67, 68, 69}` — 46
+entries, the first thirteen of them in array order and then a run with holes and a four-entry tail
+from the far end of the array. Slots 0..12 agree between the maps. From slot 13 on they do not, and
+the shift grows as entries drop out (ap14, ap22, ap35, ap44 are the four holes below 46).
+
+### The anchors that move
+
+The record's account of the string is made of named anchors, and the ones that sit in the differing
+region move. Read off the payload volume's `FVMAIN`, at the stop:
+
+| the record says | slot | identity map | the loop's map |
+|---|---|---|---|
+| *"the failure begins at SEQ 18 = Apriori 19 = `RpmhDxe`"* | 18 | ap19 `RpmhDxe` | **ap20 `PdcDxe`** |
+| *"the one exception being `ShmBridgeDxe` (SEQ 21)"* | 21 | ap22 `ShmBridgeDxe` | **ap24 `DiskIoDxe`** — and `ShmBridgeDxe` is **unhit** at that stop, so it was never promoted and never loaded |
+| `VariableRuntimeDxe` is `ap31 pos 30` | 30 | ap31 `VariableRuntimeDxe` | **ap33 `SPMI`**; ap31 is at slot **28** |
+| the 27 `L`s include `PmicDxe`, `BdsDxe` | 34, 43 | ap35, ap44 | both **unhit** — never handed to the promotion loop at all |
+
+The last row is the one with a consequence beyond naming: `PmicDxe` and `BdsDxe` are counted among
+the 27 failed loads by the identity map, and under the loop's map they were never *attempted*, which
+is a different fault with a different fix. `tools/fv-census.py` had already flagged this pair
+("ap35 PmicDxe and ap44 BdsDxe … are entries a stop at 49 or 50 leaves *unhit* instead"); this step
+confirms it slot for slot and reaches it the same way the tool did, from the cut rather than from
+the identity map.
+
+The 23 unhit at that stop are, in full: `PlatformInfoDxeDriver` (ap14), `ShmBridgeDxe` (ap22),
+`PmicDxe` (ap35), `BdsDxe` (ap44), and ap47..ap65 — `AdcDxe` through `DDRInfoDxe`. Two of them,
+`ShmBridgeDxe` and `BdsDxe`, are named in the record as things the phone did something with, and
+under this stop neither was reached.
+
+### What the map cannot change
+
+Four things in the string are map-free and survive:
+
+- **the counts.** 46 promoted, 19 `s`, 27 `L`, `unhit=24`, and `46 + 24 = 70`. `unhit` is
+  `entries - apriori` by construction, and `P2 STATS apriori=46/70` is the same arithmetic printed
+  twice. The plan's *"46 matches, 19 started, 27 failed to load"* is correct as a count.
+- **the nine absent protocols and their producers.** Eight of the nine producers — ap31
+  `VariableRuntimeDxe` (which owns two of the nine), ap34 `ResetSystemRuntimeDxe`, ap36
+  `WatchdogTimer`, ap37 `SecurityStubDxe`, ap38 `EmbeddedMonotonicCounter`, ap39 `RealTimeClock`,
+  ap42 `CapsuleRuntimeDxe` — still carry `L` under the loop's map, at slots 28, 31, 32, 33, 34, 35
+  and 38 instead of 30, 33, 35, 36, 37, 38 and 41. The eighth, ap44 `BdsDxe`, carries no letter at
+  all and is unhit: its protocol is absent by non-discovery rather than by a failed load, and
+  `arch-protocol-census.py`'s letter for it (slot 43) belongs to `ConPlatformDxe` (ap67).
+- **the partition's direction.** The four present protocols' producers (ap5 `RuntimeDxe`,
+  ap6 `ArmCpuDxe`, ap8 `MetronomeDxe`, ap9 `ArmTimerDxe`) are at slots 4, 5, 7 and 8 under both
+  maps, inside the opening run of 18 `s`.
+- **the conclusion the partition was drawn for.** Nine protocols absent, and the drivers that would
+  have installed them did not run. That comes from the source census in
+  `tools/arch-protocol-census.py`, and the letters are not what establishes it.
+
+Which is the point worth carrying forward, because it is the same failure this record keeps
+collecting — **a reading that returns a clean, plausible answer and is wrong about which quantity
+it measured.** `arch-protocol-census.py`'s docstring calls the string *"positional and independently
+corroborated - 46 letters against `P2 STATS apriori=46/70`, with two anchors from a volume reading
+that did not come from the string"*, and asserts the bijection rather than printing counts "because
+two counts that agree are a coincidence until the *same* nine names land on the same nine letters."
+Under either map every one of the eight producers' slots lies inside the string's solid run of `L`
+— slots 30..43 under the identity map, 28..38 under the loop's — and all four present producers'
+slots lie inside the opening run of `s`. So the eight names *cannot* land on anything but `L` and
+the four cannot land on anything but `s`: **the bijection is entailed by the array indices and the
+run boundaries, and the letters supply no evidence about the names at all.** The tool's verdict is
+not wrong; it is unfalsifiable by the instrument it cites, which is worse for a record than being
+wrong, because there is no reading that would have caught it.
+
+### The fixture gains a fifth impossible line
+
+`/tmp/p2screen.txt` is the pre-Step-4.56 decoder fixture, and Step 4.56 established its status by
+exhibiting three of its lines that the firmware cannot print. It cannot print this one either:
+
+```
+P2 APRI first=EBF342FE-B1D3-4EF8-957C-8048606FF671 last=462CAA21-7614-4503-836E-8AB6F4662331
+```
+
+`first=`/`last=` are `%g` of `mP2ApriFirst`/`mP2ApriLast`, and those two are copies of
+`AprioriFile[0]` and `AprioriFile[AprioriEntryCount - 1]` taken where the array is read
+(`Dispatcher.c:2091-2092`). Across all 121 archived payloads both are one value each:
+`D6A2CB7F-6A18-4E2F-B43B-9920A733700A`, the DxeCore file's `NameGuid`, and
+`CCCB0C28-4B24-11D5-9A5A-0090273FC14D`. The fixture prints
+`first=EBF342FE-B1D3-4EF8-957C-8048606FF671 last=462CAA21-7614-4503-836E-8AB6F4662331`;
+`EBF342FE-…` is `gEfiCallerIdGuid`. Two more of the fixture's rows join it:
+
+- `P2 APRI matched=0..45 unhit=24` — `matched` prints `mP2ApriMatchFirst`..`mP2ApriMatchLast`, both
+  written only inside the match branch, and index 0 can never match, because the core is never in
+  `mDiscoveredList`. A stop at physical 49 or 50 on this volume prints **`matched=1..69`**: the
+  array's four-entry tail sits at physical 14..22, *below* the stop, so the highest matched index is
+  69 even though only 46 entries matched. A line reading `1..69` beside `unhit=24` is the signature
+  of this stop, and it is also why `matched=` cannot witness how far the walk got.
+- `P2 APRI miss=18 6D6F6475-6C65-0000-0000-000000000000` — `6D 6F 64 75 6C 65` is the ASCII string
+  `module`. `miss=` prints a `%g` of an Apriori **entry**, and every entry on every archived build
+  is a GUID the volume contains.
+
+With the three Step 4.56 lines that makes five, and they are independent of each other: the array's
+two endpoints, the impossibility of a match at index 0, a documented GUID-vs-text mixup, and the
+three print paths 4.56 read. Nothing in the record's account of the device rests on this file
+(`docs/08` Step 4.12's string comes off the 2026-09-23 panel photograph), but the file has been
+quoted more than once as if it did, and it should stop being quoted at all.
+
+### Two sentences in the plan, corrected
+
+- `docs/00-plan.md:40-41`: *"The string is `ssss…LLLLLLLLLLLLLLLLLLLLLLLL` — 46 matches, 19 started,
+  27 failed to load, and not one `?`, so the batch drained rather than stopping."* The counts stand
+  and the inference is backwards. A 46-character line **is** the stopping: the two stops this volume
+  allows that produce exactly 46 promotions are physical 49 and 50, and a completed walk would
+  print 69. Zero `?` says the 46 promoted drivers were all *attempted*, which is a statement about
+  the drain and not about the walk. The same paragraph's two named anchors move with the map:
+  *"the failure begins at SEQ 18 = Apriori 19 = `RpmhDxe`"* is Apriori 20 = `PdcDxe`, and
+  *"the one exception being `ShmBridgeDxe` (SEQ 21)"* is Apriori 24 = `DiskIoDxe`, with
+  `ShmBridgeDxe` unhit.
+- `docs/00-plan.md:121`: *"`P2 APRI unhit=` for the one Apriori name that matches nothing in
+  this volume."* No Apriori name is missing from any of the 121 volumes measured here. The number
+  `unhit=` reports is a *discovery* count, not a presence one: 1 on a completed walk (index 0
+  alone), 24 at a 46-promotion stop, where the 24 are index 0 plus the 23 entries above the stop.
+  The device's own value is still the reading that would decide which of the two worlds the phone
+  ran in, and it is still owed.
+
+### The two owed readings now have predicted values
+
+Both of the phone's array rows can now be checked against a single number rather than interpreted:
+
+```
+P2 APRI bytes=1120 entries=70 sum=a998b263
+P2 APRI first=D6A2CB7F-6A18-4E2F-B43B-9920A733700A last=CCCB0C28-4B24-11D5-9A5A-0090273FC14D
+```
+
+Any archived build prints exactly that, and `a998b263` is over the whole 1120 bytes, so a `sum=`
+that differs says the running image is not this image. `P2 APRI first=` is now the cheapest
+instrument in the set for the question step 4.128 left open: it is one line, it is printed by the
+same `P2Digest` pass as everything else, and there is only one admissible value for it on this
+disk.
+
+### Also worth writing down
+
+`CoreDispatcher ()` returning is not the walk reaching the end of the volume. Step 4.128 read the
+phone's stop as `DxeMain.c:593`, which is after `CoreDispatcher ()` at `:562`, and concluded that
+"the dispatcher returned and its whole batch ran." That is right about the *batch* — the scheduled
+queue was dispatched and the function returned — and it is silent about the *walk*, which may have
+stopped well inside the volume and handed over a smaller batch. The length of `P2 SEQ` is the
+instrument for the second event and not the first, and on this archive 46 characters can only be
+the second.
+
+| | |
+|---|---|
+| instrument | all 135 distinct `.img` contents under `work/` read with the project's own `tools/apriori-order.py` and `tools/fv-inventory.py` (array length, per-entry file presence, per-entry file type, first and last GUID); `tools/fv-census.py` run over both the build tree's `FVMAIN.Fv` and the payload's inner volume, its promotion table replayed and its `promoted()`/`first_miss()` arithmetic reproduced independently; the promotion loop and the `DXE_CORE` / `FV_IMAGE` / `CoreAddToDriverList` branches read at `Dispatcher.c:1942-2054`, `:2063-2074` and `:2104-2124`; `P2WhyLetter` at `:556-592`; the `P2 APRI` / `P2 SEQ` / `P2 STATS` print formats at `:2279-2316`, `:2339-2348` and `:2431`, and the `mP2ApriFirst`/`mP2ApriLast` copies at `:2091-2092`; the ASCII of a fixture GUID; and `docs/08` Steps 4.12, 4.56, 4.104, 4.105, 4.124, 4.126 and 4.128 — nothing was built, flashed or written, and no device is attached |
+| shows | that **121 of the 135** distinct `.img` contents under `work/` carry an Apriori section and that all 121 agree on every field: **70 entries**, **zero** entries naming a file the volume lacks, entry 0 the **`DXE_CORE`** file and entries 1..69 all **`DRIVER`** (8,350 = 121 × 69, no other type), and the array's endpoints a single value each, `D6A2CB7F-6A18-4E2F-B43B-9920A733700A` and `CCCB0C28-4B24-11D5-9A5A-0090273FC14D`; that `CoreAddToDriverList` is not called for the core file, so a **completed walk of any archived build promotes 69 entries, prints a 69-character `P2 SEQ` and reads `unhit=1`** — which answers step 4.128's open question *no* for this archive, since a 46-character line would need a 47-entry array and none exists; that `P2 SEQ` is filled inside the match in loop-index order, so slot *k* belongs to the *k*-th **matched** entry, and the only two stops on this volume that produce 46 promotions — physical **49** and **50**, both `miss=14 PlatformInfoDxeDriver`, `unhit=24` — match the cut `{1..13, 15..21, 23..34, 36..43, 45, 46, 66..69}`, in which **33 of the 46 slots name a different entry than the identity map does**, from slot **13** on, identically on the payload volume (123 files) and the build-tree volume (126 files); that the record's named anchors therefore move — slot 18 is `PdcDxe` (ap20) not `RpmhDxe` (ap19), slot 21 is `DiskIoDxe` (ap24) not `ShmBridgeDxe` (ap22), `VariableRuntimeDxe` is at slot **28** not 30, and `PmicDxe` (ap35) and `BdsDxe` (ap44) are **unhit** rather than among the 27 failed loads; that what survives is map-free — the counts (46/19/27, `unhit=24`, `46+24=70`), seven of the eight producers of the nine absent protocols still carrying `L` at shifted slots, the four present producers at slots 4/5/7/8 inside the opening 18-`s` run, and the nine-absent conclusion itself, which comes from the source census; that every one of the eight producers' slots lies inside the string's solid `L` run under **both** maps, so `arch-protocol-census.py`'s asserted bijection is entailed by the array indices and the run boundaries and the letters supply no evidence about the names — a verdict that is unfalsifiable by the instrument it cites; that `matched=` cannot witness the walk either, since the same stop prints `matched=1..69` with only 46 matched, because the array's four-entry tail sits at physical 14..22 below the stop; that the fixture `/tmp/p2screen.txt` adds two impossible lines to Step 4.56's three (`first=EBF342FE-…`, `gEfiCallerIdGuid`, where every volume reads `D6A2CB7F-…`; and `matched=0..45`, index 0 being unmatchable), plus a third tell (`miss=18 6D6F6475-6C65-…`, the ASCII string `module` masquerading as an Apriori entry); and that a completed walk's `P2 APRI bytes=1120 entries=70 sum=a998b263` / `first=D6A2CB7F-… last=CCCB0C28-…` is now a single-valued prediction for the phone |
+| adds | the array's statistics taken over the **whole archive** rather than one payload, which is what turns "70 entries" from a property of the image in hand into a property of every build on the disk and makes the 69-entry completed-walk denominator derived rather than assumed; the 46-character line's status as a **stopped walk** by arithmetic rather than by inference, with the two admissible stops named; the promotion loop's own slot map stated as the loop's (k-th match, increasing Apriori index) and separated from the identity map the record has used, with the 33-slot displacement and its first index; the four named anchors that move and the four quantities that do not; the measurement that the `L` run's width makes the letters unable to corroborate any producer name, which is a statement about a committed tool's premise and not about its arithmetic; `matched=`'s blindness, which follows from the array's tail sitting below the stop; the fifth and sixth impossible lines in the decoder fixture; and the two `P2 APRI` lines as single-valued predictions, which makes the phone's own array row the cheapest open question in the record |
+| corrects | `docs/00-plan.md`'s P2 paragraph (lines 40-41 as they stood before this step's own edit to them), whose *"46 matches, 19 started, 27 failed to load"* is right as a count and whose *"and not one `?`, so the batch drained rather than stopping"* is backwards — a short line is the stopping — and whose two named anchors then move with the map; the plan's owed-readings paragraph (line 121 as it stood), whose *"the one Apriori name that matches nothing in this volume"* describes a presence fault when `unhit=` counts a discovery one and no name is missing from any measured volume; the plan's step 4.125 paragraph (line 82 as it stood), whose *"the same entry index at which the device's `P2 SEQ` records its first failure"* (requoted at `docs/08:26020`) is the same *slot* and not the same entry, since under the loop's map the phone's first `L` at slot 18 is ap20 `PdcDxe` while the mirror's stop is ap19 `RpmhDxe`; the plan's step 4.126 paragraph (lines 101 and 108 as they stood), whose *"`P2 SEQ`'s index *i* is Apriori entry *i + 1*"* holds only on a completed walk and whose *"the coincidence of index 19"* is a coincidence of slot; Step 4.12's `P2 SEQ`'s index *i* is Apriori entry *i + 1*, which its own quoted mechanism does not give except on a contiguous prefix and which is false from slot 13 on at both admissible stops; Step 4.128's open question, answered *no* for this archive; `tools/arch-protocol-census.py`'s docstring premise that the string is *"positional and independently corroborated"*, together with the per-protocol `ap`/`pos` columns derived from it; the fourth line of `tools/fv-census.py`'s `=== SEQ join ===` framing, which is already flagged as an assumption in the tool and whose numbers this step supplies; and the reading of `CoreDispatcher ()` returning as the walk having reached the end of the volume, which it does not establish |
+| does not close | the P3 gate and the owed panel reading of the flashed 4.74 set under *先读屏，再刷下一次*; which of the two admissible stops — physical 49 or 50 — the phone's walk reached, since their batches are byte-identical and only `P2 WALK seen=` separates them (48 against 49); the phone's own `P2 SEQ` length, `P2 APRI first=`, `unhit=` and `P2 APRI entries=`, which are the four readings that would put the phone on one side of this step or the other; what the phone's payload volume's own physical order is, since the two volumes measured here agree on the promotion table but the payload it is running carries no capture; which of the 27 `L` letters each `K` row's `free=` belongs to; whether `E722B03F-…` is installed as a protocol; and the whole of P4 and P5 |
+| not an action | nothing was built for the device, nothing was flashed and no partition was written; every reading in this step is off files already on disk, and no device is attached to this machine. The porting goal is not advanced by it: P3's display, USB-host and buttons items remain unfinished and P4 and P5 are not begun |
