@@ -23161,3 +23161,178 @@ was plausible enough to have survived review.
 `:582`, `:593`, `:606`; `tools/depex-census.py:62-71`, `:73-89`, `:91-95`, `:97-106`, `:108-114`;
 in this document `:734`, `:20272`, `:22271-22274`, `:22333-22335`, `:22433`, `:22816-22818`;
 `docs/00-plan.md:335-338`, `:348-363`; `tools/build-apriori-variant.sh:36-45`.
+
+
+## Step 4.117 — `MEMORY_PROTECTION` is a name the build was given and nothing reads
+
+`work/uefi/Mu-Silicium/Build/gauguinPkg/DEBUG_CLANGPDB/BuildOptions` is four lines long, and
+its first line is the build's own record of the defines it was handed:
+
+```
+gCommandLineDefines: {'ONE_CRYPTO_PATH': '…', 'SHARED_CRYPTO_PATH': '…',
+'BUILDID_STRING': 'Unknown', 'MEMORY_PROTECTION': 'TRUE', 'SHIP_MODE': 'FALSE',
+'ENABLE_SECUREBOOT': '0', 'FD_BASE': '0x9fc00000', 'FD_SIZE': '0x300000',
+'FD_BLOCKS': '0x300', 'ARCH': 'AARCH64'}
+```
+
+Ten defines, and two of them name a security feature. `'MEMORY_PROTECTION': 'TRUE'` sits two
+entries to the left of `'ENABLE_SECUREBOOT': '0'`, and read as a pair they say *protection on,
+secure boot off* — which is precisely the reading that would contradict the two places this
+document concludes memory protection is inert (Step 4.12 at `:2154-2167`, Step 4.22 at
+`:4013-4059`). The second of the pair is real and load-bearing: `SiliciumPkg.dsc.inc:13`
+hands it to the compiler as `-D CLANG -D ENABLE_SECUREBOOT=$(ENABLE_SECUREBOOT)`,
+`Extra.fdf.inc:18` and eight more `!if` sites in the DSC branch on it, and
+`SecureBootHandler.c:27`, `:139`, `:216`, `:296` are four `#if ENABLE_SECUREBOOT == 1` blocks
+— which is why `ENABLE_SECUREBOOT=0` deletes `SiPolicy.p7b` rather than creating it.
+**The first is read by nothing at all.**
+
+### The census
+
+Each of the ten defines, and the first place that mentions it (tree-wide, `Build/` excluded):
+
+| define | references | the first one |
+|---|---|---|
+| `ONE_CRYPTO_PATH` | 13 | `Mu_Basecore/CryptoPkg/Readme.md:461` |
+| `SHARED_CRYPTO_PATH` | 1 | `Mu_Basecore/CryptoPkg/Binaries/BaseCryptoDriver_ext_dep.json:11` — `"var_name": "BLD_*_SHARED_CRYPTO_PATH"` |
+| `BUILDID_STRING` | 5 (3 code, 2 docs) | `Mu_Basecore/BaseTools/Plugin/FdSizeReport/FdSizeReportGenerator.py:62` |
+| **`MEMORY_PROTECTION`** | **0** | — |
+| `SHIP_MODE` | 3 (2 code, 1 doc) | `Common/Mu/MfciPkg/MfciPkg.dsc.inc:15-16` |
+| `ENABLE_SECUREBOOT` | 9 `$(…)` + 4 `#if` | `Silicon/Silicium/SiliciumPkg/SiliciumPkg.dsc.inc:13` |
+| `FD_BASE` | 86 | `Platforms/Xiaomi/gauguinPkg/gauguin.fdf:7` |
+| `FD_SIZE` | 171 | `gauguin.fdf:8` |
+| `FD_BLOCKS` | 85 | `gauguin.fdf:13` |
+| `ARCH` | 10, all inside BaseTools | `Mu_Basecore/BaseTools/Source/Python/GenFds/AprioriSection.py:80` |
+
+The nine that are read are read by three different mechanisms, and naming them is what makes
+the tenth row a measurement rather than a grep that missed:
+
+1. **`$(X)` in DSC/FDF/INF text** — the ordinary route, and the one `FD_BASE`, `FD_SIZE`,
+   `FD_BLOCKS`, `SHIP_MODE`, `ENABLE_SECUREBOOT` and `ONE_CRYPTO_PATH` all take. Our own FDF
+   reads the first three, at `gauguin.fdf:7`, `:8` and `:13`.
+2. **`BLD_*_X` read by a build plugin** — `SHARED_CRYPTO_PATH` is consumed this way and no
+   other way: one JSON file under `CryptoPkg/Binaries/` declares the variable name, and no
+   `$(SHARED_CRYPTO_PATH)` exists anywhere in the tree. `BUILDID_STRING` is the same shape,
+   read by `FdSizeReportGenerator.py:62` and `OverrideValidation.py:638`.
+3. **`-D X=$(X)` for a source `#if`** — `ENABLE_SECUREBOOT` again, at `SiliciumPkg.dsc.inc:13`.
+
+For `MEMORY_PROTECTION`, none of the three holds. `$(MEMORY_PROTECTION)` occurs in zero files.
+No plugin reads `BLD_*_MEMORY_PROTECTION`: the string occurs in 113 files, and 85 of them are
+the `DeviceBuild.py` defaults that *write* it — `Platforms/Xiaomi/gauguinPkg/DeviceBuild.py:163`,
+`SetValue ("BLD_*_MEMORY_PROTECTION", "TRUE", "Default")` — 9 are `UefiTestingPkg`'s
+`MemoryProtectionTest` package, 1 is a framework doc, and the remaining 18 name the settings
+*type* (`DXE_MEMORY_PROTECTION_SETTINGS`), the HOB GUID, the debug protocol, or QC's
+`TZ_SVC_MEMORY_PROTECTION`; not one of them names the define. And no `#if` tests it: the only
+seven `#if*` lines in the tree containing the name are include guards
+(`#ifndef DXE_MEMORY_PROTECTION_SETTINGS_H_` and six siblings).
+
+### What Step 4.22 rests on, and the third switch it did not have to close
+
+Memory protection has exactly three switches a reader could reach for, and Step 4.22 closed
+the first two from the source:
+
+| switch | where a reader would look | what the tree says |
+|---|---|---|
+| a policy PCD | `MdeModulePkg.dec` | both are commented out (`:1687`, `:1719`), and `BuildOptions:2` — the build's own record of PCD overrides — is `BuildOptionPcd: []` |
+| a settings HOB | `gDxeMemoryProtectionSettingsGuid` | the DEC, the header, `DxeMain.inf:133` (`## CONSUMES ## HOB`), and the two readers — no producer |
+| a build define | `BuildOptions:1` | this step |
+
+The middle row is where this step adds something instead of repeating. Step 4.22 searched
+across the whole `work/uefi` tree for the GUID name, for the literal `0x9ABFD639`, and for
+the settings type name, and found only the definition and the consumers. The search was run
+again here with two further needles — the bare literal and the packed sixteen bytes — and it
+comes out the same, and comes out **platform-independent**: `9ABFD639` occurs in exactly two
+files, `MdeModulePkg.dec` and `DxeMemoryProtectionSettings.h`, and the packed bytes
+(`39d6bf9ad0d1ff4ebdb67ec4190d17d5`) occur in none. So the producer is missing not from this
+port but from all 85 platforms in the tree, and the framework ships everything except it: the
+consumer (`DxeMain.inf:102` links the real `DxeMemoryProtectionHobLib`, and
+`SiliciumPkg.dsc.inc:181` maps the class to that instance, not to `…HobLibNull`, at `!if`
+depth 0), both libraries, the settings header, and the initialiser macro
+`DXE_MEMORY_PROTECTION_SETTINGS_DEBUG` (`DxeMemoryProtectionSettings.h:191`), whose only two
+occurrences in the tree are its own definition and the framework's doc at
+`Mu_Basecore/Docs/feature_memory_protection.md:255`.
+
+The one thing a source census cannot exclude is a producer that lives outside the source tree
+in a prebuilt blob. That question belongs to Step 4.22 rather than here, and Step 4.22 did not
+leave it to a census: its conclusion is about which branch of
+`DxeMemoryProtectionHobLibConstructor` runs — `GetFirstGuidHob` at `:268`, the zeroing at
+`:298` — and this step's flag cannot move that branch either way. It can only fail to move it.
+
+### What it would take to turn memory protection on, and why that is not a P2 action
+
+It would take a module that calls `BuildGuidDataHob` with `gDxeMemoryProtectionSettingsGuid`
+and a `DXE_MEMORY_PROTECTION_SETTINGS`. No flag flip does it, because the flag that names it
+has no reader to flip. That is a P4-shaped task, and there is a P2 reason to leave it alone:
+Step 4.12 counted `ProtectUefiImage`'s own `EFI_OUT_OF_RESOURCES` exits — the
+`IMAGE_PROPERTIES_RECORD` allocation and the three `AllocatePool` sites inside `GetImageList`
+(`:2148-2152`) — and they are unreachable *only* because `gDxeMps` is zero. Turning protection
+on during P2 would add four allocation sites to the failure path of every image load, on a
+wall that has not been passed and whose 27 `L`s are still unexplained.
+
+### What this step does not say
+
+- It does not say the framework intends protection off. 85 `DeviceBuild.py` files set the
+  flag to `TRUE` with the reason string `"Default"`, so the intent is the opposite; the intent
+  is expressed in a define nothing reads.
+- It says nothing about the wall. No `L`, no promotion, no count and no input to the gate
+  moves.
+- It is not a correction to Step 4.12 or to Step 4.22. Both are right as they stand, and
+  neither of them mentions the build define.
+
+### The step's own error, and how it was caught
+
+**The first census reported `readers=0` for all ten defines, including `FD_BASE`.** The loop
+built its pattern with `grep -rIn "\$($v)"` — a **basic** regular expression — and in GNU
+grep's BRE the pattern `$(FD_BASE)` matches nothing. Verified directly on a file whose answer
+was already known from an earlier session: `grep -e "\$(FD_BASE)"
+Platforms/Xiaomi/gauguinPkg/gauguin.fdf` exits 1, while `grep -F -e "\$(FD_BASE)"` on the same
+file prints `:7 BaseAddress = $(FD_BASE)|…`. All three quoting variants produce the same
+pattern string, so the fault is in the matcher and not in the quoting, and the fix was `-F`.
+What caught it was the positive control: a census that reports `FD_BASE` unread on a tree whose
+own FDF is built out of it is reporting a broken census, not a missing reader. The false
+**zero** is the mirror of the one-byte `EFI_USB2_HC_PROTOCOL` needle recorded earlier in this
+document — the same class of error, and the same lesson: the control has to be a case whose
+answer is known *before* the pattern is trusted.
+
+### What was written
+
+- `docs/08-device-session.md` — this section only (173 lines, `:23166-23338`), appended after
+  Step 4.116, so every citation into the document from itself and from `docs/00-plan.md` still
+  resolves to the line it did: the document stood at **23,163** lines until this section was
+  appended, and every line it already had is unchanged.
+- `docs/00-plan.md` — **unchanged.** It contains no mention of memory protection (checked case-
+  insensitively, along with `docs/07`), and this finding bears on no gate text and no count in
+  it.
+- **No payload was built and nothing was flashed.** `work/out/usb-host/Mu-gauguin-xhci-host-gzip.img`
+  is still `f1a7106b76f98e11bb2608557e76085e1b3dcba86fda472c89bcefa1783f1c84` and still unflashed,
+  and it still may not stand in for the payload in `boot`.
+- **The device is absent**, so the reading owed under **先读屏，再刷下一次** is still owed.
+  `boot` is untouched and still holds `90b21643…`. `userdata`, the partition table and the
+  firmware LUN are untouched; writes go to `boot` only.
+
+### Read this step
+
+`work/uefi/Mu-Silicium/Build/gauguinPkg/DEBUG_CLANGPDB/BuildOptions:1`, `:2`;
+`Platforms/Xiaomi/gauguinPkg/DeviceBuild.py:163`, `:160`;
+`Silicon/Silicium/SiliciumPkg/SiliciumPkg.dsc.inc:13`, `:181`, `:269`, `:300`;
+`Silicon/Silicium/SiliciumPkg/Extra.fdf.inc:18`;
+`Silicon/Silicium/SiliciumPkg/Library/SecureBootHandlerLib/SecureBootHandler.c:27`, `:139`,
+`:216`, `:296`; `Platforms/Xiaomi/gauguinPkg/gauguin.fdf:7`, `:8`, `:13`;
+`Mu_Basecore/MdeModulePkg/Core/Dxe/DxeMain.inf:102`, `:133`;
+`Mu_Basecore/MdeModulePkg/Library/MemoryProtectionHobLib/DxeMemoryProtectionHobLib.c:261`,
+`:268`, `:298`; `Mu_Basecore/MdeModulePkg/Include/Guid/DxeMemoryProtectionSettings.h:15-18`,
+`:191`; `Mu_Basecore/MdeModulePkg/MdeModulePkg.dec:1687`, `:1719`;
+`Mu_Basecore/MdeModulePkg/Core/Dxe/Misc/MemoryProtectionSupport.c:1844`;
+`Mu_Basecore/CryptoPkg/Binaries/BaseCryptoDriver_ext_dep.json:11`;
+`Mu_Basecore/BaseTools/Plugin/FdSizeReport/FdSizeReportGenerator.py:62`;
+`Mu_Basecore/BaseTools/Plugin/OverrideValidation/OverrideValidation.py:638`;
+`Mu_Basecore/BaseTools/Source/Python/GenFds/AprioriSection.py:80`;
+`Common/Mu/MfciPkg/MfciPkg.dsc.inc:15-16`; in this document `:2148-2152`, `:2154-2167`,
+`:4013-4059`.
+
+| | |
+|---|---|
+| instrument | `Build/gauguinPkg/DEBUG_CLANGPDB/BuildOptions:1-2` — the build's own `gCommandLineDefines` and `BuildOptionPcd` — and a tree-wide census of the readers of each of the ten defines |
+| shows | `MEMORY_PROTECTION` is the only one of the ten with no reader by any of the three mechanisms a define can have, so it can neither enable nor disable anything |
+| agrees with | Step 4.22's HOB argument, and strengthens it: the producer search is now known to be platform-independent — none of the 85 platforms that share the flag has a producer either |
+| does not close | the 27 `L`s, the `P2 FREE largest=` reading, or anything the gate waits on |
+| not an action | turning protection on means adding a HOB producer, not flipping the flag — and Step 4.12's four `ProtectUefiImage` allocation sites are the reason that is a P4 task |
