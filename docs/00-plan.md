@@ -80,6 +80,24 @@ format. Which of `rpmh_image_os.c`'s four such sites was reached is not
 established. The digest is still absent for the original reason: this run dies
 inside the batch too.
 
+Step 4.126 is the one place in the record where the two runs can be held against each
+other, and it settles part of that. `P2 SEQ`'s index *i* is Apriori entry *i + 1* and
+the mirror's `K` rows count the same loop, so the phone's 46 letters and the mirror's
+18 rows cover the same eighteen indices: **seventeen agree and one does not** —
+Apriori 17 = `CmdDbDxe`, where the phone's `EntryPoint` returned `EFI_SUCCESS` and the
+mirror's returned `EFI_UNSUPPORTED`. The letters differ at Apriori 11 as well (`SO`
+against `s`) and that is not a second disagreement: `s` means the start did not fail,
+not that the status was zero, and `DALSYS`'s status was non-zero with bit 63 clear.
+Two things follow. First, the coincidence of index 19 is **not** corroboration — the
+phone fails to *load* `RpmhDxe` there, and the mirror loads it and asserts inside it,
+which is one entry index reached by two mechanisms. Second, the mirror's `CmdDbDxe` is
+a genuine divergence and it is confounded: the seed's SMEM has no heap, which the
+driver says twice two entries earlier, and the phone's payload — md5 `a2963f46…`, the
+one artifact that would separate the seed from the build — is **on no disk here**
+(228,483 files under `work/` hashed, 130 of them images). The seed's next rung is
+therefore SMEM's heap and not a new driver, and the current capture is already its
+control.
+
 Two readings are therefore owed to the phone, and both are short — `P2 WHAT` for
 the value behind `K 11 SO`'s non-error, non-`EFI_STATUS` letter, and
 `P2 APRI unhit=` for the one Apriori name that matches nothing in this volume.

@@ -25220,3 +25220,193 @@ What this step still does not have is the digest. `P2Digest` is called only afte
 host-side capture — and the two readings this step had to do without the digest, `SO`'s
 value and the Apriori survivors after entry 19, are exactly the two it would have
 answered.
+
+## Step 4.126 — the phone's own run and the mirror's agree at seventeen of the eighteen indices either can name, and `CmdDbDxe` is the one they do not
+
+`P2 SEQ`'s index *i* is Apriori entry *i + 1* — Step 4.12 establishes that from the
+promotion loop itself and calls the join exact. The mirror's `K` row counts the same loop
+and names the entry it is counting. So the phone's 46 letters and the mirror's 18 rows
+describe **the same eighteen iterations**, and this is the only stretch of the whole record
+where two independent runs of this firmware can be held against each other at all: the
+phone's own boot, through XBL, on 2026-09-23, and a seeded mirror of the same DxeCore
+(`work/out/qemu-panel-el3-seed5.txt`, the run Step 4.125 decodes).
+
+| Apriori | driver | phone, `P2 SEQ` | mirror, `K` row | started | same |
+|---|---|---|---|---|---|
+| 1 | `PcdDxe` | `s` | `Ss` | 1 | yes |
+| 2 | `EnvDxe` | `s` | `Ss` | 2 | yes |
+| 3 | `ReportStatusCodeRouterRuntimeDxe` | `s` | `Ss` | 3 | yes |
+| 4 | `StatusCodeHandlerRuntimeDxe` | `s` | `Ss` | 4 | yes |
+| 5 | `RuntimeDxe` | `s` | `Ss` | 5 | yes |
+| 6 | `ArmCpuDxe` | `s` | `Ss` | 6 | yes |
+| 7 | `ArmGicDxe` | `s` | `Ss` | 7 | yes |
+| 8 | `MetronomeDxe` | `s` | `Ss` | 8 | yes |
+| 9 | `ArmTimerDxe` | `s` | `Ss` | 9 | yes |
+| 10 | `SmemDxe` | `s` | `Ss` | 10 | yes |
+| 11 | `DALSys` | `s` | `SO` | 11 | **yes** — see below |
+| 12 | `HWIODxeDriver` | `s` | `Ss` | 12 | yes |
+| 13 | `ChipInfo` | `s` | `Ss` | 13 | yes |
+| 14 | `PlatformInfoDxeDriver` | `s` | `Ss` | 14 | yes |
+| 15 | `HALIOMMU` | `s` | `Ss` | 15 | yes |
+| 16 | `ULogDxe` | `s` | `Ss` | 16 | yes |
+| 17 | `CmdDbDxe` | `s` | **`SU`** | **16** | **no** |
+| 18 | `NpaDxe` | `s` | `Ss` | 17 | yes |
+
+**The two instruments spell one event two ways, and the mapping between them is one line of
+`Dispatcher.c` in each direction.** The phone's letter is the one `P2MarkSeq` was handed:
+`'s'` from the success arm, `'S'` from `P2Record (…, 'S', Status)`, `'L'` from the load arm
+— the legend Step 4.31 dates to `e864a59`. The mirror's row carries two letters, the phase
+and `P2WhyLetter (Status)`, and `P2Tick` runs unconditionally after both arms. `Ss` and `s`
+are therefore the same statement — promoted, loaded, started, and the `EntryPoint` returned
+`EFI_SUCCESS` — written once by the sequence mark and once by the tick. Seventeen of the
+eighteen indices agree, across two builds, two ways of getting SMEM, and two instruments.
+
+**The one row that looks like a disagreement and is not is `K 11 SO`.** `DALSYS` returned a
+non-zero status there — `O` is `P2WhyLetter`'s fall-through — but bit 63 was clear, so
+`EFI_ERROR` was false, the count advanced from 10 to 11, and the success arm ran. The
+phone would have printed `s` for it, because `s` is what that arm prints and the arm does
+not look at the value. So the letters differ and the events do not, and this is the trap in
+comparing the two records: `s` is not "returned zero", it is "was not an error", and only
+the phone's shorter vocabulary hides the distinction.
+
+### The one disagreement, and it is Apriori 17
+
+`CmdDbDxe`. The phone's own run started it and its `EntryPoint` returned `EFI_SUCCESS`. The
+mirror's row is `K 17 SU 16/69`, and the row above it is
+`Error: Image at 0009C565000 start failed: Unsupported`. Step 4.125 reads that pair as
+"the image that could not start is CmdDbDxe's", from row order alone: the error is printed
+inside Apriori 17's own iteration, between `K 16` and `K 17`. What that step does not say,
+and what the phone's record is the only thing that can say, is that this is a **difference
+between the two runs and not a property of the driver**.
+
+The phone's payload is not the mirror's. Step 4.12's reading was taken off
+`work/out/p2-variants/Mu-gauguin-silicon-gzip.img`, sha256
+`09db74022ccfef57515d69d8850465ab610c53356612f8eabcc3d9501d98a8ce`, whose payload is
+3,145,840 bytes with md5 `a2963f46faeb27fe601022c3a67aa738`; Step 4.11 confirms it by
+reading `boot` back off the device and matching it byte for byte. The mirror's payload is
+`/tmp/gauguin-kernel.raw`, md5 `0e5226c062935eb0465b3409eba74c39`. The file at that path
+today is neither: it is the 4.74 set, sha256 `90b21643e3450c326fb3d24baf64d58d4692a5d155c36b76d2e020ff04a96b59`.
+
+### What `Unsupported` can be, and the three of the four ways it is not this one
+
+The value has four sources in this tree's DXE core, and the capture's own silence eliminates
+two of them outright.
+
+- `Image.c:613-625` — `CoreLoadImageCommon`'s type gate, commented *"If we loaded an image
+  type that we can not execute return EFI_UNSUPPORTED"*, printing `"Image type %s can't be
+  loaded on %s UEFI system.\n"`. This fails the **load**, so it would appear as an `L` in
+  the phone's SEQ and on the mirror's panel it would be a `K` row with an `L` phase — and it
+  would print its own row. There is no `L` row in the capture at all.
+- `Image.c:643-645` — the same function's subsystem default, which is the same load path.
+- `Image.c:1693-1703` — **the machine-type gate at the top of `CoreStartImage`**, the one
+  start-path site that returns before the EntryPoint is ever called. It prints two
+  `DEBUG_ERROR` rows of its own, `"Image type %s can't be started "` and `"on %s UEFI
+  system.\n"`. Neither string occurs anywhere in the run of record, and neither occurs in
+  any capture under `work/out` — so this branch did not run, and it is the only branch that
+  would have produced an `SU` **without** running the driver.
+- `Image.c:2018` — `CoreUnloadImage`, which is not the start path.
+
+That leaves `Image.c:1768`: `Image->Status = Image->EntryPoint (ImageHandle,
+Image->Info.SystemTable);`. Nothing filters it. And the row that prints it is not in
+`CoreStartImage` at all — it is `CoreExit`'s, at `Image.c:1923-1928`, reached from `:1773`
+in the same breath as the return, gated on `EFI_ERROR (Image->Status)`. So
+`Error: Image at 0009C565000 start failed: Unsupported` is a literal `%r` of the value
+`CmdDbDxe`'s own `EntryPoint` handed back, printed the moment it handed it back. **The core
+did not refuse the image. The driver refused this platform.**
+
+### The driver's own bytes build three error values, and this is not one of them
+
+`CmdDbDxe.efi` is 32,768 bytes in three sections, `.text` at RVA `0x1000` and `0x5000`
+long — 5,090 instructions, 169 direct calls, 3 indirect ones, and twelve `bit 63` status
+tests. Disassembled whole, it constructs exactly three error constants:
+
+| value | name | sites, at the `movk` that sets the top half |
+|---|---|---|
+| `0x8000000000000002` | `EFI_INVALID_PARAMETER` | `0x1408`, `0x145c`, `0x14a4`, `0x14ec`, `0x1538`, `0x1580`, `0x15c8`, `0x1620` — one inlined null-argument guard, eight times |
+| `0x8000000000000019` | `EFI_INCOMPATIBLE_VERSION` | `0x1184` |
+| `0x800000000000000e` | `EFI_NOT_FOUND` | `0x1ab0` |
+
+`EFI_UNSUPPORTED` is not among them, and the ways it could hide are closed one at a time.
+Its eight bytes, `03 00 00 00 00 00 00 80`, occur **nowhere in the file**, so it is not in a
+literal pool or a data table. A 64-bit build of it would need `mov x0, #0x3` followed by
+`movk x0, #0x8000, lsl #48`; the file's `movk xN, #0x8000, lsl #48` sites are ten, and
+their low halves are `#2` eight times, `#0x19` once and `#0xe` once — all accounted for
+above. A 32-bit build is not possible, because `EFI_UNSUPPORTED` has bit 63 set and no
+32-bit instruction in AArch64 can set it: the eight `orr w0, wzr, #0x80000000` sites are
+`DEBUG_ERROR` masks being passed as the first argument to a print helper at `0x1650`, each
+guarded by `tbz x8, #63`. The only `3` in `.text` is `orr w0, wzr, #0x3` at `0x3054`,
+which loads two arguments and tail-calls `0x2fb0` rather than returning.
+
+So the value is not a decision this image makes. It is a status `CmdDbDxe` was **handed**,
+and the pattern that hands it back is in the module's own texture: `ldr x9, [x11, #152]`,
+`blr x9`, `mov x8, x0`, `tbz x8, #63` — a protocol member called through its interface
+table, its status tested for bit 63 and then returned. `EFI_UNSUPPORTED` is exactly what
+such a call returns when the protocol it names is not there.
+
+### What could have handed it over, and the two rows two entries earlier
+
+The mirror's SMEM is fabricated, and the run is `SEEDED:` from its first line: the seed
+writes the pointer `EnvDxe` reads and the three words it dereferences, and one word into
+`SMEM + 0xC0`. What it does not write is SMEM's own heap, and the driver says so twice, in
+its own words, two entries before the disagreement:
+
+```
+smem_get_addr: SMEM get addr failed! smem_type=402
+WARNING: Unable to read memory partition table from SMEM
+smem_alloc: SMEM allocation failed! smem_type=404, buf_size=8192
+```
+
+the first two arriving in Apriori 11's iteration, the third immediately before `K 11 SO`.
+Apriori 17 runs after them. So the honest statement is: **this is a seeded run, and
+`CmdDbDxe`'s `EFI_UNSUPPORTED` is the first place in it where the seed can be seen to change
+an outcome rather than to move a ceiling** — and the outcome it changes is a change from the
+phone's `s`. Whether it did is not established here, because the other candidate is the
+build, and the two are confounded in every capture this host holds.
+
+### The artifact that would separate build from boot path is not on this disk
+
+The phone's payload, md5 `a2963f46faeb27fe601022c3a67aa738`, is the one artifact that would
+settle it: run it under this instrument, seeded exactly as the mirror's run is, and read
+`K 17` back. It hashes to no file here. All 228,483 regular files under `work/` — 130 images
+and every payload among them — were hashed for this step, and the only 3,145,840-byte
+payloads that exist are this tree's own `SILICIUM_UEFI.fd-bootshim` (`deb661b31cdcf2ef6bf1ae0ffc68e00f`)
+and `suryaPkg`'s (`f1f14693d3d4d15fd340824cec4f9bf0`). The phone's reading survives only as
+the recorded string at `:1448` of this document.
+
+### The experiment that is within reach
+
+The build half of the confound cannot be reached, but the seed half can, and it is a change
+to the instrument rather than to the device: **extend the seed to SMEM's heap** — a
+partition table at the base and size the board itself declares (`0x80900000`, `0x200000`,
+out of its `uefiplat.cfg` by way of `MemoryMapLib.c`) so that `smem_type=402` and
+`smem_type=404` both succeed — then re-run and read `K 17`'s letters. If `SU` becomes `Ss`,
+the seed caused it and the seeded mirror is not a faithful model at that index. If it stays
+`SU`, the build did, and the phone's `s` is the older build's behaviour.
+
+The control is already on disk and needs no new flash: the current capture *is* the control,
+and per *对照的那张必须在覆盖之前读* it was read before any change is made to the stub. The
+step's own instrument rule applies to the result too — **the new run will be `SEEDED:` as
+well**, and its header will have to say which seed, because an absence in a seeded run is
+not a finding.
+
+### Read this step
+
+Instruments: the `P2 SEQ` string at `docs/08` `:1445-1448` with the payload it was read from
+at `:1069-1071` and the read-back that confirms it at `:1353`; Step 4.12's join at
+`:1496-1500` and `:2241-2246`; the mirror's `K` rows parsed out of
+`work/out/qemu-panel-el3-seed5.txt` with their wrapped GUIDs joined; `Image.c` at
+`:613-625`, `:643-645`, `:1693-1703`, `:1768`, `:1773`, `:1923-1928` and `:2018`;
+`Dispatcher.c` at `:555-591` and `:1156-1170`; `aarch64-linux-gnu-objdump -d` over
+`Binaries/gauguin/QcomPkg/Drivers/CmdDbDxe/CmdDbDxe.efi` with its `.text` scanned
+instruction by instruction and its 32,768 bytes scanned for the `EFI_UNSUPPORTED` literal;
+`tools/apriori-order.py` re-run on `/tmp/gauguin-kernel.raw`; and md5 over all 228,483
+regular files under `work/`.
+
+| | |
+|---|---|
+| instrument | the phone's recorded `P2 SEQ` string, the mirror's existing capture, the core's and dispatcher's own source, and `CmdDbDxe.efi`'s own bytes — nothing was built, flashed or written, and the device was absent |
+| shows | that the phone's run and the seeded mirror's can be compared at exactly eighteen Apriori indices, that seventeen of them agree, and that the eighteenth is Apriori 17 = `CmdDbDxe`, where the phone's `EntryPoint` returned `EFI_SUCCESS` and the mirror's returned `EFI_UNSUPPORTED` |
+| adds | the side-by-side table of the two runs over their one overlapping region; the `s`-vs-`Ss`-vs-`SO` vocabulary mapping, with `DALSYS`'s `SO` shown to be an agreement and not a second disagreement; the four `EFI_UNSUPPORTED` sites in this core with two of them eliminated by the capture's own silence and one by being in `CoreUnloadImage`; the conclusion that the printed status is the `EntryPoint`'s own return, printed by `CoreExit` and not by `CoreStartImage`; `CmdDbDxe`'s complete set of three self-built error values, with `EFI_UNSUPPORTED` excluded as a literal, as a 64-bit pair and as a 32-bit value; and the fact that the phone's payload is on no disk here, 228,483 files hashed |
+| corrects | that the phone's `L` at Apriori 19 and the mirror's stop at Apriori 19 are the same failure: they are one entry index reached by two mechanisms, a failed load there and a loaded driver asserting inside itself here, and the coincidence of index is not corroboration; and the reading of the `Error: … start failed` row as the core's decision, which it is not |
+| does not close | whether the seed or the build is why `CmdDbDxe` returns `EFI_UNSUPPORTED` — the two are confounded in every capture here and the payload that would separate them is absent; the P3 gate and the owed panel reading of the flashed 4.74 set; `SO`'s value, which needs `P2 WHAT`; and everything from Apriori 19 on, which neither record reaches by the same route |
+| not an action | nothing was built, nothing was flashed, no partition was written, and the stub was not modified — the seed extension is designed here and not built |
