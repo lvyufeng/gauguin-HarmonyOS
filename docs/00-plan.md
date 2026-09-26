@@ -321,6 +321,21 @@ Work:
 
 **Gate:** a Windows 11 ARM64 installer boots off a USB stick and sees the internal UFS.
 
+> **The gate's own artifact, as of Step 4.112 (2026-09-26).** The payload built to satisfy the
+> "boots off a USB stick" half is `work/out/usb-host/Mu-gauguin-xhci-host-gzip.img` —
+> **1,171,456 B, sha256 `f1a7106b76f98e11bb2608557e76085e1b3dcba86fda472c89bcefa1783f1c84`,
+> unflashed**. It is the record payload's file set plus exactly three drivers (`XhciDxe`,
+> `XhciPciEmulation`, `UsbInitDxe`) and a byte-identical `AcpiTables`, and its Apriori array is
+> the same 70 entries. **This digest superseded `efc8e10d09f0f286…` on the same day**, and the
+> reason is worth keeping: the earlier candidate had been built twenty-six hours before, from a
+> tree predating Step 4.65, so its `DSDT` was 1,520 bytes against `boot`'s 5,280 and it still
+> carried bitra's `QCOM0497` where URS0 now has `QCOM0A8B` — on the node its own three drivers
+> bind through. It was audited against the wrong base and read as current for six steps. Two
+> consequences for a reader of this plan: the sizes in the P3 narrative below are stale (the
+> `DSDT` is 12,341 bytes, not 2,369), and **the gate is still unmet** — two of the three new
+> drivers' dependency expressions cannot evaluate on this driver set, and eight architectural
+> protocols the P2 assert is about are still absent. No USB stick can be seen yet.
+
 **Status (2026-09-25): item 1 is done for UFS, USB, the PMIC family, the GPIO controller,
 the Type-C controller and I2C, and every one of those nodes answers a shipped driver — it is
 still open for the SPI engines, for the thermal zones and for the pins of the two TSENS

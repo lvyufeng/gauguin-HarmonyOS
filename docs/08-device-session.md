@@ -20305,6 +20305,26 @@ moves at all, so the candidate is not a rearrangement of the record's volume. `U
 `DiskIoDxe` and `PartitionDxe` are in both builds, so nothing about the "sees the
 internal UFS" half of the P3 gate is changed by this artifact either way.
 
+> **Step 4.112 corrects the base of that comparison, and the correction is not in its favour.**
+> The set statement itself is true: three additions, no removals *by GUID*. But the column it
+> measures against is `p2-4.94`, built 2026-09-26 03:52 — **twenty-six hours after the
+> candidate**, which was built 2026-09-25 01:20 from that moment's tree. The surviving artifact
+> of that moment is `p2-variants`, the payload in `boot`. Against the candidate's own base there
+> *was* a removal, and it is one a GUID set difference cannot see by construction: `AcpiTables`
+> is the same GUID in both payloads and it is **3,760 bytes smaller in the candidate**
+> (6,638 → 2,878), its `DSDT` 1,520 bytes against `boot`'s 5,280 and still carrying the
+> pre-Step-4.65 `QCOM0497`. So "not a rearrangement of the record's volume" was measured against
+> a volume the candidate did not contain. Its UFS sentence survives, and the reason is measured:
+> `UFSDxe`, `DiskIoDxe`, `PartitionDxe` in all four payloads, the PEI/pass-thru ones in none —
+> so no base choice moves that half. What survives untouched is the next section: the
+> Apriori array is the same 1,120-byte RAW section in all four payloads this step measured
+> (`c25c6d1675307959…`), so the promotion list is genuinely independent of the base. But the
+> section after that is affected, because the depexes it reads belong to drivers that would
+> have shipped with a rolled-back device tree. Everything in this section is true of the
+> **rebuilt** candidate instead — Step 4.112 rebuilt it, and the rebuilt artifact is the
+> record plus three files with no shared file changed, which is what this section claimed for
+> the old one and what was not true of it.
+
 ### The Apriori array is the record's, byte for byte
 
 The array is the FFS file at volume offset `0x78`, `FC510EE7-FFDC-11D4-BD41-0080C73C8881`,
@@ -21591,15 +21611,15 @@ annotations this step owes were applied to Steps 4.104-4.106's field table and t
 
 ### The row eighty lines from its own correction
 
-`docs/08-device-session.md:20622`, inside Steps 4.104-4.106's own field-by-field table,
+`docs/08-device-session.md:20647`, inside Steps 4.104-4.106's own field-by-field table,
 read:
 
 ```
 | `P2 APRI matched=` | `1..46` | `1..69` | no |
 ```
 
-Eighty lines later, in the same section, `:20871` reads `1..69` in **both** columns and
-`:21016-21020` explains why: "`matched=` reads `1..69` because `ap69` (`GraphicsConsoleDxe`)
+Eighty lines later, in the same section, `:20896` reads `1..69` in **both** columns and
+`:21041-21045` explains why: "`matched=` reads `1..69` because `ap69` (`GraphicsConsoleDxe`)
 sits at volume file 22 and is inside" the cut's 48/49. The two rows cannot both stand, and
 the arithmetic settles it without a device:
 
@@ -21612,10 +21632,10 @@ the arithmetic settles it without a device:
 - The complete batch promotes every entry with a DRIVER file, `ap1..ap69`, in array order.
   Min 1, max 69.
 
-So `matched=1..69` in both worlds, and `matched=` decides nothing — which is what `:20871`
-already said. Row `:20622` was a survivor of the `ap1..ap46` shape Step 4.105 refuted, left
+So `matched=1..69` in both worlds, and `matched=` decides nothing — which is what `:20896`
+already said. Row `:20647` was a survivor of the `ap1..ap46` shape Step 4.105 refuted, left
 behind when the rest of the table was rewritten around it. It now reads `1..69` with a note
-naming this step, so the next reader does not have to find `:20871` to be told.
+naming this step, so the next reader does not have to find `:20896` to be told.
 
 ### `P2 ERR` was already the instrument
 
@@ -21746,8 +21766,8 @@ block as a comment. No code changed; the tool's output is identical.
 - Cited, re-read rather than remembered: `Dispatcher.c:152-153`, `:2190-2194`, `:2349`,
   `:2396-2403` (`:2403`), `:2429`; `tools/pe-facts.py:149-152`, `:374-376`;
   `tools/apriori-prefix.py --seen 48` run against
-  `work/out/p2-4.94/Mu-gauguin-silicon-gzip.img`; and, in this document, `:20622`, `:20871`,
-  `:21016-21020`, `:2815-2818`, `:3678`, `:4473`, `:4968`, `:5086`, and Steps 4.104-4.109.
+  `work/out/p2-4.94/Mu-gauguin-silicon-gzip.img`; and, in this document, `:20647`, `:20896`,
+  `:21041-21045`, `:2815-2818`, `:3678`, `:4473`, `:4968`, `:5086`, and Steps 4.104-4.109.
 - Standing rules unchanged: `userdata`, the partition table and the firmware LUN are
   untouched; writes go to `boot` only; the control image is read before anything is
   overwritten; and the screen is read before the next flash.
@@ -22046,9 +22066,271 @@ so `--help` differs only in the program name.
   `MdePkg.dec:2346`, `:2392`; the two `AutoGen.h` artifacts under
   `Build/gauguinPkg/DEBUG_CLANGPDB/AARCH64/`; `tools/arch-protocol-census.py:92`; and, in this
   document, `:662`, `:667-669`, `:696-697`, `:699-708`, `:734`, `:736-741`, `:740`, `:743`,
-  `:747-763`, `:754-757`, `:18461-18473`, `:18489-18501`, `:18653-18655`, `:18660`, `:21327`,
-  `:21527`, `:21530`, `:21653`.
+  `:747-763`, `:754-757`, `:18461-18473`, `:18489-18501`, `:18653-18655`, `:18660`, `:21347`,
+  `:21547`, `:21550`, `:21673`.
 - Standing rules unchanged: `userdata`, the partition table and the firmware LUN are
   untouched; writes go to `boot` only; the control image is read before anything is
   overwritten; and the screen is read before the next flash.
 - **The P3 gate remains unmet and is now shown to be further away, not closer.**
+
+## Step 4.112 — the candidate had been on the shelf for twenty-six hours, and every claim about it was measured against a payload it was not built from
+
+### What this step is
+
+The one artifact this project holds for P3 is a payload that adds the USB host stack to
+the working UEFI tree. Step 4.103 audited it. This step set out to re-check that audit's
+central claim — *the candidate is the record plus exactly three files, and minus none* —
+by listing the two payloads' FFS files by GUID **and by name**, because a GUID set
+difference is not the only way two volumes can be compared and this step wanted to know
+which one Step 4.103 had used.
+
+The set claim held. The claim printed beside it did not: the two payloads' `AcpiTables`
+FFS files are **not the same file**, and once that was visible the base the whole audit
+was drawn against came apart with it.
+
+This step is host-only, but it is **not read-only**: a payload was rebuilt. Nothing was
+flashed, no partition was written, and `userdata`, the partition table and the firmware
+LUN were not touched.
+
+### Four payloads, six ACPI tables, and exactly one that moves
+
+| payload | built | payload bytes | inner FV | FFS files | `AcpiTables` | `DSDT` | `DSDT` sha256 |
+|---|---|---|---|---|---|---|---|
+| `usb-host-0925` — the pre-existing candidate, Step 4.103's subject | 2026-09-25 01:20:01 | 1,169,408 | `0x72d000` = 7,524,352 | 126 | 2,878 | **1,520** | `6d3f69e5bcb17c90` |
+| `p2-variants` — **the payload in `boot`**, rung 7260 | 2026-09-25 09:20:34 | 1,142,784 | `0x704000` = 7,356,416 | 123 | 6,638 | **5,280** | `41ed014369c3d79e` |
+| `p2-4.94` — the record | 2026-09-26 03:52:10 | 1,144,832 | `0x706000` = 7,364,608 | 123 | 13,702 | **12,341** | `0f5df26b424ab609` |
+| `usb-host` — **rebuilt by this step** | 2026-09-26 09:00:30 | 1,171,456 | `0x730000` = 7,536,640 | 126 | 13,702 | **12,341** | `0f5df26b424ab609` |
+
+Six tables live in that FFS file. Five of them are byte-for-byte the same table in all
+four payloads, which is a measurement and not an expectation:
+
+| table | bytes | sha256 (first 16) | in all four payloads |
+|---|---|---|---|
+| `SSDT` | 61 | `b388c764d05d5f96` | identical |
+| `APIC` | 724 | `93bafa3b9318910e` | identical |
+| `FACP` | 276 | `f8fa4839f1cbac2a` | identical |
+| `FACS` | 64 | `8a2f3c6d08a63700` | identical |
+| `GTDT` | 156 | `723f7568abd1aa7e` | identical |
+| `DSDT` | 1,520 / 5,280 / 12,341 / 12,341 | `6d3f69e5…` / `41ed0143…` / `0f5df26b…` | **the only one that differs** |
+
+So the whole of the candidate's ACPI deficit is one table, and the record's `DSDT` sha256
+`0f5df26b424ab609…` is the sha256 of the `DSDT.aml` sitting on disk in the tree today,
+which is how the last row of the first table was predicted before the rebuild ran.
+
+### The direction is unambiguous, because this file only ever grows
+
+`DSDT` size is a clock here, and that is a claim about the data rather than about build
+times. Comparing the ACPI `_HID`s each `DSDT` carries, `p2-variants` (22 ids) against
+`p2-4.94` (34 ids): **22 shared, 12 gained, 0 lost**. The ACPI authoring is monotone
+additive — no step has ever removed an id — so a smaller `DSDT` is an older `DSDT` and
+there is no second reading available.
+
+The candidate against `boot`'s payload: 3 ids against 22, sharing only `QCOM24A5`, and the
+two the candidate has that `boot`'s payload does not are **`QCOM0497` and `QCOM0498`**.
+`tools/acpi/gauguin.asl:5615` says which of those matters: URS0's `_HID` "was
+`QCOM0497` until **Step 4.65**" — bitra's id, on a node both of gauguin's family tables
+give `QCOM0A8B` at `:5623` and `:5633`. Neither `boot`'s payload nor the record carries
+`QCOM0497` at all. The candidate also lacks `QCOM0A8B` entirely, and the node names
+`MMU1`, `QGP0` and `QGP1` against `boot`'s four.
+
+### Step 4.103's base was wrong, and the comparison it used could not have found that
+
+Step 4.103's table pairs the candidate against a column headed `record p2-4.94` — FV
+`0x706000`, 123 files, built 2026-09-26 03:52. The candidate was built 2026-09-25 01:20.
+**The candidate's base is the 09-25 01:20 tree, and that tree's surviving payload is
+`p2-variants`, the one in `boot`** — FV `0x704000`.
+
+Against the correct base the delta is not three additions and zero removals. It is three
+additions **and an `AcpiTables` file 3,760 bytes smaller**: 6,638 → 2,878, `DSDT` 5,280 →
+1,520. A GUID set difference cannot see that, because `AcpiTables` is the same GUID in
+both payloads; and the volume-level counters printed beside it in the same table — 123
+files, 80 **DRIVER**, 37 **FREEFORM** — are blind to it for the same reason, since a file
+that shrinks in place moves none of them. This is the failure the FFS-file diff was run to
+catch, and the diff only catches it if it is asked for names **and sizes**, which is a
+narrower instrument than "compare the two payloads" sounds like.
+
+The arithmetic was in Step 4.103's own table and would have said so. Against the record
+the candidate's FV grows 7,524,352 − 7,364,608 = **159,744** B, while its three added
+files total 94,270 + 45,362 + 32,846 = **172,478** B — a shortfall of 12,734 that points
+at bytes going the other way. It decomposes cleanly: the candidate's `AcpiTables` is
+13,702 − 2,878 = 10,824 B smaller than the record's, 10,824 rounds up to 12,288 in a
+page-granular FV, and 12,288 + 446 of section padding is exactly the 12,734.
+
+Against the candidate's own base the same check gives the same answer with different
+numbers, which is why it is worth stating twice: the FV grows 167,936 where the three
+files total 172,478, and the 4,542 difference is that base's `AcpiTables` shrink of
+6,638 − 2,878 = **3,760** plus 782 of padding. Read between the two candidates instead and
+the page arithmetic is exact and needs no padding term at all: the rebuilt FV sits
+7,536,640 − 7,524,352 = **12,288** B — three 4 KiB pages — above the old one, against an
+`AcpiTables` file 10,824 B larger.
+
+### What the candidate would have put back on the device
+
+A flash of the 09-25 candidate would have restored **bitra's `QCOM0497`** to the URS0/USB
+node — the node the candidate's own three new drivers bind through, so the artifact would
+have been self-defeating on the one thing it exists to do — and would have dropped 33 of
+the record's 34 ACPI ids and the `MMU1`/`QGP0`/`QGP1` node names. Every node written
+between Steps 4.65 and 4.94 would have been absent from the ACPI of the payload carrying
+the newest USB driver.
+
+That is the whole reason this was worth a step: the candidate was not merely *unflashed*,
+it was **unusable as it stood**, and nothing in the record said so. Six steps' worth of
+epilogues had been reporting it as "unchanged at 1,169,408 B, `efc8e10d…`" — accurate, and
+read as "still fine".
+
+### The build path already refuses this, which is not the same as preventing it
+
+`tools/sync-uefi-platform.sh:117-119` compares the generated tree's `gauguin.asl` against
+the tracked `tools/acpi/gauguin.asl` and dies if they differ. Its comment records that the
+silent version of this failure "once ... silently cost a build". `:125-131` recompiles the
+tracked asl on every sync — the rebuild's own output line is `DSDT.aml 12341 bytes, from
+gauguin.asl` — and `:140` checks all six named tables resolve against the `PackagesPath`
+roots.
+
+So the build **cannot install a `DSDT` that disagrees with the tracked source**. What it
+cannot do is stop an artifact built a day earlier from being read as a current one. The
+guard protects the build; nothing guards the shelf. That gap is what Step 4.103 fell into,
+and it is a gap this project will fall into again every time a payload is audited after
+its build moment, which is every payload audit.
+
+### The rebuild
+
+`tools/build-apriori-variant.sh xhci-host`, exit 0, four gates green, at 2026-09-26
+09:00:30:
+
+```
+0048 Images Verified
+the array is exactly the INF order of APRIORI.inc: 70 entries, zero mismatches
+all images structurally check out
+matches FVMAIN.Fv.txt: 126 offsets and GUIDs, zero mismatches
+```
+
+The new artifact is `work/out/usb-host/Mu-gauguin-xhci-host-gzip.img`, **1,171,456 B**,
+sha256 `f1a7106b76f98e11bb2608557e76085e1b3dcba86fda472c89bcefa1783f1c84`. Its inner FV is
+`0x730000` = 7,536,640, its FFS count 126 and its Apriori array 70 entries — the same 70 as
+the record, which is the one thing Step 4.103 measured that needed no correction.
+
+The payload grew 2,048 B where the inner FV grew 12,288 B, and the two are not expected to
+track: the FD is carried gzipped (`make_boot_image.py --compression gzip --profile
+silicon`), so image size is a function of the compressed bytes and not of the volume's.
+
+The build log ends with `mkbootimg.py`'s `ValueError: DTB image must not be empty.` on the
+sync-dtb path, twice. That is the known Step 4.6 condition, and
+`build-apriori-variant.sh:210-216` names it, tolerates it and judges the artifact instead —
+so it is recorded here as checked, not as a finding. The two occurrences are in
+`work/out/build-apriori-xhci-host.log`.
+
+The 09-25 candidate is **frozen, not deleted**: `work/out/usb-host-0925/` holds its image
+(`efc8e10d…`), its build log and its `APRIORI.xhci-host.inc`. It is the subject of Step
+4.103 and of this step, and a rebuild that overwrote it in place would have destroyed the
+only copy of the thing both steps are about.
+
+### The three drivers are byte-identical, so Step 4.103's conclusions transfer
+
+| file | FFS size | depex | depex sha256 (first 12) | old vs new |
+|---|---|---|---|---|
+| `XhciPciEmulation` | 45,362 | `0x13`, 234 B | `6e3f02198c4f` | identical |
+| `UsbInitDxe` | 32,846 | `0x13`, 18 B | `ac68645cdf6f` | identical |
+| `XhciDxe` | 94,270 | none | — | identical |
+
+The three are staged blobs from the SM7225 sibling, so their bytes could not have moved —
+but this was measured rather than assumed, and it is what licenses the transfer: Step
+4.103's scheduling finding (*`XhciPciEmulation`'s depex names eight protocols the panel
+reports absent, so it can never evaluate TRUE; `XhciDxe` has no depex at all, so
+`CoreIsSchedulable` routes it through `CoreAllEfiServicesAvailable` and it waits on the
+same thirteen*) is a statement about those bytes, and those bytes are the same in the
+artifact that would be flashed as in the artifact that was audited.
+
+`tools/arch-protocol-census.py` run against the rebuilt candidate and against the record:
+identical output but for the payload name and the two FV-size lines. The thirteen-row
+table — same `ap` and `pos` on all thirteen rows — and the eight trailing `note:` lines
+are byte-identical, exit 0 both. So Step 4.103's "the candidate adds no name the join
+could land on" holds on the rebuilt artifact too.
+
+### The rebuilt candidate is the record plus three files, and that is now measured
+
+`tools/fv-inventory.py` on the rebuilt candidate against the record: **three additions and
+nothing else**. `UsbInitDxe` 32,846 B, `XhciDxe` 94,270 B, `XhciPciEmulation` 45,362 B,
+and — the line that was there before and is gone now — no `~ AcpiTables` size change. The
+`AcpiTables` file in the new candidate is byte-identical to the record's, sha256
+`bd9839de2c4b3cd5`, `DSDT` 12,341 B, 34 ids, four node names, `QCOM0A8B` present and
+`QCOM0497` absent.
+
+So the sentence Step 4.103 wrote — *the candidate is the record plus exactly three files,
+and minus none* — is true for the first time, of an artifact that did not exist when it
+was written. The FV arithmetic closes exactly: 7,536,640 − 7,364,608 = **172,032**, which
+is the three files' 172,478 B less 446 B of section padding, and the old candidate's
+7,524,352 was exactly three 4 KiB pages below that.
+
+### What this does not change
+
+- **The P3 gate.** It is still unmet and this does not move it. What the step does is
+  remove one reason the candidate could not be the experiment: the project now holds
+  `record + USB host stack + the record's own ACPI`, which is the artifact the gate's
+  wording needs, instead of one that would have rolled the device tree back past Step 4.65.
+- **Step 4.103's conclusion that the USB stack cannot come up.** Two of the three drivers
+  are unschedulable on the record's driver set, and the third waits on the same thirteen
+  architectural protocols the P2 assert is about. A payload with a correct `DSDT` and
+  unsatisfiable USB depexes still cannot see a USB stick.
+- **The record.** `work/out/p2-4.94/Mu-gauguin-silicon-gzip.img` is untouched, 1,144,832 B,
+  `d621f732f4763a303e980c5af04451479c2ace31801e796993a258f226c177a5`.
+- **The ACPI read-back census and the twenty-eight epilogues** that say the candidate is
+  `efc8e10d…` at 1,169,408 B. Those are historical statements about a payload that
+  existed, they were accurate when written, and they are now superseded by the digest
+  below. One blockquote was added to Step 4.103, where the wrong base is what a reader
+  would act on; the epilogues were left as they stand.
+
+### What was written, and what was not
+
+- `docs/08-device-session.md` — this section and one correction blockquote in Step 4.103.
+  No other file is modified; `tools/arch-protocol-census.py` is untouched this step.
+- `docs/00-plan.md` — a dated paragraph under P3's **Gate** line, so that a reader of the plan
+  meets the current candidate digest and the "still unmet" status before the narrative below
+  it, whose sizes are stale (it says the `DSDT` is 2,369 bytes; it is 12,341).
+- **The blockquote added to Step 4.103 shifts every line after `:20306` by exactly twenty
+  lines**, and that is not a side effect to be discovered later. Repairing the live citations
+  by resolving each one against the line it claims to name — rather than shifting numbers
+  arithmetically — exposed a second and older error underneath. Step 4.110's three row
+  references were exact when `f42f91c` committed them: there, `:20622` and `:20871` are the two
+  `P2 APRI matched=` rows and `:21016-21020` is the paragraph carrying the `ap69` quote. The
+  next commit, `fc9bc84`, amended Step 4.95 with a five-line insertion at `:18656`
+  (`git diff -U0 HEAD~1 HEAD` gives the hunk), so every later line moved by five and nothing
+  re-resolved them. Another twenty came from this step's own blockquote. The three are
+  therefore **twenty-five** lines out, not twenty, and now read `:20647` (three occurrences),
+  `:20896` (four) and `:21041-21045` (two) — each checked against the line it names, and the
+  range kept to the same five lines it had in `f42f91c` rather than narrowed to the quote.
+  Step 4.111's four Step 4.108-4.110 anchors — `:21327`, `:21527`, `:21530`, `:21653` →
+  `:21347`, `:21547`, `:21550`, `:21673` — needed only the twenty, because they sit below the
+  amendment. What was **not** repaired is one sentence in Step 4.111 that names `:21322`,
+  `:21508`, `:21511` and `:21625` while saying "when the check was run" — it cites a state of
+  the document that no longer exists by construction, and a pointer that says which moment it
+  is from is not stale, it is dated. This is the second step running whose own citations its
+  own edits moved, and the count is now the argument for the tool-side pin rather than the
+  prose-side number.
+- A payload was **built**, at `work/out/usb-host/`; a copy of the superseded one was
+  **frozen**, at `work/out/usb-host-0925/`. Both live under `work/`, which this repository
+  ignores, so `git status` was clean after the build — the script's `restore` trap puts the
+  tracked platform tree back and removes the three staged blobs from both copies of
+  `Binaries/gauguin`, and it did.
+- **No partition was written.** `boot` still holds `work/out/p2-variants/Mu-gauguin-silicon-gzip.img`,
+  1,142,784 B, `90b21643e3450c326fb3d24baf64d58d4692a5d155c36b76d2e020ff04a96b59` — rung 7260.
+- Digests: record `d621f732…` (unchanged); `boot` `90b21643…` (twenty-ninth step running);
+  **candidate now `f1a7106b76f98e11bb2608557e76085e1b3dcba86fda472c89bcefa1783f1c84`, 1,171,456 B,
+  unflashed**, superseding `efc8e10d09f0f286011e1aacc638a7edd2ed5fcd86884640b28d14628f58f9f3`,
+  which is preserved rather than gone.
+- **The device is absent from this host throughout** — the owed reading on the payload in
+  `boot` under 先读屏，再刷下一次 remains owed. The rebuilt candidate is not the payload in
+  `boot` and must not take its place: it is not the artifact that answers the open P2
+  question, and the reading comes first.
+- Cited, re-read rather than remembered: `tools/acpi/gauguin.asl:5615`, `:5623`, `:5633`;
+  `tools/sync-uefi-platform.sh:118-121`, `:126-131`, `:145`;
+  `tools/build-apriori-variant.sh:209-216`, `:231-241`, `:256-283`;
+  `Silicium-ACPI/Platforms/Xiaomi/gauguin/AcpiTables.inf:24-30`; Step 4.6's DTB nag;
+  Step 4.64's build record at `:8640-8670`; and Step 4.103's table at `:20287-20306`.
+- Standing rules unchanged: `userdata`, the partition table and the firmware LUN are
+  untouched; writes go to `boot` only; the control image is read before anything is
+  overwritten; and the screen is read before the next flash.
+- **The P3 gate remains unmet.** This step makes the candidate usable; it does not make
+  the gate passable, and the eight absent architectural protocols and the two unschedulable
+  USB drivers are what stand between the two.
+
