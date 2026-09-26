@@ -24577,16 +24577,40 @@ The consequence for the instrument is exact and worth stating plainly, because
 `tools/qemu-el3-stub.S` promises the opposite in its own header. It buys "the whole
 Apriori batch", the `KEY` line, the `P2 RETRY` statuses and the `P2 FWHY` largest-free-run
 readings. What the console actually carries, in every configuration, is the dispatcher's
-digest row — `K 1 Ss 1/69 free=1024 80CF7257-87AB-47F9-A3FE-D50B76D89541`, one Apriori
-failure out of 69 — and then EnvDxe's assert, four to fourteen instructions later. The
-`P2 RETRY` and `P2 FWHY` rows are printed by DxeCore's patched code around *its own*
-allocations, which run after the dispatch it is counting; a module that power-holds the
-board at entry number one cannot be seen past by a stage-2 table. Making the mirror reach
+digest row — `K 1 Ss 1/69 free=1024 80CF7257-87AB-47F9-A3FE-D50B76D89541` — and then
+EnvDxe's assert, four to fourteen instructions later, with no tick of EnvDxe's own ever
+printed. The `P2 RETRY` and `P2 FWHY` rows are printed by DxeCore's patched code around
+*its own* allocations, which run after the dispatch it is counting; a module that
+power-holds the board at entry number two cannot be seen past by a stage-2 table. Making the mirror reach
 them needs the dispatch order changed (or EnvDxe removed from that variant's Apriori), not
 another stage-2 flag — and any such variant is a second payload, kept apart from the one
 in `boot`, because the instrument's own rule is that it changes no byte of what it watches.
 
-The same routine also explains a P2 reading habit that had been recorded without its
+### The digest row's fields, read off the patch and off the array
+
+`K 1 Ss 1/69 free=1024 80CF7257-87AB-47F9-A3FE-D50B76D89541` is not a failure row, and the
+GUID in it does not name EnvDxe. The format is `"K %d %c%c %d/%d free=%d %g\n"`
+(`uefi/patches/mu-basecore-local.patch:953`) and its arguments come from the two call sites
+that feed it: `P2Tick ('L', Status, &DriverEntry->FileName)` after a load (`:982`) and
+`P2Tick ('S', Status, &DriverEntry->FileName)` after `CoreStartImage` (`:1003`), whose
+success branch is `P2MarkSeq (&DriverEntry->FileName, 's', EFI_SUCCESS); mP2Started++`. So
+
+* `%c%c` is the phase (`L` load, `S` start) and the why-letter, `s` when the status was
+  success — `Ss` is a driver that **started successfully**, which is what the panel's last
+  row is;
+* `%d/%d` is `mP2Started` over the Apriori count, and the count is **69** because the array
+  holds 70 GUIDs of which the first, DxeCore, is not dispatched from it;
+* `%g` is the file GUID of the driver the tick is about, and `80CF7257-87AB-47F9-A3FE-D50B76D89541`
+  is `PcdDxe` (`work/uefi/Mu-Silicium/Mu_Basecore/MdeModulePkg/Universal/PCD/Dxe/Pcd.inf:292`).
+
+`tools/apriori-order.py` on the payload in `boot` settles the order the count is of:
+`0 DxeCore`, **`1 PcdDxe`**, **`2 EnvDxe`**, `3 ReportStatusCodeRouterRuntimeDxe`, … So the
+last row the panel ever holds is *the driver before EnvDxe*, reporting its own success; the
+module that power-holds the board is the second dispatch attempt, and its tick is never
+printed because the tick is printed after `CoreStartImage` returns and this one never
+returns.
+
+### The same routine also explains a P2 reading habit that had been recorded without its
 cause: the phone's usable window "between a reset and the assert" is not a display timeout.
 `PSHOLD` is the power-hold register, and the assert writes it to 0 before it spins, so on
 the device an assert in this build ends with the board powering down — which is why the
@@ -24619,7 +24643,9 @@ Instruments: `tools/qemu-panel-read.py` imported for `platform_paths` / `low_reg
 plan's key semantics (`{block index: pool address}`, not addresses) before its membership
 was checked; `/tmp/spin-probe2.py` and `/tmp/spin-probe3.py` for the two PC readings;
 `objdump -D` on `uefi/Binaries/gauguin/QcomPkg/Drivers/EnvDxe/EnvDxe.efi` for RVA `0x4064`
-and `0x677C`. Read: `work/out/qemu-panel-el3-ctl.txt`, `…-ctl2.txt`, `…-lowmem.txt` (the
+and `0x677C`; `tools/apriori-order.py` on the payload in `boot` for the dispatch order the
+digest's count is of, and `grep -rn` over `work/uefi/Mu-Silicium` for the digest row's GUID
+(`Pcd.inf:292`). Read: `work/out/qemu-panel-el3-ctl.txt`, `…-ctl2.txt`, `…-lowmem.txt` (the
 plain configuration, three captures), `…-zeromem.txt` (one block) and `…-map.txt`,
 `…-map-long.txt` (the platform map), each whole or at the tail; and in this document
 `:24031` onward, whose subject is the same payload.
@@ -24629,6 +24655,6 @@ plain configuration, three captures), `…-zeromem.txt` (one block) and `…-map
 | instrument | the two run configurations' own exception reports and register dumps, read out of `work/out/qemu-panel-el3-*.txt`; `objdump -D` on EnvDxe for the `DebugAssert` body and the `PSHOLD` routine; `tools/qemu-panel-read.py`'s `low_regions`/`l2_plan` called on this host to fix which blocks the plan holds |
 | shows | that the three `--el3-stub` captures stop at EnvDxe RVA `0x950C` (read of `0x01FD4000`), RVA `0x7D64` (store to `0x0C264000`) and RVA `0x679C` (the deadloop), in that order as the stage-2 table makes more of the platform's declared regions reachable; that `DebugAssert` terminates by writing 0 to `PSHOLD` (`0x0C264000`, from EnvDxe `.data` RVA `0x9634`, named at `MemoryMapLib.c:73`) and looping, so an assert on this build is a power-down; that `X19`/`X20`/`X21` at the fault are `DebugAssert`'s description, line 435 and file name, and the formatted line is on the stack |
 | adds | the fault ladder for the three configurations and the reason each of the three addresses behaves as it does (`virt.flash0` is secure-only below `0x04000000`; `0x0C264000` is undecoded in Non-secure space; block 15 is in the plan through `TCSR_TCSR_REGS 0x01FC0000 + 0x40000` and block 97 through the `AOP_SS_MSG_RAM`/`RPMH_CPRF_CPRF`/`PSHOLD` row); the measured fact that `PSHOLD`'s block is redirected under the platform map and not under the one-block flag, which is the whole difference between the second and third captures; the reading that `P2 RETRY`/`P2 FWHY` cannot be reached by any stage-2 table because the dispatch dies at module 1 of 69; and the PE debug-directory provenance of the prebuilt drivers (`non-hlos-sm6350-la20`, `BOOT.XF.3.3`, `BitraLAA`, `CLANG40LINUX`) |
-| corrects | the reading of the previous family of steps in which the mirrored guest "is polling a register the instrument zeroed": `X0 = X1 = 0` at the store is `mov w1, wzr` in the routine itself, and the run is not polling anything — it is inside an assert's termination; and the reading of the `--el3-stub` captures as one run seen three times, which they are not |
-| does not close | the P3 gate; the owed panel reading; the two `L`s and the Apriori failure the digest's `1/69` counts; and the question of whether a variant built without EnvDxe in the Apriori reaches the `P2` rows at all — nothing was built this step |
+| corrects | the reading of the previous family of steps in which the mirrored guest "is polling a register the instrument zeroed": `X0 = X1 = 0` at the store is `mov w1, wzr` in the routine itself, and the run is not polling anything — it is inside an assert's termination; the reading of the `--el3-stub` captures as one run seen three times, which they are not; and this step's own first reading of the digest row as "one Apriori failure out of 69", replaced in place by the field definitions above once `mu-basecore-local.patch:953`/`:982`/`:1003` and `tools/apriori-order.py`'s output were read against each other |
+| does not close | the P3 gate; the owed panel reading; which module the `L` tick the digest counts belongs to, now that the row in hand is `PcdDxe`'s start and not a failure; and the question of whether a variant built without EnvDxe in the Apriori reaches the `P2` rows at all — nothing was built this step |
 | not an action | nothing was built, nothing was flashed, no partition was written, and the device was absent throughout — every claim here is about bytes on this host and about registers the guest printed itself |
