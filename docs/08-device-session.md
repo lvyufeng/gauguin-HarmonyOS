@@ -22331,7 +22331,7 @@ is the three files' 172,478 B less 446 B of section padding, and the old candida
   untouched; writes go to `boot` only; the control image is read before anything is
   overwritten; and the screen is read before the next flash.
 - **The P3 gate remains unmet.** This step makes the candidate usable; it does not make
-  the gate passable, and the eight absent architectural protocols and the two unschedulable
+  the gate passable, and the nine absent architectural protocols and the two unschedulable
   USB drivers are what stand between the two.
 
 ## Step 4.113 — the six files the record promotes before it can read a disk, and the one protocol its volume carries no producer for
@@ -22389,7 +22389,7 @@ strongest one. `Dispatcher.c:893-895` sets `Depex = NULL; Dependent = TRUE`, and
 (`Dependency.c:225`), which requires **all thirteen** architectural protocols. This image
 has five drivers in exactly that position *without* an a-priori entry —
 `BootGraphicsResourceTableDxe`, `FeatureEnablerDxe`, `MacDxe`, `PwrUtilsDxe`, `VcsDxe` —
-and with eight of the thirteen missing on this platform, none of them can run. The six disk
+and with nine of the thirteen missing on this platform, none of them can run. The six disk
 files are the same kind of file.
 
 The only thing separating them from those five is their position in `APRIORI.inc`. **That
@@ -22748,4 +22748,244 @@ against the artifact, and search the document for the question before writing th
   fails — five of the six files are `L` under both candidate batches, at the same
   `CoreLoadImage` wall BDS itself hits — where Step 4.113 had a statement true of only one
   batch. The wall is unmoved, and so is the device.
+
+## Step 4.115 — the count in the document with the fewest lines per fact, and the ten places the same nine were written as eight
+
+### What this step is
+
+Step 4.114 was committed and pushed, and then the count it left standing was **searched for
+rather than believed** — mechanically, with one exact-pattern grep over every tracked file,
+rather than by re-reading. Five files carry the absent architectural-protocol set derived as
+**nine** in the paragraphs that do the deriving and written as **eight** at ten sites that
+only summarise them: the README twice, the plan twice, this document twice, and two tools four
+times between them.
+
+All ten are Step 4.114's defect one size larger: not a claim written without the paragraph
+that settles it, but a **number** written without it, in the files where a wrong number
+costs the most. Two of them are the files a reader meets *before* this one.
+
+It is host-only and **read-only**, like the two steps before it. Four of the ten sites are
+comment text — three in a Python file, one in a shell script — and neither tool computes a
+different byte for them; no payload was built and nothing was flashed.
+
+### The count is nine, and the source does not state it
+
+The source does not carry the number, which is why this had to be re-derived rather than
+looked up. `DxeProtocolNotify.c:21-36` is `mArchProtocols[]` — thirteen entries, with
+`gEfiVariableArchProtocolGuid` at `:29` and `gEfiVariableWriteArchProtocolGuid` at `:30`, both
+holding `(VOID **)NULL` because neither has a global to write — and `:56-71` is
+`mMissingProtocols[]`, the same thirteen names in the same order. `CoreAllEfiServicesAvailable`
+at `:80-94` returns `EFI_NOT_FOUND` at the **first** `!Entry->Present` and never counts what it
+walked past. So the number has to come off the volume, which is what Step 4.95's census does,
+and what it gives back is a producer/protocol split and not a protocol count:
+
+| the letter at its own a-priori entry | producers | protocols |
+|---|---|---|
+| `L` | 8 | **9** |
+| `s` | 4 | 4 |
+
+`VariableRuntimeDxe` is the entry Step 4.95's table prints as `ap31` / `pos 30`, it is `L`, and
+it is the producer of both variable protocols (`:18430-18433`). The eight `L` producers are
+`SecurityStubDxe`, `BdsDxe`, `WatchdogTimer`, `VariableRuntimeDxe`, `CapsuleRuntimeDxe`,
+`EmbeddedMonotonicCounter`, `ResetSystemRuntimeDxe` and `RealTimeClock`; the nine protocols
+they owe are the thirteen less the four the `s` producers installed — `CPU`, `Metronome`,
+`Timer` and `Runtime`. Step 4.95's per-row table at `:18460-18495` is the same fact spelled out
+row by row, and its correction table at `:18602-18612` is the list of sites the *first*
+correction touched.
+
+The device's own half of this is a loop, not a count, and it prints one line per absent
+protocol: `CoreDisplayMissingArchProtocols` (`DxeProtocolNotify.c:262-280`) walks
+`mArchProtocols[]`, and for every entry with `!Entry->Present` it looks the GUID up in
+`mMissingProtocols[]` and emits `"\n%a Arch Protocol not present!!\n"` at `:274` with that
+entry's printable name. Nine entries are unpresent, so the panel carries **nine** such lines.
+That is why *"the eight the panel printed"* is a sentence about the transcription and not
+about the panel, and it is the distinction the sites below are sorted by.
+
+Two of the five files state the derivation rather than the number: this document, in Step 4.95,
+and `tools/depex-census.py:177` — *"Nine GUIDs for eight, because `VariableRuntimeDxe` installs
+both"*. The README, the plan and `tools/build-apriori-variant.sh` each cite one of those two or
+name the nine outright, which is what made the count worth correcting in them rather than
+re-deriving there.
+
+### The ten sites
+
+| where | said | now reads |
+|---|---|---|
+| `README.md:76` | "step 4.9 for the eight missing protocols" | nine, attributed to step 4.95 |
+| `README.md:84` | "eight architectural protocols — Security, Bds, Watchdog, Variable, Capsule, Monotonic, Reset, Real Time Clock —" | nine, `Variable Write` added |
+| `docs/00-plan.md:26` | "nine protocols absent on nine `L` producers" | nine protocols on **eight** `L` producers |
+| `docs/00-plan.md:336` | "eight architectural protocols the P2 assert is about are still absent" | nine |
+| this document, `:22334` — §4.112's tail | "the eight absent architectural protocols and the two unschedulable USB drivers" | nine |
+| this document, `:22392` — §4.113's body | "with eight of the thirteen missing on this platform" | nine |
+| `tools/build-apriori-variant.sh:7` | "The eight architectural protocols DXE never installs (Security, Bds, Watchdog, Variable, Capsule, Monotonic, Reset, RTC - docs/08 step 4.9)" | nine, `Variable Write` added, citing step 4.95 |
+| `tools/depex-census.py:57` | "The eight architectural protocols the device reported missing are therefore not a dependency deadlock" | nine — the device prints nine lines, `DxeProtocolNotify.c:274` |
+| `tools/depex-census.py:66` | "So on this platform, until the eight are installed, no non-a-priori driver" | nine |
+| `tools/depex-census.py:380` | "With eight of the thirteen missing on this platform, every" | nine |
+
+**Two of the ten quote the same eight-name list** — `README.md:84` and
+`tools/build-apriori-variant.sh:7` — and the other eight quote only its count. The list has one
+origin: Step 4.9's panel reading, whose names are `Security, Bds, Watchdog, Variable, Capsule,
+Monotonic, Reset, RTC` — `Variable Write` omitted, and the omission is the whole of the error,
+because `VariableRuntimeDxe` installs both and its `P2 SEQ` letter is `L`, so it installed
+neither. It is not only in the list: `:734` titles that step *"The eight names, and the
+firmware made to name the culprit"*, and the heading is why a citation to step 4.9 propagated
+the count with it — `README.md:76` did exactly that, pointing a reader at step 4.9 for a number
+step 4.95 had already fixed.
+
+**Step 4.95's correction never left this document**, and that is the structural reason all five
+files were still carrying it. Its table at `:18595-18613` records fifteen sites *by the section
+they are in*, and every section it names is a section of this document; the README, the plan
+and the two tools were outside the sweep's field. The two sites inside this document that this
+step corrects are in §§4.112–4.113 — sections written after Step 4.95, restating the count
+without going back to the census that had settled it.
+
+Two of the ten cost something, and the first is the file a reader meets first. `README.md`
+is the front page: its P2 row sent a reader to step 4.9 for a count step 4.95 had already
+fixed, and eight lines below it the same file named the blocker as eight protocols in an
+eight-name list. A reader who took both away would go looking for a ninth protocol with no
+producer, which is the exact search Step 4.95 measured to be empty.
+
+The second is `docs/00-plan.md`, and the cost there is not the arithmetic. The plan is the
+reader-facing document — the one whose six-row phase table is meant to be read instead of
+this document's 22,991 — and it derives the nine in its own P2 row at `:21-23`, in a paragraph
+whose whole subject is the count: *"`docs/08` step 4.9 recorded the panel as naming **eight**
+missing protocols, and the set is **nine** — `Variable` and `Variable Write` are installed by
+one driver, two statements apart."* So the plan contradicted itself across 314 lines, in the
+two paragraphs a reader of the plan is most likely to read together, and it did so **inside the
+blockquote that states the phase's blocker** — the worst available place for the conflation
+Step 4.95 removed everywhere else. The same row carried the conflation one level down at `:26`:
+*"nine protocols absent on nine `L` producers"*. Nine protocols cannot ride on nine producers
+when one of them owes two of the nine.
+
+### Eight is the right number in the rest of the neighbourhood too, and a search for it will find them
+
+None of these is a defect, and separating them is what keeps this correction from being
+over-applied — this document's own rule, and the one Step 4.95's table entry for the
+neighbouring phrase tests. A repo-wide grep for the word **eight** returns them all, and every
+one falls into one of three groups, with two standing on their own below:
+
+- **The eight producers, providers or drivers.** `:9275` (Step 4.55) and `:9370` — *"eight
+  producers for nine protocols"*, and the depex census table's eight named protocols each with
+  a named a-priori producer; `:802` — *"all eight missing producers are in it"*, which has
+  Step 4.95's own endorsement attached at `:806`; `:903` — *"five of the eight missing
+  producers"*; `:1144` — *"eight *drivers*: the nine missing protocols ride on eight
+  producers"*; `:2426`, `:8550`, `:8594`, `:9315`; `README.md:89`, `:105`, `:110`, `:113`;
+  `tools/make_uefi_platform.py:611` and `:671` — *"the eight architectural-protocol providers
+  this board never"*, where the noun is the right one and eight the right count for it;
+  `tools/build-apriori-variant.sh:14`, `:49`, `:87`. Eight is the count of the *producers*, and
+  the producer noun is in every one of these sentences.
+- **The eight names of the transcription.** Step 4.9's reading was eight names, so a site that
+  reports *the reading* rather than *the count* keeps its eight: the record's own heading at
+  `:734`, its list at `:745` and `:756`; `:982`, where the eight is an identity between the
+  table's rows and the names the reading took off the panel — *"the eight names are the eight the
+  panel printed as `Arch Protocol not present`"*, true of the reading and false of the panel;
+  `:1504`, whose neighbouring blockquote at `:1512` is Step 4.95's correction of it; `:1268`,
+  corrected at `:1272`; `:2423`, corrected at `:2437`; `:18528`; `docs/00-plan.md:22`, which
+  carries the record and the correction in one sentence; and `tools/arch-protocol-census.py:14-17`
+  — *"Step 4.9 recorded the panel as showing **eight** names … and, from those eight, asserted
+  that five were present"*, a sentence about the record, followed four lines later by *"The set
+  has nine names, and the transcript was short one."* Substituting nine in any of these would
+  make the sentence misdescribe the reading it is correcting, which is the one thing this step
+  must not do. `README.md:76` reads like a member of this group — it named step 4.9 — and is not
+  one: it offered the eight as the count, and a count in a phase table is what a reader takes
+  away. The group is sorted by what the sentence does, not by what it cites.
+- **The intersection of a name list with the absent set.** `:21253` — *"Its 234-byte depex
+  names thirteen protocols, eight of them among the nine the panel reports absent."* Both
+  numbers are in the sentence and both are right; `:22238`; `:8764`; `:9314`; and
+  `tools/depex-census.py:76` and `:81` — *"a 13-term AND, eight terms of which are in the
+  never-installed set … Every one of the eight has an a-priori producer sitting in the same
+  volume"*. That is the intersection read out of the built depex section rather than off the
+  panel, and it is eight whatever the absent set's size is.
+
+Two more stand on their own:
+
+- `tools/depex-census.py:177` — *"Nine GUIDs for eight, because `VariableRuntimeDxe` installs
+  both"*. The pair is the whole point of the sentence, and the dict under it holds nine.
+- `:9366` — *"Every one of the nine missing architectural protocols has a producer in the
+  volume's a-priori array"*. Correct, and it makes the point better than the correction does:
+  the same table records eight producers and nine absent protocols one cell apart.
+
+### The neighbouring pair, which is not this, and which a careful correction would have broken
+
+`README.md:89` and this document's `:829` both split the a-priori batch in **five** and
+**eight** — *"the five providers that did install … while the eight that did not are all far
+later in it"*, and *"the first thing in this project that separates the five from the eight"* —
+and Step 4.95's correction table lists that phrase at `:18603` as *"is four and nine"*. Neither
+side is wrong; they are counting two different things, and the neighbourhood holds three:
+
+| what is counted | installs | doesn't | where it is stated |
+|---|---|---|---|
+| the table's **rows** — providers in the batch that installed what they owe | 5 | 8 | `:831-848`, `:862-864`, `README.md:89` |
+| the thirteen **protocols** | 4 | **9** | `:18460-18495`, and this step's table above |
+| the **producers** of those thirteen protocols | 4 | 8 | `tools/arch-protocol-census.py` |
+
+The row framing and the producer framing differ by one row, and the row is `ArmGicDxe` — the
+a-priori row at `SEQ 6`, `ap7` in the third convention, `.inf` 7 in the first column of the
+table at `:836`. It is one of the thirteen providers this document has carried since
+Step 4.9, it is `present`, and it owes **`HardwareInterrupt`**, which is not one of the
+thirteen architectural protocols — the very mismatch Step 4.95 recorded at `:18609`, where a
+list of thirteen *protocols* had `7` `ArmGicDxe` standing where `Variable Write`'s second `31`
+belongs. So five rows installed what they owe, eight rows did not; four of the thirteen
+protocols are present, nine are not; twelve distinct drivers produce the thirteen protocols,
+four succeeded and eight did not. All three pairs are true.
+
+**The text was left as it stands and the table entry was not edited.** Changing `:829` and
+`README.md:89` to "four and nine" would replace a row count with a protocol count and make
+both sentences assert something their own table does not show; changing Step 4.95's entry would
+rewrite an audit record. What is recorded instead is the measurement that separates the three
+pairs, because a later step that greps for `five` next to `eight` — as this step grepped for
+`eight` next to `protocol` — will find those two sites and needs to know they are the one place
+in the neighbourhood where the smaller number is not an error.
+
+### What was written, and what was not
+
+- Ten counts, in five files, and every one of them is a substitution rather than an addition.
+  Nine are **in place with no line added**; the tenth, `docs/00-plan.md:336`, needed one line
+  (two became three) to carry the producer/protocol distinction, and it sits below both of the
+  plan's own line-number anchors — `:20` and `:319`, cited at `:20608`, `:20706` and `:20416` —
+  so it moves nothing any citation points at. The two sites in this document are line-neutral
+  by construction, which is the one place this step departs from Step 4.95's form: Step 4.95
+  added blockquotes at the clauses it corrected (`:1512-1522`, `:2437`) and thereby moved every
+  line after them — which is also why its record is a list of sections rather than of files, and
+  stopped at this file's edge.
+- **No tool's logic changed and no payload was built.** Four of the ten sites are comments —
+  three in `tools/depex-census.py` (`:57`, `:66`, `:380`) and one in
+  `tools/build-apriori-variant.sh` (`:7-9`) — and none of them changes a byte either tool
+  computes; both tools were read and not run, and the arithmetic above is Step 4.95's census
+  restated.
+- **The step's own first draft was wrong about its own scope, and finding that was the same
+  method.** It was written as three sites in two documents, then widened to eight in four files
+  by the first grep, then to ten in five by the second — and at every widening the numbers
+  inside it had to be re-measured rather than re-read: the plan's phase table has **six** rows
+  and not eight, two of the sites quote the name list and not three, and the two sites in
+  `tools/depex-census.py` the narrow pattern missed are in the same file as the one it found.
+  The narrow pattern is where they hid, and the two hid differently. It is *eight* within fifty
+  characters of a protocol noun, **on one line**, and that file's docstring is wrapped: `:66`
+  reads *"thirteen** architectural protocols. So on this platform, until the eight are"* — the
+  noun and the number 43 characters apart, inside the window — so the pattern **did** print it,
+  and the line sat in that grep's output unread. That is the failure this document keeps catching,
+  a result printed and not read, and it is why the count of sites this step corrects is ten and
+  not eight. `:57` is the one no line-based pattern could print: the line ends *"…so PCD exists
+  before any of them. The eight"* and the noun it counts, `architectural protocols`, opens the
+  next line. The bare word is what found it.
+- **No partition was written.** `boot` still holds
+  `work/out/p2-variants/Mu-gauguin-silicon-gzip.img`,
+  `90b21643e3450c326fb3d24baf64d58d4692a5d155c36b76d2e020ff04a96b59` — rung 7260, thirty-second
+  step running.
+- **The device is absent**, so the owed reading under 先读屏，再刷下一次 remains owed. The
+  candidate `work/out/usb-host/Mu-gauguin-xhci-host-gzip.img` at `f1a7106b…` is still unflashed
+  and still must not stand in for the payload in `boot` until that reading is taken.
+- Standing rules unchanged: `userdata`, the partition table and the firmware LUN are untouched;
+  writes go to `boot` only; the control image is read before anything is overwritten; and the
+  screen is read before the next flash.
+- **The P3 gate remains unmet.** This step moves no firmware and no diagnostic; it removes a
+  wrong number from the files that state the gate, so that the gate's own sentence, the README's
+  blocker line and the plan's P2 row all count the same nine.
+- Read this step: `DxeProtocolNotify.c:21-36`, `:56-71`, `:80-94`, `:262-280`; in this
+  document `:734`, `:829`, `:831-848`, `:836`, `:862-864`, `:9275`, `:9366`, `:9370`, `:982`,
+  `:18430-18495`, `:18595-18613`, `:18602-18612`, `:21253`, `:22238`, `:22334`, `:22392`;
+  `docs/00-plan.md:21-29`, `:23-25`, `:26`, `:336`; `README.md:76`, `:84`, `:89`, `:105`;
+  `tools/build-apriori-variant.sh:7-9`, `:49`; `tools/depex-census.py:51-90`, `:177`,
+  `:376-382`; `tools/arch-protocol-census.py:14-17`; and `tools/make_uefi_platform.py:611`,
+  `:671`.
 

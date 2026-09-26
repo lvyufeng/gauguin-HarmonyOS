@@ -4,11 +4,11 @@
 # Two experiments are defined below: `arch-first` reorders the a-priori batch,
 # `xhci-host` adds the USB host stack.
 #
-# Why arch-first exists. The eight architectural protocols DXE never installs
-# (Security, Bds, Watchdog, Variable, Capsule, Monotonic, Reset, RTC - docs/08
-# step 4.9) are all providers that sit late in APRIORI.inc, and the batch runs in
-# APRIORI.inc order, not in firmware-volume order. So there are two readings of
-# the same evidence and the static pass cannot separate them:
+# Why arch-first exists. The nine architectural protocols DXE never installs
+# (Security, Bds, Watchdog, Variable, Variable Write, Capsule, Monotonic, Reset,
+# RTC - docs/08 step 4.95) are all providers that sit late in APRIORI.inc, and the
+# batch runs in APRIORI.inc order, not in firmware-volume order. So there are two
+# readings of the same evidence and the static pass cannot separate them:
 #
 #   * these drivers fail wherever they are put, or
 #   * something between the providers that do install and these eight fails them.

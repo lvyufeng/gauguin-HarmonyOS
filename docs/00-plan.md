@@ -23,7 +23,7 @@ length was itself wrong for a while: `docs/08` step 4.9 recorded the panel as na
 are installed by one driver, two statements apart, and that driver's `P2 SEQ` letter is
 `L`, so it installed neither. Step 4.95 derives the set from the volume and the source
 (`tools/arch-protocol-census.py`) and corrects every count that came off that reading;
-the partition is exact both ways — nine protocols absent on nine `L` producers, four
+the partition is exact both ways — nine protocols absent on eight `L` producers, four
 present on four `s` — so the missing name is not a judgement call. Nothing about the
 blocker changes, because the ninth name shares a producer with the eighth and lands on
 the same `SEQ` index. The three earlier attempts stopped before any of our code for a reason now fixed: the tree in the image had no `/__symbols__`, so ABL refused the vendor overlay (`docs/07`). The gate said "reaches a shell" until the volume was inventoried and the shell turned out to be absent from *every* platform in the tree, `suryaPkg` included, so it would not have distinguished our firmware from a working one |
@@ -333,8 +333,9 @@ Work:
 > bind through. It was audited against the wrong base and read as current for six steps. Two
 > consequences for a reader of this plan: the sizes in the P3 narrative below are stale (the
 > `DSDT` is 12,341 bytes, not 2,369), and **the gate is still unmet** — two of the three new
-> drivers' dependency expressions cannot evaluate on this driver set, and eight architectural
-> protocols the P2 assert is about are still absent. No USB stick can be seen yet.
+> drivers' dependency expressions cannot evaluate on this driver set, and nine architectural
+> protocols the P2 assert is about are still absent — nine protocols, eight producers, the
+> distinction the P2 row above draws. No USB stick can be seen yet.
 >
 > **Step 4.113 measured the gate's *other* half and found no obstacle of its own.** The storage
 > chain the second clause needs — `UFSDxe`, `DiskIoDxe`, `PartitionDxe`, `Fat`, with `SdccDxe`

@@ -54,8 +54,8 @@ blocked by its dependency expression, and none is unjudgeable either.** 27 of th
 remaining 6 (`RamManagerDxe`, `SmbiosDxe`, `SmBiosTableDxe`, `AcpiTableDxe`,
 `AcpiPlatform`, `SetupBrowser`) all depend on nothing worse than
 `EFI_PCD_PROTOCOL_GUID`, `EFI_ACPI_TABLE_PROTOCOL_GUID` and the HII protocols -
-and `PcdDxe` is a-priori entry 2, so PCD exists before any of them. The eight
-architectural protocols the device reported missing are therefore not a
+and `PcdDxe` is a-priori entry 2, so PCD exists before any of them. The nine
+architectural protocols the device reports missing are therefore not a
 dependency deadlock; they are their producers failing to *load*, which is the
 same failure the `P2 SEQ` band already points at.
 
@@ -63,7 +63,7 @@ They still gate drivers, though, and by a second mechanism. A driver with **no**
 depex section is not unconstrained: `Dispatcher.c:893-895` marks it `Dependent`
 with a NULL depex, and `CoreIsSchedulable` answers a NULL depex through
 `CoreAllEfiServicesAvailable` (`Dependency.c:225`), which requires **all
-thirteen** architectural protocols. So on this platform, until the eight are
+thirteen** architectural protocols. So on this platform, until the nine are
 installed, no non-a-priori driver without a depex can run either - 5 of them in
 the payload of record (`BootGraphicsResourceTableDxe`, `FeatureEnablerDxe`,
 `MacDxe`, `PwrUtilsDxe`, `VcsDxe`), and `XhciDxe` in the `xhci-host` payload. The
@@ -377,7 +377,7 @@ def main():
             # `Depex = NULL; Dependent = TRUE` for these, and a NULL depex sends
             # `CoreIsSchedulable` down the UEFI 2.0 branch: `CoreAllEfiServicesAvailable`
             # (`Dependency.c:225`), which requires **all thirteen** architectural
-            # protocols. With eight of the thirteen missing on this platform, every
+            # protocols. With nine of the thirteen missing on this platform, every
             # non-a-priori driver with no depex is unschedulable - including
             # `XhciDxe`, which has no depex section anywhere.
             nodepex += 1

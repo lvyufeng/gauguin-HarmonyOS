@@ -73,7 +73,7 @@ map and the restore procedure.
 |---|---|---|---|
 | **P0** | Device survey + full partition backup + XBL driver inventory | every partition dumped; DXE set identified | ✅ done |
 | **P1** | Mainline Linux on gauguin (`gauguin.dts` + kernel + `fastboot boot`) | framebuffer up, UFS mounted, USB console | **gate not observed** — image builds, `fastboot boot` was refused |
-| **P2** | UEFI skeleton (`Silicon/Qualcomm/BitraPkg` + `Platforms/Xiaomi/gauguinPkg`) | boot manager draws on screen, UFS enumerates as a block device | **runs** — the image with the current device tree was written to `boot` and our firmware **executes**: the panel fills with its own DEBUG stream (`SerialPortLib` is the framebuffer in a DEBUG build) and then stops on `ASSERT [DxeCore] DxeMain.c(593)`, one architectural protocol short of handing off to BDS. Three earlier attempts stopped before reaching our code because the tree in the image had no `/__symbols__`. See `docs/08` step 4.8 for that, and step 4.9 for the eight missing protocols and the instrumentation that names the driver |
+| **P2** | UEFI skeleton (`Silicon/Qualcomm/BitraPkg` + `Platforms/Xiaomi/gauguinPkg`) | boot manager draws on screen, UFS enumerates as a block device | **runs** — the image with the current device tree was written to `boot` and our firmware **executes**: the panel fills with its own DEBUG stream (`SerialPortLib` is the framebuffer in a DEBUG build) and then stops on `ASSERT [DxeCore] DxeMain.c(593)`, one architectural protocol short of handing off to BDS. Three earlier attempts stopped before reaching our code because the tree in the image had no `/__symbols__`. See `docs/08` step 4.8 for that, and step 4.9 for the missing protocols and the instrumentation that names the driver — **nine** of them, corrected from eight in step 4.95 |
 | **P3** | UEFI with full driver set + ACPI tables | Windows installer boots off USB | **groundwork** — the ACPI table set is decided and its values checked rather than assumed: Moorea supplies `APIC`/`FACP`/`GTDT` (Kona, which the only Bitra-family platform file uses, matches nothing), and all eight of the values those three tables carry — PMU and maintenance INTIDs, GICR base and stride, the four architectural-timer INTIDs, the platform timer's block and frame addresses and both frame interrupts — agree with gauguin's own device tree. The DSDT is the only new content; its UFS and USB values turn out to already equal bitra's. `docs/07` has the decision and the four things still missing |
 | **P4** | Windows 11 ARM64 deployment | Windows desktop on the device | not started |
 | **P5** | Hardware enablement in Windows | touch / Wi-Fi / GPU / audio one by one | not started |
@@ -81,9 +81,9 @@ map and the restore procedure.
 **Read the state from this table, not from the commit log.** Every commit so far
 is a checkpoint inside P2; none is a completed phase. `docs/00-plan.md` has the
 per-phase detail, and `docs/08-device-session.md` has the exact sequence for the
-next time the phone is in hand. What is blocking is eight architectural protocols
-— Security, Bds, Watchdog, Variable, Capsule, Monotonic, Reset, Real Time Clock —
-that DXE never installs. The static pass got as far as it can: the dependency
+next time the phone is in hand. What is blocking is nine architectural protocols
+— Security, Bds, Watchdog, Variable, Variable Write, Capsule, Monotonic, Reset, Real
+Time Clock — that DXE never installs. The static pass got as far as it can: the dependency
 expressions all resolve, the Apriori file is complete, the images are well-formed,
 and the five providers that *did* install are exactly the first five providers in
 Apriori order while the eight that did not are all far later in it — so the batch
