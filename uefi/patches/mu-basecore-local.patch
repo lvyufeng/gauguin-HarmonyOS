@@ -329,7 +329,7 @@ index 39668123..8405bc31 100644
  #define  USB_INTERFACE_SIGNATURE  SIGNATURE_32 ('U', 'S', 'B', 'I')
  #define  USB_BUS_SIGNATURE        SIGNATURE_32 ('U', 'S', 'B', 'B')
 diff --git a/MdeModulePkg/Core/Dxe/Dispatcher/Dispatcher.c b/MdeModulePkg/Core/Dxe/Dispatcher/Dispatcher.c
-index d7c7147e..713b2740 100644
+index d7c7147e..8e11d534 100644
 --- a/MdeModulePkg/Core/Dxe/Dispatcher/Dispatcher.c
 +++ b/MdeModulePkg/Core/Dxe/Dispatcher/Dispatcher.c
 @@ -60,6 +60,631 @@ EFI_LOCK  mDispatcherLock = EFI_INITIALIZE_LOCK_VARIABLE (TPL_HIGH_LEVEL);
@@ -1031,7 +1031,7 @@ index d7c7147e..713b2740 100644
          if (!EFI_ERROR (GetNextFileStatus)) {
            if (Type == EFI_FV_FILETYPE_DXE_CORE) {
              //
-@@ -1412,6 +2071,26 @@ CoreFwVolEventProtocolNotify (
+@@ -1412,6 +2071,29 @@ CoreFwVolEventProtocolNotify (
                          );
      if (!EFI_ERROR (Status)) {
        AprioriEntryCount = SizeOfBuffer / sizeof (EFI_GUID);
@@ -1041,8 +1041,11 @@ index d7c7147e..713b2740 100644
 +      // P2BRINGUP: what was actually read, and what it adds up to on the device.
 +      // tools/fv-census.py prints the same three numbers for the same section out
 +      // of the same image, so the two are comparable by inspection: if the panel
-+      // says 736 bytes where the host says 1120, the read is the mechanism and
-+      // nothing downstream of it needs explaining.
++      // says 752 bytes where the host says 1120, the read is the mechanism and
++      // nothing downstream of it needs explaining. The size to compare against is
++      // 16 bytes per entry, and the SEQ line runs one char short of `entries` -
++      // entry 0 is the DXE core file, which never matches - so 752 bytes is 47
++      // entries and gives the 46-character line this record is decoding.
 +      //
 +      mP2ApriBytes   = SizeOfBuffer;
 +      mP2ApriEntries = AprioriEntryCount;
@@ -1058,7 +1061,7 @@ index d7c7147e..713b2740 100644
      } else {
        AprioriEntryCount = 0;
      }
-@@ -1433,11 +2112,87 @@ CoreFwVolEventProtocolNotify (
+@@ -1433,11 +2115,87 @@ CoreFwVolEventProtocolNotify (
            DriverEntry->Scheduled = TRUE;
            InsertTailList (&mScheduledQueue, &DriverEntry->ScheduledLink);
            CoreReleaseDispatcherLock ();
@@ -1146,7 +1149,7 @@ index d7c7147e..713b2740 100644
      }
  
      //
-@@ -1470,6 +2225,251 @@ CoreInitializeDispatcher (
+@@ -1470,6 +2228,265 @@ CoreInitializeDispatcher (
    PERF_FUNCTION_END ();
  }
  
@@ -1194,10 +1197,24 @@ index d7c7147e..713b2740 100644
 +  // length is the number of entries that matched and went on the scheduled queue -
 +  // never the number scanned. A SEQ of 46 is therefore 46 matches out of `entries`,
 +  // and the rest are `unhit`; the two together are what localises a batch that came
-+  // up short, and neither half localises it alone. `entries=70` with a 46-character
-+  // SEQ is a scan that ran to the end of the array, so the 24 it did not match were
-+  // absent from mDiscoveredList. A `entries=` well under 70 with a SEQ one shorter
-+  // than it would be a short read - a different fault, with a different fix.
++  // up short, and neither half localises it alone.
++  //
++  // What the pair does *not* say is whether the entries it did not match were
++  // absent from mDiscoveredList or were simply never handed to the loop. The
++  // array is 70 entries and 69 of them are present as DRIVERs on every build
++  // measured on the host, so a completed loop promotes 69 - which makes a
++  // 46-character SEQ one of two runs, and this line reads the same for both:
++  // either the loop was stopped after 46 matches, or the volume is a build with
++  // 24 of the array's GUIDs not present in it. `P2 WALK t=0 seen=` is the line
++  // that separates them. The walk is total over a volume that installed at all -
++  // FvCheck builds the FFS list in full or the volume gets no FV protocol
++  // (FwVol.c:676), FvGetNextFile has no mid-list error, and
++  // CoreAddToDriverList's only early return is out-of-resources behind an
++  // ASSERT - so `seen` is the volume's own DRIVER file count and nothing about
++  // the loop: 69 for a full volume with a stopped loop, about 46 for a build
++  // that only has 46. A `entries=` well under 70 with a SEQ one shorter than it
++  // would be a short read - a third fault, with a third fix. See `docs/08` step
++  // 4.130 for the measurement and step 4.132 for the walk's totality.
 +  //
 +  DEBUG ((
 +    DEBUG_ERROR,
@@ -1398,7 +1415,7 @@ index d7c7147e..713b2740 100644
  //
  // Function only used in debug builds
  //
-@@ -1486,11 +2486,73 @@ CoreDisplayDiscoveredNotDispatched (
+@@ -1486,11 +2503,73 @@ CoreDisplayDiscoveredNotDispatched (
  {
    LIST_ENTRY             *Link;
    EFI_CORE_DRIVER_ENTRY  *DriverEntry;

@@ -952,6 +952,20 @@ prints the denominator as the literal 70 because that is a constant in the macro
 text rather than a computed count, so the two numbers on the `SEQ` and `STATS`
 lines are not counted the same way and should not be compared to each other.
 
+> **Both halves withdrawn in step 4.132.** The build that drew the 46-character `SEQ` prints
+> `"P2 STATS discovered=%d apriori=%d/%d started=%d diag=%d noload=%d\n"` — two conversion
+> specifiers, so the denominator is an *argument*, and the argument is `mP2AprioriCount`,
+> set in the promotion loop as `MAX (mP2AprioriCount, AprioriEntryCount)` where
+> `AprioriEntryCount = SizeOfBuffer / sizeof (EFI_GUID)` is the number of Apriori entries
+> **the run actually read**. The numerator is `mP2Apriori`, which is the same variable
+> `SeqLen` is set from — so the `SEQ` length and the `STATS` numerator are one number printed
+> twice, and the denominator is the only new information on the line. Far from being
+> incomparable, `apriori=46/N` is the row that decides which of the two surviving readings of
+> the string the phone's run was. Undoing the "not a constant" error also corrects the
+> arithmetic: index 0 of the array is the DXE core file, which is never in `mDiscoveredList`
+> and never matches, so an N-entry array read in full promotes N − 1 — and a 46-character
+> line is a **47**-entry array, not a 46-entry one.
+
 All at `DEBUG_ERROR`, which `PcdDebugPrintErrorLevel` `0x8007EE0F` enables. The
 line budget is deliberate: nine missing protocols print as eighteen lines, so the
 `NOLOAD` list is capped at six and the two lines that matter are printed **last**,
@@ -1482,6 +1496,17 @@ filling in the core's loaded-image device path and **not** calling
 not counted. Every one of the other 69 entries is a real
 `EFI_FV_FILETYPE_DRIVER`, and all 70 resolve to a file the volume actually
 contains (70/70, checked GUID by GUID). Hence index 0 of `P2 SEQ` = `PcdDxe`.
+
+> **The join is conditional as of step 4.130, and the condition is named in step 4.132.** Everything
+> above is a property of *the promotion loop*, and as such it holds: `mP2Apriori` counts matches in
+> array order, and entry 0 never matches. What it does not establish is that slot *k* of the string
+> is Apriori entry *k + 1* — that identity needs the scan to have promoted entries 1..*k* in order,
+> which is true if the array was read short (the reading step 4.132 calls **R1**) and false if the
+> walk's discovered list was short (its **R2**), where the promoted batch is scattered and 33 of the
+> 46 slots name a different entry. The row that decides between the two is `P2 STATS`'s `apriori=`
+> denominator, which the record has never transcribed. Until it is read, treat the decode tables in
+> this document that depend on the identity — `slot 18 = RpmhDxe`, `slot 21 = ShmBridgeDxe`,
+> `slot 36 = SecurityStubDxe` — as R1's tables.
 
 **There is no 69-character cap.** An earlier draft of this step said there was;
 the only cap in the printer is `min (mP2Apriori, P2BRINGUP_APRIORI_MAX)`, and
@@ -6137,7 +6162,12 @@ the characters already recorded:
   * **no `?` anywhere** — `?` is what the promotion loop stamps into
     `mP2AprioriRes` before anything runs, so its absence means the drain reached
     every one of the 46 promoted entries. The batch ran to the end of the array;
-    nothing was skipped.
+    nothing was skipped. **[Conditional since step 4.130, named in step 4.132: the
+    second sentence is true under R1 and false under R2, and the first does not
+    support it either way. `mP2SeqLine` is indexed by *match*, so a run that read
+    47 of the 70 entries and promoted 46 of them stamps no `?` — the absence says
+    the drain resolved every character that was printed, which is a statement about
+    the promoted batch and not about how far into the array the walk read.]**
   * **no `S` anywhere** — `S` is `CoreStartImage` returning an error. Its absence
     means every driver that loaded also started, and **all 27 failures are at
     `CoreLoadImage`, so no driver in this array ran and failed.** The exception is
@@ -25395,13 +25425,21 @@ the two are confounded in every capture this host holds.
 
 ### The artifact that would separate build from boot path is not on this disk
 
+> **Withdrawn in step 4.132.** It is on this disk. The search below hashed *files*, and the
+> payload it was looking for is not a file — it is the gzip-compressed kernel *inside*
+> `work/out/boot-before-p2walk.img`, which `tools/probe-fingerprint.py`'s decompression walk
+> reaches and `sha256sum` does not. That image's payload is 3,145,840 bytes with md5
+> `a2963f46faeb27fe601022c3a67aa738` exactly, and it is the only file under `work/` whose
+> decompressed payload carries that md5. The heading stands as the record of a mistake worth
+> keeping: "hashed every file" is not the same measurement as "read every payload".
+
 The phone's payload, md5 `a2963f46faeb27fe601022c3a67aa738`, is the one artifact that would
 settle it: run it under this instrument, seeded exactly as the mirror's run is, and read
 `K 17` back. It hashes to no file here. All 228,483 regular files under `work/` — 130 images
 and every payload among them — were hashed for this step, and the only 3,145,840-byte
 payloads that exist are this tree's own `SILICIUM_UEFI.fd-bootshim` (`deb661b31cdcf2ef6bf1ae0ffc68e00f`)
 and `suryaPkg`'s (`f1f14693d3d4d15fd340824cec4f9bf0`). The phone's reading survives only as
-the recorded string at `:1448` of this document.
+the recorded string at `:1458` of this document.
 
 ### The experiment that is within reach
 
@@ -25436,9 +25474,9 @@ regular files under `work/`.
 |---|---|
 | instrument | the phone's recorded `P2 SEQ` string, the mirror's existing capture, the core's and dispatcher's own source, and `CmdDbDxe.efi`'s own bytes — nothing was built, flashed or written, and the device was absent |
 | shows | that the phone's run and the seeded mirror's can be compared at exactly eighteen Apriori indices, that seventeen of them agree, and that the eighteenth is Apriori 17 = `CmdDbDxe`, where the phone's `EntryPoint` returned `EFI_SUCCESS` and the mirror's returned `EFI_UNSUPPORTED` |
-| adds | the side-by-side table of the two runs over their one overlapping region; the `s`-vs-`Ss`-vs-`SO` vocabulary mapping, with `DALSYS`'s `SO` shown to be an agreement and not a second disagreement; the four `EFI_UNSUPPORTED` sites in this core with two of them eliminated by the capture's own silence and one by being in `CoreUnloadImage`; the conclusion that the printed status is the `EntryPoint`'s own return, printed by `CoreExit` and not by `CoreStartImage`; `CmdDbDxe`'s complete set of three self-built error values, with `EFI_UNSUPPORTED` excluded as a literal, as a 64-bit pair and as a 32-bit value; and the fact that the phone's payload is on no disk here, 228,483 files hashed |
+| adds | the side-by-side table of the two runs over their one overlapping region; the `s`-vs-`Ss`-vs-`SO` vocabulary mapping, with `DALSYS`'s `SO` shown to be an agreement and not a second disagreement; the four `EFI_UNSUPPORTED` sites in this core with two of them eliminated by the capture's own silence and one by being in `CoreUnloadImage`; the conclusion that the printed status is the `EntryPoint`'s own return, printed by `CoreExit` and not by `CoreStartImage`; `CmdDbDxe`'s complete set of three self-built error values, with `EFI_UNSUPPORTED` excluded as a literal, as a 64-bit pair and as a 32-bit value; and the fact that the phone's payload is on no disk here, 228,483 files hashed **[withdrawn in step 4.132: the payload is on this disk as the compressed kernel inside `work/out/boot-before-p2walk.img` (md5 `a2963f46…`, the only such payload under `work/`), because the search hashed files and the payload is not a file]** |
 | corrects | that the phone's `L` at Apriori 19 and the mirror's stop at Apriori 19 are the same failure: they are one entry index reached by two mechanisms, a failed load there and a loaded driver asserting inside itself here, and the coincidence of index is not corroboration; and the reading of the `Error: … start failed` row as the core's decision, which it is not |
-| does not close | whether the seed or the build is why `CmdDbDxe` returns `EFI_UNSUPPORTED` — the two are confounded in every capture here and the payload that would separate them is absent; the P3 gate and the owed panel reading of the flashed 4.74 set; `SO`'s value, which needs `P2 WHAT`; and everything from Apriori 19 on, which neither record reaches by the same route |
+| does not close | whether the seed or the build is why `CmdDbDxe` returns `EFI_UNSUPPORTED` — the two are confounded in every capture here and the payload that would separate them is absent **[corrected in step 4.132: the payload is present, as the compressed kernel of `work/out/boot-before-p2walk.img`, so this item is open and unblocked rather than blocked on an absent artifact]**; the P3 gate and the owed panel reading of the flashed 4.74 set; `SO`'s value, which needs `P2 WHAT`; and everything from Apriori 19 on, which neither record reaches by the same route |
 | not an action | nothing was built, nothing was flashed, no partition was written, and the stub was not modified — the seed extension is designed here and not built |
 
 ## Step 4.127 — The AOP seed turns `K 17 SU` into `K 17 Ss`, and the SMEM seed's two corrections turn the `404` row off without moving that one
@@ -25448,6 +25486,9 @@ The defect was in the AOP seed's read-back: the mailbox word and the record it p
 not agree, so the seed was not known to be written where the driver looks. The experiment was
 the one thing that could separate the seed from the build as the cause of `CmdDbDxe`'s
 `EFI_UNSUPPORTED`, and 4.126 could not run it because the phone's payload is on no disk here.
+**[Corrected in step 4.132: the payload is on this disk — the gzip-compressed kernel inside
+`work/out/boot-before-p2walk.img`, md5 `a2963f46…`, reached by decompression and not by hashing
+files — so the string "on no disk here" is wrong wherever it appears in 4.126 and 4.127.]**
 
 This step closes the first, runs the second, and reports both. The read-back was reading the
 wrong bytes — the seed had been written correctly all along — and the four-rung ladder that
@@ -25747,10 +25788,16 @@ the payload's path beside it.
 
 That matters beyond bookkeeping, because 4.126 built a confound on it. The payload the phone
 ran and the payload the mirror ran were said to be unreachable in one direction and replaced in
-the other, and "the two are confounded in every capture here" rests on that. The first half
-stands — the phone's payload, md5 `a2963f46faeb27fe601022c3a67aa738`, is still on no disk here.
-The second half does not: every capture in 4.125, 4.126 and this step records
-`0dcfbd6a…` / `0e5226c0…` in its own header, and the file's mtime orders it before all of them.
+the other, and "the two are confounded in every capture here" rests on that. Neither half stands
+now: the mirror's payload has hashed to `0e5226c0…` since the file at that path was rebuilt, and the
+phone's payload, md5 `a2963f46faeb27fe601022c3a67aa738`, **is on this disk** — it is the
+gzip-compressed kernel inside `work/out/boot-before-p2walk.img` (1,142,784 B, sha256 `fb697f47…`),
+the image this document has named since step 4.30 as the producer of the 46-character `P2 SEQ`, and
+the only file under `work/` whose decompressed payload carries that md5. Step 4.132 measured it;
+what step 4.126 called an unreachable artifact is a `python3 -c` one-liner away.
+What *does* survive from this passage is the ordering: every capture in 4.125, 4.126 and this step
+records `0dcfbd6a…` / `0e5226c0…` in its own header, and the file's mtime orders it before all of
+them — so the confound was real when it was written, and is now separable rather than closed.
 
 ### Read this step
 
@@ -26736,3 +26783,281 @@ arithmetic are unchanged for the readings it was written for.
 | corrects | `tools/apriori-index.py`'s *"The position mapping, and why it is trustworthy"*, its two anchor conclusions, and the three printed conclusions above; `tools/arch-protocol-census.py`'s *"positional and independently corroborated"* and its `ap31 pos 30`; `tools/fv-census.py`'s *"every later slot shifts by one"*; `tools/apriori-prefix.py`'s complete-scan candidate. Step 4.130's `corrects` row named the first two of these as corrections of the record's premise; this step is where the tools themselves say so |
 | does not close | nothing about the device: the P3 gate and the owed panel reading of the flashed 4.74 set under *先读屏，再刷下一次* are untouched, and so are the phone's `P2 APRI entries=` / `sum=` / `miss=` / `unhit=`, which are still the rows that would decide which map the run used; no tool here can decode a stopped-walk string, and none was made able to |
 | not an action | no firmware was built, nothing was flashed, no partition was written; the four edited files are development tools that read images off this disk, and their computed output is unchanged — `fv-census.py`'s is byte-identical. The porting goal is not advanced by this step: P3's display, USB-host and buttons items remain unfinished and P4 and P5 are not begun |
+
+
+## Step 4.132 — the walk cannot stop before the end of a volume's file list, so the 46-character `P2 SEQ` was not a scan cut at 48 or 49; and the build that drew it is on this disk, carrying six of the twenty-seven rows and none of the four that would settle it
+
+Step 4.130 read the whole archive and concluded that the 46-character `P2 SEQ` in this record is a
+**stopped walk** — a scan handed 48 or 49 of the volume's 80 `DRIVER` files, promoting 46 entries
+and never considering 24 of them. Everything in that step's second half follows from that premise:
+the promotion loop's own slot map, the 33 of 46 slots that name a different Apriori entry than the
+identity map does, the four named anchors that move with them, `PmicDxe` and `BdsDxe` shown to have
+been *unhit* rather than failed, and the paragraph of `docs/00-plan.md` rewritten around all of it.
+This step tests the premise at the source rather than against another image, and the premise does not
+survive. **A discovery walk over a volume that installed its `FirmwareVolume2` protocol enumerates
+that volume's file list in full.** There is no `break`, no `continue` and no error return in the walk
+that ends it early; the two stops step 4.130 admits are not unmeasured states but unreachable ones.
+
+The step also answers a question this record has carried since step 4.126 in as many words — *"the
+phone's payload, md5 `a2963f46…` … is still on no disk here"* — and answers it the other way. The
+payload is on this disk, under another name. And a census of what that build can print changes which
+panel rows are owed: the build that drew the 46 characters carries **six** of the twenty-seven `P2`
+rows the sources contain, and `P2 WALK`, `P2 FREE` and `P2 APRI` are not among them, so three of the
+four rows the record's owed lists keep naming cannot be read off that build by any number of
+reboots. The one that can is `P2 STATS` — and its denominator is a *computed* count rather than the
+constant this document says it is, which makes that row the one the two surviving readings differ on.
+Nothing here was built, flashed or written, and no device is attached to this machine.
+
+### The walk is total, and that is a property of the code and not a measurement
+
+Four facts in `DxeCore`, three of them about what a volume's file list *is* and one about when the
+`SEQ` line can be printed at all.
+
+**(i) `FvCheck` builds the FFS list in full or the volume is dropped whole.** The list is built by
+the loop in `FwVol.c` — `IsBufferErased` at `:450` is the ordinary end (`goto Done`, the free
+space), a file whose state is `EFI_FILE_HEADER_INVALID` or `EFI_FILE_HEADER_CONSTRUCTION` is stepped
+over by 24 or 32 bytes (`:456-471`, `continue`), and everything else — a bad header checksum on a
+valid-looking state, or `IsValidFfsFile` failing on the data checksum (`:504`) — sets
+`EFI_VOLUME_CORRUPTED` and `goto Done`. And the notify handler installs the protocol the walk is
+driven from only on success:
+
+```c
+if (!EFI_ERROR (FvCheck (FvDevice))) {          /* FwVol.c:676 */
+  CoreInstallProtocolInterface (… &gEfiFirmwareVolume2ProtocolGuid …);
+} else {
+  CoreFreePool (FvDevice);                      /* no FV protocol at all */
+}
+```
+
+So a partially-built list is not reachable. Either the whole file set is in the list, or the volume
+has no `FirmwareVolume2` protocol, the discovery loop's `CoreHandleProtocol` for it fails, and the
+volume is skipped by the `ASSERT (FALSE); continue;` at the head of each handle — contributing no
+files, no promotions, and no `entries`.
+
+**(ii) `FvGetNextFile` has no mid-list error.** `FwVolRead.c:115` walks
+`FvDevice->FfsFileListHeader`, `continue`s past `EFI_FV_FILETYPE_FFS_PAD` files, and returns
+`EFI_NOT_FOUND` only at the end of the list (`:311`); every other exit is `EFI_SUCCESS`. There is no
+state in which it returns an error with entries still ahead of it.
+
+**(iii) `CoreAddToDriverList` cannot refuse a file quietly.** `Dispatcher.c:1509`; its only early
+return is
+
+```c
+DriverEntry = AllocateZeroPool (sizeof (EFI_CORE_DRIVER_ENTRY));
+if (DriverEntry == NULL) {
+  ASSERT (DriverEntry != NULL);                 /* Dispatcher.c:1524-1526 */
+  return EFI_OUT_OF_RESOURCES;
+}
+```
+
+— behind an assert, on a heap this record has measured at 35.38 MB against a 7.04 MB batch.
+
+**(iv) The `SEQ` line is printed after the walk has returned.** `P2Digest` (`Dispatcher.c:2239`) is
+called by `CoreDisplayDiscoveredNotDispatched` (`:2497`, the two calls at `:2566` and `:2570`), which
+`DxeMain.c:576` calls after `CoreDispatcher ()` at `:562` returns and before
+`ASSERT_EFI_ERROR (Status)` at `:593`. The discovery walk is a synchronous protocol-notify handler,
+so every walk has returned before that point. **A `P2 SEQ` line on the panel is therefore itself
+evidence that the walk ran to the end of its list** — a walk that had hung or faulted would not have
+reached the digest.
+
+The consequence is a single number. `mP2WalkSeen[0]` is incremented once per successful
+`GetNextFile` in the `DRIVER` pass (`:1957-1966`, the pass at index 0 of `mDxeFileTypes`), so on any
+run that printed a `SEQ` line it reads the volume's full `DRIVER` count — **80** on this volume, not
+48 or 49. Step 4.130's two admissible stops are states the code cannot produce. What that leaves is
+a narrower and more awkward question, and it is the one this step hands forward: if the walk saw all
+80 drivers and 69 of the 70 array entries name one, then a 46-character line is not a statement
+about the walk at all.
+
+### The archive is clean exactly where `FvCheck` would be strict
+
+The reader matters here, because every "69 of 70" in this document comes from
+`tools/fv-inventory.py`'s walker rather than from `FvCheck`. The two stop at different things: the
+reader stops on erased space, a sub-24-byte size or the end of the volume; `FvCheck` stops on erased
+space too, but *also* skips `HEADER_INVALID`/`HEADER_CONSTRUCTION` files, drops `DELETED` files from
+the list, and rejects the volume outright on a bad checksum. A reader more permissive than the code
+would make the record's count the wrong set. Measured over every `.img` under `work/`:
+
+| what | value |
+|---|---|
+| `.img` files read | **142** (127 distinct by sha256 among the 133 under `work/out/`) |
+| that walk to a volume with a readable FFS chain | **127** (7 more decompress to no `FVMAIN`, 8 are stock Android boots) |
+| volumes with a `DELETED` file | **0** |
+| volumes with a file whose derived state is not `EFI_FILE_DATA_VALID` | **0** |
+| volumes with a failing 24-byte header checksum | **0** |
+| volumes whose 16 bytes past the last file are not erased | **0** |
+| volumes promoting anything other than 69 of 70 on a complete walk | **0** |
+
+The last row is the load-bearing one and it is stated separately below. So on this archive
+`tools/fv-inventory.py`'s file list *is* `FvCheck`'s file list, and the "70 entries, 69 present, one
+core file at index 0" of step 4.130 is a count `FvCheck` would also make.
+
+### No archived volume is short of drivers either
+
+Step 4.130's *other* possible explanation of a 46-character line — a volume that simply has 46 of the
+array's entries — is also measured, and it has no support:
+
+    complete-walk promotions over all payloads: {69: 126, 70: 1}
+
+126 of the 127 volumes promote exactly **69** of their 70 array entries; the 127th is
+`Mu-surya.img`, another board's build, at 70 of 71. **No volume on this disk promotes 46, or
+anything else, on a complete walk.** So neither of the two innocent readings of the 46 characters —
+a short volume or a short walk — describes an artifact here.
+
+### The build that drew the 46 characters is on this disk
+
+Step 4.126 closed with a claim this step falsifies: *"The phone's payload, md5
+`a2963f46faeb27fe601022c3a67aa738`, is the one artifact that would settle it … It hashes to no file
+here. All 228,483 regular files under `work/` — 130 images and every payload among them — were hashed
+for this step."* That search hashed **files**, and the payload it was looking for is not a file: it
+is the compressed kernel *inside* an Android boot image, reachable only by the decompression walk
+`tools/probe-fingerprint.py` already documents. Running that walk over every image:
+
+```
+payload-md5 a2963f46faeb27fe601022c3a67aa738 matches: 1
+('./work/out/boot-before-p2walk.img', 1142784, 'fb697f4748a178e6', 'a2963f46faeb27fe601022c3a67aa738')
+```
+
+One match, and it is the image this document has named since step 4.30 as the producer of the
+46-character `SEQ` (`:1885` above, and capture row 6). `work/out/boot-before-p2walk.img` is
+1,142,784 bytes, sha256 `fb697f47…`, and its decompressed payload is 3,145,840 bytes with md5
+**`a2963f46faeb27fe601022c3a67aa738`** — the value step 4.11's table pins as the payload of record.
+Three consequences, in increasing order of interest:
+
+  * The `md5 a2963f46…` in `docs/00-plan.md:132` and at five sites in `docs/08` (step 4.126's
+    heading, its `adds` and `does not close` rows, the opening of step 4.127, and the passage at
+    `:25778`) is **on this
+    disk**, and the step 4.126 paragraph that leans on its absence is withdrawn rather than carried.
+    The payload can be materialised at any time —
+    `python3 -c` one gzip pull, or `tools/fv-inventory.py`'s walk — and handed to the mirror as the
+    phone's side of the `CmdDbDxe` comparison. That is a device-free experiment this step unblocks
+    and does not run.
+  * The **file** named in step 4.11's table has not been the payload it names for some time:
+    `work/out/p2-variants/Mu-gauguin-silicon-gzip.img` is `90b21643…` today and its payload hashes
+    to `0e5226c062935eb0465b3409eba74c39` — the *mirror's* payload, not the phone's. The record
+    already says the file at that path "is neither" of the two (`:25342`); what is new is that the
+    phone's side survives elsewhere, so the pair is recoverable rather than lost.
+  * `boot-before-p2walk.img` and the reading's own volume are 122 files, against the 123 of the
+    later payload — the difference being the `AcpiTables` FREEFORM file at physical index 112,
+    already measured at `:1886-1900`.
+
+### What that build can print: six rows of twenty-seven
+
+`tools/probe-fingerprint.py --rows` takes the twenty-seven `P2`/`K `/`KEY ` rows out of the sources
+and asks, per image, which of them are in it. For the build that drew the reading:
+
+| row | owner | state |
+|---|---|---|
+| `P2 SEQ (no Apriori entries were promoted)` | `P2Digest():2353` | present |
+| `P2 SEQ [%a]` | `P2Digest():2362` | present |
+| `P2 DIAG %c %g %r` | `P2Digest():2436` | present |
+| `P2 STATS discovered=%d apriori=%d/%d started=%d diag=%d noload=%d` | `P2Digest():2445` | present |
+| `P2 NOLOAD %g dep=%d sched=%d unt=%d` | `CoreDisplayDiscoveredNotDispatched():2526` | present |
+| `P2 NOLOAD total=%d shown=%d` | `CoreDisplayDiscoveredNotDispatched():2536` | present |
+| `P2 WALK t=%d seen=%d iter=%d last=%g` | `P2Digest():2468` | **ABSENT** |
+| `P2 FREE largest=%d pages` | `P2Digest():2476` | **ABSENT** |
+| `P2 APRI bytes=%d entries=%d sum=%x`, `first=`/`last=`, `matched=`, `miss=` — six literals | `P2Digest():2293-2330` | **ABSENT** |
+| `P2 WHY [%a]` | `P2Digest():2363` | **ABSENT** |
+| `P2 ERR none` / `P2 ERR %r x%d` | `P2Digest():2387`, `:2417` | **ABSENT** |
+
+**Six of twenty-seven.** The instrument post-dates the reading, which is what the record has said;
+what this census adds is the exact set, and one member of it that matters. Three of the four rows the
+record's owed lists keep asking for — `P2 WALK t=0 seen=` (step 4.130's only discriminator between
+its two stops), `P2 FREE largest=`, and the six `P2 APRI` literals (`unhit=`, `miss=`, `entries=`,
+`sum=`, `first=`, `bytes=`) — are **not in the build that produced the 46 characters at all**. No
+reboot of that image can produce them, and a reading of that panel is finished. The instrument has
+to be reflashed for those rows to exist, which is the standing *先读屏，再刷下一次* step and not a
+new one.
+
+### `P2 STATS`'s denominator is computed, and it is the row that decides
+
+The row that *is* on the reading's own screen is `P2 STATS`, and this document has been telling
+readers it is worthless. `:951` says:
+
+> `STATS` prints the denominator as the literal 70 because that is a constant in the macro text
+> rather than a computed count, so the two numbers on the `SEQ` and `STATS` lines are not counted
+> the same way and should not be compared to each other.
+
+Both halves of that are wrong, and the artifact says so. The literal in the build that drew the
+reading is `"P2 STATS discovered=%d apriori=%d/%d started=%d diag=%d noload=%d\n"` — two conversion
+specifiers, so the denominator is an argument, and the argument is `mP2AprioriCount`
+(`Dispatcher.c:2445-2457`), which is set in the promotion loop as
+`mP2AprioriCount = MAX (mP2AprioriCount, AprioriEntryCount)` (`:2074`), where
+`AprioriEntryCount = SizeOfBuffer / sizeof (EFI_GUID)` is **the number of Apriori entries the run
+actually read**. The numerator is `mP2Apriori`, which is the same variable `SeqLen` is set from at
+`:2347` — so the `SEQ` length and the `STATS` numerator are one number printed twice, and the
+denominator is the only new information on the line.
+
+That makes `P2 STATS … apriori=46/N` the discriminator, and the arithmetic is exact because index 0
+of the array is the DXE core file, which the discovery loop handles by filling in
+`gDxeCoreLoadedImage->FilePath` rather than by calling `CoreAddToDriverList` (`:1972-1990`), so it is
+never in `mDiscoveredList`, never matches, and is not counted. **An N-entry array read in full
+promotes N − 1 entries.** A 46-character `SEQ` is therefore a **47-entry array read in full**, not
+a 46-entry one: 752 bytes of section, 368 bytes short of the 1120 this volume holds. The comment
+above `mP2ApriEntries` says 736 bytes, which is 46 entries and would print 45 characters.
+
+### The two readings that survive, and what each says about the map
+
+| | **R1 — the array was read short** | **R2 — the list was short** |
+|---|---|---|
+| the run's state | `AprioriEntryCount = 47`, 46 promotions, entries 47..69 never iterated | `AprioriEntryCount = 70`, 46 of 69 matchable entries present in `mDiscoveredList` |
+| `P2 STATS` reads | `apriori=46/47` | `apriori=46/70` |
+| `P2 APRI unhit=` / `miss=` | `0` / `none` | `24` / `14 PlatformInfoDxeDriver` |
+| the promoted batch | `ap1..ap46`, contiguous | `{1..13, 15..21, 23..34, 36..43, 45, 46, 66..69}`, scattered |
+| `P2 SEQ` slot *k* is | Apriori entry *k + 1* — **the identity map holds** | the *k*-th match — 33 of 46 slots differ from the identity map, from slot 13 |
+| the record's decode tables (slot 18 = `RpmhDxe`, slot 21 = `ShmBridgeDxe`, slot 36 = `SecurityStubDxe`) | stand | all move |
+| the code path it needs | a `ReadSection` that returns 752 of a 1120-byte RAW section | a walk short by 23 drivers, which §1 forbids; or `CoreAddToDriverList` refusing 23 files, which asserts |
+
+R1 and R2 are the whole of what is left. Step 4.130 eliminated a third — the natural early end of the
+walk — and §1 above eliminates the *mechanism it chose* as well: its stop at 48 or 49 `DRIVER` files
+is R2's "list was short", and a walk cannot stop there. That leaves R2 needing an allocate failure
+behind an assert on a heap with 5× headroom, against R1 needing a section read 368 bytes short. This
+step does **not** decide between them: the row that decides is the `apriori=` denominator, it is not
+on any photograph this record holds: `:945` states the row's shape with every field an `N`, and the
+panel reading the record does hold (`:1458-1464`) is the `SEQ` line only. What this step can say is which
+way the record currently leans and why that is
+provisional: step 4.130's entire second half — the map displacement, the four anchors, `PmicDxe` and
+`BdsDxe` being unhit, the `docs/00-plan.md` rewrite — is R2's reading of the string, and R1 leaves
+the record's original decode tables standing.
+
+### The owed row, per stop, re-derived
+
+If R2 is the reading, `mP2WalkSeen[0]` and `unhit` are fixed by the stop, and *both* rows are absent
+from the reading's build, so the pair would have to come from the next flash. The table was computed
+from the reading's own volume, from the array and the physical file order, and it confirms step
+4.130's numbers exactly — the earlier session's estimate of 39 against 34 was the union of two
+different indexings and is superseded:
+
+```
+ k  seen  promoted  miss  miss_name
+47    47        45    14  PlatformInfoDxeDriver
+48    48        46    14  PlatformInfoDxeDriver
+49    49        46    14  PlatformInfoDxeDriver
+50    50        47    14  PlatformInfoDxeDriver
+80    80        69  None  -
+k=48: unhit=[0, 14, 22, 35, 44, 47..65]   last DRIVER seen = DALTLMM
+k=49: unhit=[0, 14, 22, 35, 44, 47..65]   last DRIVER seen = FeatureEnablerDxe
+```
+
+So R2's prediction is single-valued on this volume (`seen=48` or `49`, `unhit=24`, `miss=14`), R1's
+is (`seen=80`, `unhit=0`, `miss=none`), and the `apriori=` denominator chooses between them without
+either `P2 WALK` or `P2 APRI` having to exist on the screen.
+
+### It is not the whole of `P2 SEQ`'s vocabulary that is missing, and not the whole of the panel either
+
+The reading's build does print `P2 DIAG %c %g %r`, one row per failure carrying the driver's GUID
+and the status in words — so a re-reading of *that* screen is not worthless. What it cannot do is
+index the 46 letters: `P2 WHY` is absent, so the letters' positions have no status class beside them,
+and `P2 DIAG`'s rows are a set rather than a sequence. The two facts the letters carry that no other
+line carries — that there is no `?` anywhere in the string, and that the failing block is
+contiguous from slot 18 with a single survivor at slot 21 — are properties of the characters already
+recorded (`:6162-6179`) and do not need the panel again. What needs the panel is one number, and it
+is the denominator.
+
+| | |
+|---|---|
+| instrument | `FwVol.c:440-520` and the `FvCheck` gate at `:676`; `FwVolRead.c:115-320`'s `FvGetNextFile`; `CoreAddToDriverList` at `Dispatcher.c:1509-1548`; the discovery loop at `:1946-2055` with its `mP2WalkSeen` counters at `:1957-1966`; the promotion loop at `:2060-2125` and `mP2AprioriCount` at `:2074`; `P2Digest` at `:2239`, its `SeqLen` at `:2347` and its `P2 STATS` format at `:2445`; `CoreDisplayDiscoveredNotDispatched` at `:2497` with its two `P2Digest ()` calls at `:2566` and `:2570`; `DxeMain.c:562`, `:576` and `:593` for the digest's position in the boot; `tools/probe-fingerprint.py --rows` over `work/out/boot-before-p2walk.img`; `tools/fv-inventory.py`'s walk and `tools/apriori-order.py`'s array reader over all 142 `.img` files under `work/`, with a per-file `FvCheck`-semantics check (state byte via `GetFileState`, 24-byte header checksum, deleted-file count, erased tail); a payload-md5 search over every image's decompressed kernel; `docs/08` steps 4.11, 4.12, 4.30, 4.37, 4.126 and 4.130 — nothing was built, flashed or written, and no device is attached |
+| shows | that **the walk cannot end early**: `FvCheck` builds a volume's FFS list in full or the volume loses its `FirmwareVolume2` protocol entirely (`FwVol.c:676` → `CoreFreePool`), `FvGetNextFile` returns `EFI_NOT_FOUND` only at the end of the list (`FwVolRead.c:311`), `CoreAddToDriverList`'s only early return is `EFI_OUT_OF_RESOURCES` behind an assert (`Dispatcher.c:1524-1526`), and the `SEQ` line is printed by `CoreDisplayDiscoveredNotDispatched` *after* `CoreDispatcher` returns (`DxeMain.c:562` → `:576`), so a printed `SEQ` is itself evidence that every walk had returned — which makes `mP2WalkSeen[0]` read 80 on this volume and step 4.130's stops at 48 or 49 unreachable rather than merely unmeasured; that over all 142 `.img` files under `work/`, `FvCheck`'s strictness and `tools/fv-inventory.py`'s permissiveness produce **the same file list** (zero deleted files, zero non-`DATA_VALID` states, zero bad header checksums, every tail erased) and that **126 of 127 volumes promote exactly 69 of 70** on a complete walk with the 127th being another board's build at 70 of 71, so neither a short volume nor a short walk describes an artifact here; that the build that drew the reading is on this disk as `work/out/boot-before-p2walk.img` (1,142,784 B, sha256 `fb697f47…`, payload 3,145,840 B md5 `a2963f46…`, the value step 4.11's table pins and the only such payload under `work/`), which withdraws step 4.126's *"it hashes to no file here"* and unblocks the `CmdDbDxe` comparison as a device-free experiment; that this build carries **six of the twenty-seven** `P2` rows — `P2 SEQ` ×2, `P2 DIAG`, `P2 STATS`, `P2 NOLOAD` ×2 — and **no `P2 WALK`, `P2 FREE`, `P2 APRI`, `P2 WHY` or `P2 ERR`**, so three of the four rows the owed lists name cannot be produced by rebooting it; and that `P2 STATS`'s denominator is `mP2AprioriCount` = the entries the run actually read and not, as `:951` says, a literal 70 — so the `SEQ` length and the `STATS` numerator are one number printed twice and a 46-character line is a **47**-entry array read in full |
+| adds | the walk's totality as a proof from the source rather than an inference from an archive, which is what converts step 4.130's two admissible stops from "unmeasured" to "unreachable"; the `FvCheck`-semantics audit that makes the reader's file count the code's file count on this archive; the archive-wide promotion histogram (126 × 69 of 70) that closes the short-volume explanation; the identification of the reading's own build on disk and the withdrawal of the "no disk here" claim that stood in the plan and twice in this document; the exact instrument census of that build, which separates the owed rows into "obtainable by a reboot" (none of the four) and "requires the next flash" (all of them); the correction that makes `P2 STATS`'s denominator a measurement, and with it the arithmetic 46 matches ⇔ 47 entries; the two surviving readings R1 and R2 stated as a table with the code path each requires and the map each implies; and the re-derived `seen`/`unhit` table for R2, which confirms 4.130's 48/49 and retires the 39-against-34 estimate |
+| corrects | `docs/00-plan.md:131-133`'s *"md5 `a2963f46…` … is **on no disk here** (228,483 files under `work/` hashed, 130 of them images)"*, which is false and false for a stated reason: the search hashed files and the payload exists only as the compressed kernel of `work/out/boot-before-p2walk.img`; the same claim at five further sites, all annotated in place: `docs/08:25426-25434` (step 4.126's heading *"The artifact that would separate build from boot path is not on this disk"* and its *"It hashes to no file here"*), that step's `adds` row (*"the phone's payload is on no disk here, 228,483 files hashed"*) and its `does not close` row (*"the payload that would separate them is absent"*), the opening of step 4.127 (*"4.126 could not run it because the phone's payload is on no disk here"*), and `:25789-25800` (*"the phone's payload … is still on no disk here"*), with §"The build that drew the 46 characters is on this disk" as the replacement and the payload's location as the correction — `work/out/boot-before-p2walk.img`, reached by decompression rather than by hashing files; the join asserted at `docs/08:1498` (*"Hence index 0 of `P2 SEQ` = `PcdDxe`"*), which is R1's map and is annotated there as conditional on the `apriori=` denominator; `docs/08:951`'s *"`STATS` prints the denominator as the literal 70 because that is a constant in the macro text"*, whose consequence — that the two lines "should not be compared to each other" — is the reason the cheapest open row in the record was never read for; the comment above `mP2ApriEntries` in `Dispatcher.c`, whose 736-byte example is 46 entries and would print 45 characters where a 46-character line is 47; step 4.130's mechanism (*"physical 49 and 50"*) as a state the walk can be in, leaving its arithmetic standing and its premise withdrawn, since R2's *list was short* is what those stops describe and §1 forbids the walk that would produce it; and `:6164`'s *"The batch ran to the end of the array; nothing was skipped"*, which is true under R1 and false under R2 and was already flagged by 4.130 — it now has a named conditional rather than a withdrawal |
+| does not close | which of R1 and R2 the phone's run was, and therefore whether the record's decode tables and step 4.130's map displacement stand — the row that decides is `P2 STATS`'s denominator, which is not on any photograph this record holds, the record stating the row's shape with every field an `N` at `:945` and holding the `SEQ` line alone as a transcription (`:1458-1464`); the phone's `P2 APRI entries=`/`sum=`/`first=`/`unhit=`/`miss=`, `P2 WALK t=0 seen=`, `P2 FREE largest=`, `P2 ERR`, `P2 RETRY bs9=`, the four `P2 BIN` lines and `P2 WHAT`, all of which need a build that carries them on the glass under *先读屏，再刷下一次*; the `CmdDbDxe` comparison the unblocked payload makes possible but which this step does not run; and the P3 gate, with P3's display, USB-host and buttons items unfinished and P4 and P5 not begun |
+| not an action | nothing was built for the device, nothing was flashed, no partition was written; every reading here is off files already on disk or off the sources, and no device is attached to this machine. Three tracked files change: this document, `docs/00-plan.md`'s absent-payload sentence, and `uefi/patches/mu-basecore-local.patch`, regenerated with `tools/regen-mu-basecore-patch.sh` because it had fallen out of sync — it did not yet carry step 4.130's correction of the `P2 SEQ` mapping comment, and this step's correction of the same block's 736-byte illustration (now 752, the size that yields a 46-character line) is folded into the same regeneration. Both are **comment-only** deltas, so the firmware the patch describes compiles to the same bytes as the image already on the phone; no image was rebuilt and the device was not touched. The porting goal is not advanced by it: the end state is still a Windows tablet, and P4's `userdata`-destroying install and P5's peripherals are not begun |
