@@ -44,7 +44,24 @@ the string 27 of the 28 matches failed to load, the one exception being
 `ShmBridgeDxe` (SEQ 21), which loads and starts exactly where `PdcDxe` (SEQ 19)
 fails on a byte-identical request. One `P2 DIAG` line rendered **Out of
 Resources**, which is the status that pairs with `P2 FREE largest=` — `docs/08`
-steps 4.18 onward are the analysis of that pair.
+steps 4.18 onward are the analysis of that pair, and step 4.129 closes its
+mechanical half: `FindFreePages`' third rung searches the **whole** map below
+`MAX_ALLOC_ADDRESS` (`Mem/Page.c:1317-1402`), so rung 4's recursive retry is the
+only terminal refusal; `Alignment` is one page for every memory type, because
+`Silicon/Silicium/SiliciumPkg/SiliciumPkg.dsc.inc:14` sets
+`__DEPRECATED_AARCH64_4K_RUNTIME_GRANULARITY` and the `#else` 64 KiB arm is dead;
+and `NeedGuard` is FALSE for all of them. A nine-page request can therefore fail
+only for want of a **single nine-page `EfiConventionalMemory` run**, which is a
+heap-state statement and not an arithmetic one.
+
+The same step removes the last alternative reading of the failure. The volume's
+27 dependency expressions split **21 inert / 6 gated** — the a-priori rule marks a
+driver `Dependent = FALSE` before anything runs (`Dispatcher.c:2104-2120`), so 21
+of the 27 are read and never evaluated — and **not one of the 27 waits on a
+protocol this volume has no producer for**. The one that cannot be judged is
+`UsbInitDxe`'s `E722B03F-…`, and step 4.129 places its bytes in exactly two files
+of the volume, `UsbfnDwc3Dxe` and `UsbConfigDxe`, so that question is *no header in
+the tree* rather than *no producer in the image*.
 
 **This is a question only the phone can answer, and that is now a measurement
 rather than an excuse.** `docs/08` step 4.124 reads where the instrument's own

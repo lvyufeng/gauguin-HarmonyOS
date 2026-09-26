@@ -26077,3 +26077,361 @@ are all empty.
 | corrects | this window's own working note that the `U` in `K 17 SU` was a `(Status & 0x80000402)` class rather than `EFI_UNSUPPORTED` — `P2WhyLetter` (`Dispatcher.c:588-589`) returns `'U'` for `EFI_UNSUPPORTED` and nothing else, so step 4.127's reading stands and the retraction it proposed is not written; this step's own first draft, which read the panel's `DebugLib.c +78` as proof that *none* of `rpmh_image_os.c`'s four sites was reached — the disassembly of the module's 22 `DebugVPrint` callers shows the three null-format sites are exactly three of those four, so one of them was reached and the guard caught it; step 4.125's *"which of the four was reached is not established here"*, which is narrowed to three — its file attribution stands and only the row's file changes; and the reading of `DebugVPrint`'s `0x80000402` mask test as a status class rather than as that function's own print-level test against its first argument; the reading that the two terminal rows come from two different modules, when both are one `DebugAssert` in one image; the earlier reading of the last `K` row as `CmdDbDxe` at Apriori 18, which is one off — `CmdDbDxe` is `K 17`; the earlier claim that the Apriori array holds 58 entries with a 12-byte terminator, which came from reading GenFv's padding byte as a size and is deleted; and step 4.127's *"no `FILE_GUID` in the tree … is that value"*, which is the `FILE_GUID` of 57 other boards' `RpmhDxe.inf` |
 | does not close | the P3 gate and the owed panel reading of the flashed 4.74 set; *which* of the three null-format sites in `rpmh_image_os.c` — lines 84, 175 and 187 — the mirror reached, since the guard is what the panel shows and it does not record its caller, with the two interface-slot checks behind the wrapper at `0x6050` as the likelier pair and no run that separates them; what `RpmhDxe` was doing at that point, since the AOP mailbox this instrument seeds is one word of an interface the driver goes on to read more of; whether the 46-letter `P2 SEQ` in this record is a reading of an older image, which is the only reading consistent with a 70-entry array and a 69-entry denominator but which no capture here confirms; and the phone's own `K` rows, which remain the only record that could confirm this ladder against the device |
 | not an action | nothing was built for the device, nothing was flashed and no partition was written; every reading in this step is off files that were already on disk, and no device is attached to this machine. The porting goal is not advanced by it: P3's display, USB-host and buttons items remain unfinished and P4 and P5 are not begun |
+
+## Step 4.129 — the depex band is one library's `AND`, the free-page search is the whole map, and the one dependency the record called real is not a GUID
+
+Step 4.128 closed with a sentence that has to come out, and the work that removes it turned
+into a census of all 27 dependency expressions in the volume. Read per file and per byte, the
+band is not a list of driver-authored requirements at all: **eighteen of the twenty-seven are
+the same single GUID, it reaches them from a library, and every expression in the volume is
+either inert or satisfied.** Nothing in this step is device work; everything in it is a file on
+this host, and the corrections are to the record's own text.
+
+### The volume, read per file and per byte
+
+The FV is `/tmp/FVMAIN-raw.fv`, the decompressed inner `FVMAIN` — 7,356,416 B, `fvlen` `0x704000`
+at `0x20`, `hdrlen` `0x48` at `0x30`, extension-header offset `0x60` at `0x34`, extension-header
+**size** `0x14` at `extoff+16`, so the first FFS header is at **`0x78`** and every following file
+starts on the next 8-byte boundary after `off + Size`. **123 files**, types
+`{0x02 FREEFORM: 37, 0x05 DXE_CORE: 1, 0x07 DXE_DRIVER: 80, 0x09 APPLICATION: 5}`.
+
+Two things about reading it are worth writing down, because this step got each wrong once in
+opposite directions and **both wrong readings produced well-formed output** — the fifth and sixth
+instances of the family this record has been collecting (after `_walk_from`'s padding, `sections`'
+alignment step, the Apriori-array substring match, and 4.128's extension-header offset):
+
+* **A dependency expression is section type `0x13`, not `0x02`.** `0x02` is
+  `EFI_SECTION_GUID_DEFINED`. A walk keyed on `0x02` reports zero depex sections in a volume that
+  holds 27, and reports it without error.
+* **FFS sections are 4-byte aligned, not 8.** With `(so+sz+3) & ~7` a file whose accumulated
+  section sizes cross an 8-byte boundary reads garbage from the padding of the section before it —
+  and the garbage decodes as a plausible section header. The check that both are right is cheap:
+  with 4-byte alignment **all 123 files' section walks consume their bodies with at most 7 bytes
+  left over, and none leaves more.**
+
+The 27 depex-bearing files are **all of type `0x07`** — 27 of the volume's 80 drivers — and not
+one of their section lists is `DXE_DEPEX` alone: **26 are `DXE_DEPEX, PE32, UI`** and one, file#2
+`80CF7257-87AB-47F9-A3FE-D50B76D89541` (`Pcd.inf`, the platform's only DXE PCD database), is
+**`RAW, DXE_DEPEX, PE32, UI`** — the RAW being the PCD database blob. The section-size census is
+`18 B ×18`, `36 B ×7`, `72 B ×1`, `90 B ×1`.
+
+### All 27 expressions, decoded
+
+| # | `FILE_GUID` | module | Apriori | decoded body |
+|---|---|---|---|---|
+| 2 | `80CF7257-…9541` | `Pcd` | 1 | `PUSH gEfiPcdProtocolGuid END` |
+| 3 | `B8D9777E-…8415` | `CpuDxe` | 6 | `PUSH gEfiPcdProtocolGuid END` |
+| 4 | `B601F8C4-…0CEE` | `RuntimeDxe` | 5 | `PUSH gEfiPcdProtocolGuid END` |
+| 5 | `F80697E9-…1DFC` | `SecurityStubDxe` | 37 | `PUSH gEfiPcdProtocolGuid END` |
+| 8 | `F099D67F-…B7D8` | `WatchdogTimer` | 36 | `PUSH gEfiTimerArchProtocolGuid PUSH gEfiPcdProtocolGuid AND END` |
+| 9 | `42857F0A-…B840` | `CapsuleRuntimeDxe` | 42 | `PUSH gEfiVariableWriteArchProtocolGuid PUSH gEfiPcdProtocolGuid AND END` |
+| 10 | `D93CE3D8-…CC3C` | `ReportStatusCodeRouterRuntimeDxe` | 3 | `PUSH gEfiPcdProtocolGuid END` |
+| 11 | `6C2004EF-…5891` | `StatusCodeHandlerRuntimeDxe` | 4 | `PUSH gEfiRscHandlerProtocolGuid PUSH gEfiPcdProtocolGuid AND END` |
+| 12 | `CBD2E4D5-…8D60` | `VariableRuntimeDxe` | 31 | `PUSH gEfiPcdProtocolGuid END` |
+| 13 | `FCABE6A7-…2E87` | `EmbeddedMonotonicCounter` | 38 | `PUSH gEfiPcdProtocolGuid END` |
+| 14 | `6696936D-…948C` | `SimpleTextInOutSerial` | 66 | `PUSH gEfiPcdProtocolGuid END` |
+| 15 | `4B28E4C7-…77C5` | `ResetSystemRuntimeDxe` | 34 | `PUSH gEfiPcdProtocolGuid END` |
+| 16 | `B336F62D-…885D` | `RealTimeClockRuntimeDxe` | 39 | `PUSH gEfiVariableArchProtocolGuid PUSH gEfiPcdProtocolGuid AND END` |
+| 17 | `4C6E0267-…989D` | `MetronomeDxe` | 8 | `PUSH gEfiPcdProtocolGuid END` |
+| 18 | `79E4A61C-…62A9` | `PrintDxe` | 40 | `PUSH gEfiPcdProtocolGuid END` |
+| 19 | `9B680FCE-…3443` | `DevicePathDxe` | 41 | `PUSH gEfiPcdProtocolGuid END` |
+| 23 | `348C4D62-…783B` | `HiiDatabaseDxe` | 43 | `PUSH gEfiPcdProtocolGuid END` |
+| 25 | `DE371F7C-…5882` | `ArmGicDxe` | 7 | `PUSH gEfiCpuArchProtocolGuid PUSH gEfiPcdProtocolGuid AND END` |
+| 26 | `49EA041E-…46B7` | `TimerDxe` | 9 | `PUSH gHardwareInterruptProtocolGuid PUSH gEfiPcdProtocolGuid AND END` |
+| 51 | `DCFD1E6D-…1A92` | `SimpleFbDxe` | 60 | `PUSH gEfiPcdProtocolGuid END` |
+| 73 | `6D33944A-…1F6C` | `BdsDxe` | 44 | `PUSH gEfiPcdProtocolGuid PUSH gEfiHiiStringProtocolGuid PUSH gEfiHiiDatabaseProtocolGuid PUSH gEfiHiiConfigRoutingProtocolGuid PUSH gEdkiiVariablePolicyProtocolGuid AND AND AND AND END` |
+| 107 | `F4C010C0-…F44E` | `RamManagerDxe` | — | `PUSH gEfiPcdProtocolGuid END` |
+| 108 | `F9D88642-…D9EA` | `SmbiosDxe` | — | `PUSH gEfiPcdProtocolGuid END` |
+| 109 | `50A15B6F-…C4DE` | `SmBiosTableDxe` | — | `PUSH gEfiPcdProtocolGuid END` |
+| 110 | `9622E42C-…2F6B` | `AcpiTableDxe` | — | `PUSH gEfiPcdProtocolGuid END` |
+| 111 | `CB933912-…395C` | `AcpiPlatformDxe` | — | `PUSH gEfiAcpiTableProtocolGuid PUSH gEfiPcdProtocolGuid AND END` |
+| 115 | `EBF342FE-…F671` | `SetupBrowserDxe` | — | `PUSH gEfiHiiDatabaseProtocolGuid PUSH gEfiHiiConfigRoutingProtocolGuid PUSH gEfiPcdProtocolGuid PUSH gEfiHiiStringProtocolGuid AND AND AND END` |
+
+Every GUID resolves to a name in the tree: `13A3F0F6-…2F34` is `gEfiPcdProtocolGuid`
+(`MdePkg.dec:1356`), `26BACCB1`/`26BACCB2`/`26BACCB3-6F42-11D4-BCE7-0080C73C8881` are the Cpu,
+Metronome and Timer arch protocols (`:1186`, `:1193`, `:1214`), `1E5668E2-8481-11D4-BCF1-0080C73C8881`
+and `6441F818-6362-4E44-B570-7DBA31DD2453` the Variable and Variable-Write arch protocols (`:1220`,
+`:1217`), `2890B3EA-053D-1643-AD0C-D64808DA3FF1` `gHardwareInterruptProtocolGuid`
+(`EmbeddedPkg.dec:72`), `86212936-0E76-41C8-A03A-2AF2FC1C39E2` `gEfiRscHandlerProtocolGuid`
+(`:1287`), `FFE06BDD-6107-46A6-7BB2-5A9C7EC5275C` `gEfiAcpiTableProtocolGuid` (`:1667`), and the four
+HII/Variable-Policy GUIDs of `BdsDxe` and `SetupBrowserDxe` (`:1755`, `:1764`, `:1761`,
+`MdeModulePkg.dec:861`). The one earlier exception was `gHardwareInterruptProtocolGuid`, which
+looks unresolved only because `ArmPkg.dec` spells it without the `Guid` suffix.
+
+### The band is one library's `AND`, and no driver wrote it
+
+`gEfiPcdProtocolGuid` is the term in **eighteen** expressions on its own and in **nine** more
+beside one real protocol. No module's INF mentions it:
+
+```
+$ grep -c PcdProtocol Mu_Basecore/MdeModulePkg/Universal/WatchdogTimerDxe/WatchdogTimer.inf
+0
+$ tail -4 …/WatchdogTimer.inf
+[Depex]
+  gEfiTimerArchProtocolGuid
+```
+
+The volume's `WatchdogTimer` expression has **two** terms and the INF writes **one**. The second
+comes from a library:
+
+```
+Mu_Basecore/MdePkg/Library/DxePcdLib/DxePcdLib.inf:61-62
+  [Depex.common.DXE_DRIVER, Depex.common.DXE_RUNTIME_DRIVER, Depex.common.DXE_SMM_DRIVER]
+    gEfiPcdProtocolGuid
+```
+
+and the merge is the build's, not the driver's —
+`Mu_Basecore/BaseTools/Source/Python/AutoGen/ModuleAutoGen.py:563-590`, `DepexList`, whose comment
+says it outright: *"Append depex from dependent libraries, if not BEFORE, AFTER expression"*,
+`for M in [self] + self.LibraryAutoGenList:`, and a bare `DepexList.append('AND')` between each
+library's terms. The `EdkLogger.verbose ("DEPEX[%s] (+%s) = %s")` line at `:586` is the trace, and
+it is **not** in the retained build logs (`grep -h "DEPEX\[" work/out/*.log` → 0 matches), so this
+rests on the source plus the artifact, not on a log line. The artifact is unambiguous:
+
+```
+Build/gauguinPkg/DEBUG_CLANGPDB/AARCH64/MdeModulePkg/Universal/WatchdogTimerDxe/WatchdogTimer/OUTPUT/WatchdogTimer.depex
+02 b3 cc ba 26 42 6f d4 11 bc e7 00 80 c7 3c 88 81 02 f6 f0 a3 13 4a 26 f0 3e f2 e0 de c5 12 34 2f 34 03 08
+```
+
+— 36 bytes, byte-for-byte the volume's file#8 body. **A dependency expression on this platform is
+a property of the module→library graph.** Changing which libraries a driver links changes its
+depex; reading `gEfiPcdProtocolGuid` in it as the driver's own requirement is a misreading, and
+every sentence in this record that has treated a depex as an authored intent should be read with
+that in mind.
+
+### Correction: `883CC780-0281-F0F6-A313-4A26F03EF2E0` is not a GUID
+
+Step 4.128's ruling-out paragraph at `docs/08:1651-1656` says:
+
+> 53 of the 80 drivers have no `DXE_DEPEX` section at all and 25 of the 27 that have one are the
+> bare `(TRUE)`. The only real dependency in the entire volume is
+> `883CC780-0281-F0F6-A313-4A26F03EF2E0`, required by `WatchdogTimer` and
+> `RealTimeClockRuntimeDxe` and **defined nowhere in the tree** — a second missing-provider signal,
+> but not this one, because both of those fail as `L` before any depex is evaluated.
+
+The first sentence's first clause is right (27 of 80, 53 without). **Everything after it is
+wrong**, and it is wrong in a way worth naming: `883CC780-0281-F0F6-A313-4A26F03EF2E0` is not a
+value in the volume. It is **the text of a 16-byte window that starts one byte into the fourth byte
+of `gEfiTimerArchProtocolGuid`'s node field** and therefore straddles, in one little-endian
+reading, the tail of a GUID, an opcode byte and the head of the next GUID:
+
+```
+volume file#8 body, offset 12, 16 bytes:
+  80 c7 3c 88 | 81 02 | f6 f0 | a3 13 4a 26 f0 3e f2 e0
+  └ '0080C73C8881' tail ┘  └ 0x02 PUSH ┘  └ gEfiPcdProtocolGuid head ┘
+  Data1=0x883CC780  Data2=0x0281  Data3=0xF0F6  Data4=A3134A26F03EF2E0
+```
+
+The measurements that settle it:
+
+* It occurs **3 times in the volume** — file#8 `WatchdogTimer`, file#16 `RealTimeClockRuntimeDxe`,
+  file#25 `ArmGicDxe` — which is exactly the set of files whose *real* depex is a
+  `…-0080C73C8881`-suffixed arch-protocol GUID **and**ed with `gEfiPcdProtocolGuid`. The other four
+  36-byte bodies all pair a non-`0080C73C8881` protocol with PCD, so the window lands elsewhere in
+  them and the value does not appear. A count of 3 is what the artifact predicts, not what a real
+  GUID would give.
+* It occurs **0 times in every built image** — `/tmp/gauguin-kernel.raw`, all three
+  `work/out/p2-variants/*.img`, `work/out/usb-host/Mu-gauguin-xhci-host-gzip.img`.
+* It is declared by **no file anywhere under `work/uefi/Mu-Silicium`**, `Build/` included.
+
+So there is no second missing-provider signal here, and no un-authored dependency. What the
+paragraph should say is what the census below says.
+
+### Correction: not one `DXE_DEPEX` in this volume is `(TRUE)`
+
+The same paragraph's *"25 of the 27 that have one are the bare `(TRUE)`"* is also wrong — **none**
+is. `(TRUE)` is what several of these INFs *write* (`SimpleFbDxe.inf:37-38` is `[Depex]` / `TRUE`;
+gauguin's prebuilt `DisplayDxe.inf` has no `[Depex]` at all) and what the tool that first counted
+them was reading. The *sections* say something else, because the library merge runs after the
+INF is read: `SimpleFbDxe`'s section is `PUSH gEfiPcdProtocolGuid END`, not `(TRUE)`. The
+distinction matters for the P3 display item, and it cuts in the firmware's favour: `PcdDxe` is
+Apriori **1** and installs `gEfiPcdProtocolGuid` before anything else in the batch, and
+`SimpleFbDxe` is promoted at Apriori **60**. Nothing in the volume gates the display driver.
+
+### The expressions are inert or satisfied — all 27 of them
+
+The axis that decides a depex here is not what it names but **whether the driver is in the a-priori
+file at all**, because the dispatcher marks every a-priori entry `Dependent = FALSE; Scheduled =
+TRUE` (`Dispatcher.c:2104-2120`) before anything runs, and `CoreIsSchedulable` is only asked about
+a driver still marked `Dependent` (`:1203-1204`). An a-priori driver's expression is read and never
+evaluated. On this volume that splits the 27 as **21 inert / 6 gated**, and `tools/depex-census.py`
+prints the same split from the artifact rather than from `APRIORI.inc`:
+
+```
+inner FV 0x704000, 123 FFS files, a-priori file names 70 GUIDs
+  dispatcher-visible files (DRIVER=80): 80
+DEPEX section sizes seen: 18 B x18, 36 B x7, 72 B x1, 90 B x1
+27 of them carry a depex, 53 do not
+  of the 27 with a depex: 21 are promoted by the a-priori file (depex inert), 6 are gated
+  of the 53 without one: 48 are a-priori, 5 are not
+== non-a-priori, gated on a protocol that is not installed (0)
+== no depex section, not a-priori (5) …  BootGraphicsResourceTableDxe, FeatureEnablerDxe,
+   MacDxe, PwrUtilsDxe, VcsDxe
+```
+
+**Zero** of the 27 waits on a protocol this volume has no producer for. The six gated ones are
+`RamManagerDxe` (PCD), `SmbiosDxe` (PCD), `SmBiosTableDxe` (PCD), `AcpiTableDxe` (PCD),
+`AcpiPlatformDxe` (AcpiTable AND PCD) and `SetupBrowserDxe` (HiiDatabase AND HiiConfigRouting AND
+PCD AND HiiString) — all six declared directly in `gauguin.fdf`'s `[FV.FvMain]` and none in any
+`.inc`, and every term they name has a producer in the volume. The six are also, for P3, the
+interesting half: `AcpiTableDxe` and `AcpiPlatformDxe` are the ACPI tables' own drivers, and they
+are depex-gated in the real sense — `AcpiPlatformDxe` cannot run until `AcpiTableDxe` has
+installed `gEfiAcpiTableProtocolGuid`, which is a *dispatch-order* dependency and not a missing
+one.
+
+The one expression that cannot be judged from the image is `UsbInitDxe`'s, a single
+`PUSH E722B03F-B250-42CE-8EBD-5BD51812D037 END` — no header in the tree declares that GUID, which
+is why the census files it under *cannot be ruled in or out* rather than under *fine*. What can now
+be added to Step 4.105's narrowing: its bytes occur in **exactly two files of the volume, file#68
+and file#62**, which are `UsbConfigDxe` and `UsbfnDwc3Dxe` — the same two candidates 4.105 named,
+both of them present in `Binaries/gauguin` and both built into this FV. So that bucket is
+unjudgeable for want of a **header**, not for want of a producer in the image.
+
+### The thirteen-term `AND` and the architectural-protocol gate are the same thirteen
+
+The USB-host artifact adds one more depex, `XhciPciEmulationDxe.depex` — 234 bytes, byte-identical
+across `Binaries/{generic,bitra,onyx}` — and decoding it names the list exactly:
+
+| term | declared in | in `mArchProtocols`? |
+|---|---|---|
+| `gEfiDriverBindingProtocolGuid` | `MdePkg.dec:1550` | no |
+| `gEfiBdsArchProtocolGuid` | `:1183` | yes |
+| `gEfiCpuArchProtocolGuid` | `:1186` | yes |
+| `gEfiMetronomeArchProtocolGuid` | `:1193` | yes |
+| `gEfiMonotonicCounterArchProtocolGuid` | `:1196` | yes |
+| `gEfiRealTimeClockArchProtocolGuid` | `:1199` | yes |
+| `gEfiResetArchProtocolGuid` | `:1202` | yes |
+| `gEfiRuntimeArchProtocolGuid` | `:1205` | yes |
+| `gEfiSecurityArchProtocolGuid` | `:1208` | yes |
+| `gEfiTimerArchProtocolGuid` | `:1214` | yes |
+| `gEfiVariableWriteArchProtocolGuid` | `:1217` | yes |
+| `gEfiVariableArchProtocolGuid` | `:1220` | yes |
+| `gEfiWatchdogTimerArchProtocolGuid` | `:1223` | yes |
+
+Twelve of the thirteen are members of `mArchProtocols` (`DxeProtocolNotify.c:21-35`) — the array
+`CoreAllEfiServicesAvailable` (`:81`) walks with `if (!Entry->Present) return EFI_NOT_FOUND;`, which
+is the `Status` that the phone's `DxeMain.c:593` assert is about. **The one `mArchProtocols` member
+the expression omits is `gEfiCapsuleArchProtocolGuid`.** That is the whole reason the plan's
+Step-4.116 note reads *"naming eight of the nine absent protocols"* and not nine: the absent set is
+nine, the expression names all of `mArchProtocols` minus Capsule, so it names eight of them if
+Capsule is among the missing. The driver is **waiting on the a-priori batch, not dead on a missing
+producer** — and the census confirms it at the byte level on the USB-host artifact: all eight of its
+absent protocols have producers in the same volume, at Apriori 32 through 45.
+
+`UsbInitDxe.depex` (18 B) and `XhciPciEmulationDxe.depex` (234 B) are each byte-identical across
+`Binaries/{generic,bitra,onyx}`; `Binaries/gauguin` contains **no `.depex` files at all** (alioth
+68, bitra 68, onyx 82, generic 2). That is the second half of the reconciliation for the 27: the
+files that carry a `DXE_DEPEX` in this volume were built from source here, not copied from
+`Binaries.gauguin` — which is also why gauguin's prebuilt `DisplayDxe.inf` can have no `[Depex]`
+and no `ENTRY_POINT` while `RpmhDxe.inf` has the same minimal shape and works.
+
+### The free-page search, and why a nine-page request fails only for want of one descriptor
+
+The other open thread is the 27 `L` letters, and its last unexplained option is the allocator. It
+is now fully traced, and none of it is a refusal a request of this size can hit by arithmetic.
+
+`FindFreePages` (`Mem/Page.c:1317-1402`) has four rungs:
+
+1. **Preferred bin** — `if (((UINT32)NewType < EfiMaxMemoryType) && (MaxAddress >= mMemoryTypeStatistics[NewType].MaximumAddress))`
+   → `CoreFindFreePagesI (…MaximumAddress, …BaseAddress, …)`.
+2. **Default bin** — `if (MaxAddress >= mDefaultMaximumAddress)` → `CoreFindFreePagesI (mDefaultMaximumAddress, 0, …)`.
+3. **The whole map** — `Start = CoreFindFreePagesI (MaxAddress, 0, NoPages, NewType, Alignment, NeedGuard); if (Start != 0) return Start;`
+   `MaxAddress` is `MAX_ALLOC_ADDRESS`, which on AArch64 is `0xFFFFFFFFFFFF`.
+4. **Promote, then recurse** — `if (!PromoteMemoryResource ()) { P2FreeWhy (…); return 0; } return FindFreePages (…);`.
+
+So rung 3 is not a narrower retry: it searches every descriptor in `gMemoryMap` below
+`0xFFFFFFFFFFFF`, which is all of them. Rung 4's `return 0` is the recursion's second refusal —
+promotion succeeded, the enlarged map was searched, and it was still too small — and it is the only
+place the request becomes terminal, which is why `P2FreeWhy` sits exactly there.
+
+`CoreFindFreePagesI` (`:903-1042`) is a largest-fit search over **one** descriptor at a time:
+it skips anything that is not `EfiConventionalMemory`, skips `EFI_MEMORY_SP`, clips the descriptor
+to `MaxAddress`, aligns `DescEnd` down to the alignment, skips if `DescEnd < DescStart`, accepts
+only `DescNumberOfBytes >= NumberOfBytes`, and keeps the largest. The terminal
+`if ((Target & EFI_PAGE_MASK) != 0) { return 0; }` is the *found-nothing* test. Consequently **a
+nine-page request fails only if there is no single nine-page run of `EfiConventionalMemory` in the
+whole map** — not because the total is short. The cumulative-demand argument in the record
+(6,397,952 B against a 35.4 MiB heap at `0x9B800000`) says the same thing from the other side.
+
+Two things that could have made it an alignment or guard refusal, measured and closed:
+
+* **`Alignment` is one page for every memory type in this build.** `CoreInternalAllocatePages`
+  (`:1473`) sets `DEFAULT_PAGE_ALLOCATION_GRANULARITY` and promotes to
+  `RUNTIME_PAGE_ALLOCATION_GRANULARITY` for `EfiReservedMemoryType`, `EfiACPIMemoryNVS`,
+  `EfiRuntimeServicesCode`, `EfiRuntimeServicesData`. `AArch64/ProcessorBind.h:165-170` is
+  `DEFAULT_PAGE_ALLOCATION_GRANULARITY (0x1000)` and `RUNTIME_PAGE_ALLOCATION_GRANULARITY (0x1000)`
+  only under `__DEPRECATED_AARCH64_4K_RUNTIME_GRANULARITY`, else `0x10000`. **That macro is set:
+  `Silicon/Silicium/SiliciumPkg/SiliciumPkg.dsc.inc:14` is
+  `*_CLANGPDB_AARCH64_CC_FLAGS = -D __DEPRECATED_AARCH64_4K_RUNTIME_GRANULARITY`** — and it is
+  visible on every compile line of the build. The `#else` arm is dead in this build, so
+  `Alignment == EFI_PAGE_SIZE` for all four types.
+* **No allocation is guarded.** `CoreAllocatePages` (`:1641`) is
+  `NeedGuard = IsPageTypeToGuard (MemoryType, Type) && !mOnGuarding;`, `IsPageTypeToGuard`
+  (`HeapGuard.c:689`) delegates to `IsMemoryTypeToGuard (…, GUARD_HEAP_TYPE_PAGE)`, which returns
+  FALSE for `AllocateAddress` and otherwise gates on `gDxeMps.HeapGuardPolicy.Fields.UefiPageGuard`;
+  and `CoreInternalAllocatePages` clears it outright: `if (Alignment != EFI_PAGE_SIZE) { NeedGuard = FALSE; }`.
+
+With both closed, the 27 `L`s are a heap-**state** story and nothing else, and `P2 FREE largest=`
+(`P2LargestAlloc`, `Dispatcher.c:195-225`, the 7-rung `{4096, 1024, 256, 64, 16, 4, 1}` ladder) is
+the instrument that reads it off the device.
+
+### The display switch, measured under both values
+
+`APRIORI.inc` and `DXE.inc` each gate the display on one `!if`:
+
+```
+!if $(USE_CUSTOM_DISPLAY_DRIVER) == 1
+  INF Binaries/gauguin/QcomPkg/Drivers/DisplayDxe/DisplayDxe.inf
+  INF QcomPkg/Drivers/DisplayReEnablerDxe/DisplayReEnablerDxe.inf
+!else
+  INF SiliciumPkg/Drivers/SimpleFbDxe/SimpleFbDxe.inf
+!endif
+```
+
+Counted with `!if`/`!else`/`!endif` evaluated rather than skipped:
+
+| file | `=0` | `=1` | first divergence |
+|---|---|---|---|
+| `APRIORI.inc` | **70** | **71** | index **60** — `SimpleFbDxe` at `=0`, `DisplayDxe` at `=1` |
+| `DXE.inc` | **74** | **76** | index **33** — `CPRDxe` inserted ahead of `PdcDxe` |
+
+In `APRIORI.inc` the displacement is one position for **nine** entries: `LimitsDxe` 61→62 through
+`GraphicsConsoleDxe` 69→70, which is what `mP2Apriori` and every `K` row's tick number move by in
+the custom-display build. `CPRDxe` is gated separately (`DXE.inc:61-63`) and is the reason
+`DXE.inc` moves by two rather than by the display block's net one.
+
+And the artifact in hand is the `=0` build, which is a check on the whole table rather than an
+assumption: the volume's Apriori file names **70** GUIDs, its last entry is `GraphicsConsoleDxe`,
+its index 60 is `SimpleFbDxe`, and **both** `DisplayDxe` `FILE_GUID`s — gauguin's
+`79328CB0-14D8-5DE3-B1E5-7118295FD2C0` and alioth's `4138022F-06C7-4F79-9C94-7E33B511A4E7` — are
+absent from the volume. The qcom-display variant's modules do exist and **`DisplayReEnablerDxe.efi`
+has already been built on this host** (`Build/gauguinPkg/DEBUG_CLANGPDB/AARCH64/DisplayReEnablerDxe.efi`),
+so the switch is a rebuild and a reflash and not new driver work. It is still unflashed, and the
+owed panel reading of the flashed 4.74 set is still owed.
+
+### Read this step
+
+Instruments: a corrected in-line FFS and section reader over `/tmp/FVMAIN-raw.fv` (FV header
+arithmetic at `0x20`/`0x30`/`0x34`/`extoff+16`; `0x13` for `EFI_SECTION_DXE_DEPEX`; 4-byte section
+alignment; the 123-file body-consumption check), a 1,799-entry `FILE_GUID` index over
+`work/uefi/Mu-Silicium` (excluding `Build/`), `tools/depex-census.py` over the shipped payload and
+the USB-host artifact, a byte search for `883CC780-…` over the volume, four payload images and the
+whole tree, `MdePkg.dec` / `MdeModulePkg.dec` / `EmbeddedPkg.dec` for twelve protocol names,
+`DxePcdLib.inf:61-62` and `ModuleAutoGen.py:563-590` plus the generated
+`…/WatchdogTimer/OUTPUT/WatchdogTimer.depex` and `.txt`, `DxeProtocolNotify.c:21-35` and `:81-93`,
+`Dispatcher.c:195-225`, `:1203-1204`, `:2104-2120`, `Mem/Page.c:903-1042`, `:1317-1402`, `:1473`,
+`:1641`, `HeapGuard.c:689`, `AArch64/ProcessorBind.h:165-170`, `SiliciumPkg.dsc.inc:14`,
+`Binaries/{generic,bitra,onyx}/…/{XhciPciEmulationDxe,UsbInitDxe}.depex`, `gauguin.fdf:40-42`,
+the `!if`-evaluated counts of `APRIORI.inc` and `DXE.inc`, and the `Binaries/gauguin` /
+`Binaries/bitra` driver listings. Nothing was built for the device, nothing was flashed, no
+partition was written, and no device is attached to this machine — `lsusb`, `adb devices`,
+`fastboot devices` and the serial device nodes are all empty.
+
+| | |
+|---|---|
+| instrument | the decompressed inner volume walked per file and per section with both reader constants corrected, a 1,799-entry `FILE_GUID` index over the whole tree, the project's own `tools/depex-census.py` run over the shipped payload and the USB-host artifact, twelve GUID names resolved in three `.dec` files, `DxePcdLib.inf` and `ModuleAutoGen.DepexList` against the generated `WatchdogTimer.depex`, a byte search for the disputed GUID over the volume, four payload images and the entire tree, the allocator read at all four rungs, and the `!if`-evaluated counts of both `.inc` files — nothing was built, flashed or written, and no device is attached |
+| shows | that the volume holds **123 files** (`0x02`×37, `0x05`×1, `0x07`×80, `0x09`×5) of which **27 carry a `DXE_DEPEX`** — a section type `0x13`, 4-byte aligned, and **0 of the 123 leaves more than 7 body bytes unconsumed**, which is the check that both constants are right; that the 27 are **all DXE_DRIVERs** and their section lists are `DXE_DEPEX, PE32, UI` ×26 plus file#2 `Pcd`'s `RAW, DXE_DEPEX, PE32, UI`, with bodies `18 B ×18`, `36 B ×7`, `72 B ×1`, `90 B ×1`; that **eighteen of the 27 are `PUSH gEfiPcdProtocolGuid END` alone** and nine more `AND` that GUID with one real protocol, so the band's recurring term is a single protocol that **no module INF writes** — `WatchdogTimer.inf` declares `gEfiTimerArchProtocolGuid` and nothing else, while the volume's file for it carries two terms, the second inherited from `DxePcdLib.inf:61-62`'s `[Depex.common.DXE_DRIVER, …]` by `ModuleAutoGen.DepexList`'s `for M in [self] + self.LibraryAutoGenList:` loop, with `Build/gauguinPkg/…/WatchdogTimer/OUTPUT/WatchdogTimer.depex` byte-for-byte the volume's body as the artifact; that with the a-priori rule applied (`Dispatcher.c:2104-2120`, `:1203-1204`) the 27 split **21 inert / 6 gated**, and **zero of them waits on a protocol this volume has no producer for** — the six gated ones are `RamManagerDxe`, `SmbiosDxe`, `SmBiosTableDxe`, `AcpiTableDxe`, `AcpiPlatformDxe` and `SetupBrowserDxe`, all declared directly in `gauguin.fdf`; that `XhciPciEmulationDxe`'s 234-byte expression names **twelve of the thirteen `mArchProtocols` plus `gEfiDriverBindingProtocolGuid`**, the single omission being `gEfiCapsuleArchProtocolGuid`, which is why it names eight of the nine absent protocols and not nine — and the census shows all eight with producers in the same volume at Apriori 32–45, so the driver waits rather than dies; that `UsbInitDxe`'s one-term `E722B03F-…` occurs in exactly two files of the volume, file#62 `UsbfnDwc3Dxe` and file#68 `UsbConfigDxe`, both of them present in `Binaries/gauguin`; that `FindFreePages`' third rung searches the **whole** map below `MAX_ALLOC_ADDRESS` (`0xFFFFFFFFFFFF`), so a nine-page refusal needs the absence of a single nine-page `EfiConventionalMemory` run rather than a short total, and rung 4's `return 0` is the only terminal refusal; that **`Alignment` is one page for all four memory types** because `SiliciumPkg.dsc.inc:14` sets `__DEPRECATED_AARCH64_4K_RUNTIME_GRANULARITY`, and **no allocation is guarded**; and that the display `!if` moves `APRIORI.inc` from **70 to 71** (nine entries displaced by one, first divergence at index 60) and `DXE.inc` from **74 to 76** (first divergence at index 33, where `CPRDxe` enters), while the volume in hand matches the `=0` build on all three checks — 70 GUIDs, `SimpleFbDxe` at 60, `GraphicsConsoleDxe` last — and both `DisplayDxe` `FILE_GUID`s are absent from it |
+| adds | the depex census as a **per-file, per-byte** table of all 27 with every body decoded and every GUID named, where the record had only counts; the corrected reader constants (`0x13`, 4-byte section alignment) with the body-consumption check that makes them auditable, since this step got each wrong once and both wrong versions produced well-formed output; the mechanism that makes a depex a **library-graph** property rather than a driver's authored intent, with the generated `.depex` as the artifact and the note that the `DEPEX[…]` verbose line is not in the retained logs; the a-priori rule's consequence, that 21 of the 27 expressions are **inert** and their content can have no effect on this boot; the partition of the 27 into the 6 that are genuinely gated, with the observation that `AcpiPlatformDxe`'s dependence on `AcpiTableDxe` is a dispatch-order relation and not a missing producer; the exact thirteen-term list with each name's `.dec` line, and the identification of `gEfiCapsuleArchProtocolGuid` as the one omission that turns thirteen into the plan's eight; the two-volume-file location of `E722B03F-…`, which moves that question from *no producer in the image* to *no header in the tree*; the four-rung allocator trace with rung 3 as the whole map and the terminal refusal named; the `__DEPRECATED_AARCH64_4K_RUNTIME_GRANULARITY` origin of the one-page alignment; and the `!if`-evaluated counts of `APRIORI.inc` and `DXE.inc` under both display settings, with the displacement widths and indices rather than a bare total |
+| corrects | step 4.128's `docs/08:1651-1656`, in all three of its claims beyond the first: `883CC780-0281-F0F6-A313-4A26F03EF2E0` is **not a GUID and is not required by `WatchdogTimer` or `RealTimeClockRuntimeDxe`** — it is the byte-wise reading of a 16-byte window inside three 36-byte bodies that straddles the tail of a `…0080C73C8881`-suffixed arch-protocol GUID, the `0x02` `PUSH` opcode and the head of `gEfiPcdProtocolGuid`, it occurs exactly 3 times in the volume (file#8, #16, #25 — the three files that pairing predicts), 0 times in every built image and 0 times anywhere in the tree including `Build/`; the same paragraph's *"25 of the 27 that have one are the bare `(TRUE)`"*, when **none** of the 27 is — `(TRUE)` is what the INFs write and the library merge replaces it; and the paragraph's conclusion that there is a *"second missing-provider signal"*, when the census finds **no unsatisfiable dependency in the volume at all**; this step's own first two drafts of the reader, which keyed sections on `0x02` and aligned them to 8 bytes and each reported a confident, well-formed census that was wrong; and the reading of a `[Depex]` line in an INF as a statement about the built artifact, which the `WatchdogTimer` pair (one INF term, two section terms) refutes in both directions |
+| does not close | the P3 gate and the owed panel reading of the flashed 4.74 set; whether `E722B03F-…` is installed as a protocol by `UsbConfigDxe` or `UsbfnDwc3Dxe`, since the bytes occurring in those two files show a candidate producer in the image and not an installation; which of the 27 `L` letters each `K` row's `free=` value belongs to, which needs `P2 FREE largest=` from the device; the phone's own `K` rows and its 46-letter `P2 SEQ`, unchanged; and the display variant, which is built and unflashed — the switch is measured but the firmware it produces has never been read off a panel |
+| not an action | nothing was built for the device, nothing was flashed and no partition was written; every reading in this step is off files already on disk, and no device is attached to this machine. The porting goal is not advanced by it: P3's display, USB-host and buttons items remain unfinished and P4 and P5 are not begun |
