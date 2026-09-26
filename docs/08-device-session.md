@@ -24658,3 +24658,129 @@ plain configuration, three captures), `…-zeromem.txt` (one block) and `…-map
 | corrects | the reading of the previous family of steps in which the mirrored guest "is polling a register the instrument zeroed": `X0 = X1 = 0` at the store is `mov w1, wzr` in the routine itself, and the run is not polling anything — it is inside an assert's termination; the reading of the `--el3-stub` captures as one run seen three times, which they are not; and this step's own first reading of the digest row as "one Apriori failure out of 69", replaced in place by the field definitions above once `mu-basecore-local.patch:953`/`:982`/`:1003` and `tools/apriori-order.py`'s output were read against each other |
 | does not close | the P3 gate; the owed panel reading; which module the `L` tick the digest counts belongs to, now that the row in hand is `PcdDxe`'s start and not a failure; and the question of whether a variant built without EnvDxe in the Apriori reaches the `P2` rows at all — nothing was built this step |
 | not an action | nothing was built, nothing was flashed, no partition was written, and the device was absent throughout — every claim here is about bytes on this host and about registers the guest printed itself |
+
+## Step 4.124 — Where the digest is printed, and why no stage-2 table can reach it
+
+Step 4.123 established, for one driver, that the mirrored run stops inside `EnvDxe` and
+that the `P2` digest rows never appear. This step reads the printer's own placement and
+generalises it: **the digest is emitted after the dispatcher returns**, so a run that
+stops anywhere inside the Apriori batch cannot print it, and the blank is a property of
+where the code lives rather than of `EnvDxe`.
+
+`P2Digest ()` is defined at
+`Mu_Basecore/MdeModulePkg/Core/Dxe/Dispatcher/Dispatcher.c:2239`, immediately after
+`CoreInitializeDispatcher ()` at `:2211`, and the text has exactly two sites that call it,
+both inside `CoreDisplayDiscoveredNotDispatched ()` (`:2483`):
+
+```c
+  P2Digest ();                                  /* Dispatcher.c:2552 */
+
+  for (Index = 0; Index < 40; Index++) {        /* :2554 */
+    P2Hold ();                                  /* :2555 */
+    P2Digest ();                                /* :2556 */
+  }
+```
+
+and `DxeMain.c` calls those in this order:
+
+```c
+  CoreInitializeDispatcher ();                  /* DxeMain.c:557 */
+  CoreDispatcher ();                            /* :562 */
+  …
+  CoreDisplayMissingArchProtocols ();           /* :568 */
+  …
+  CoreDisplayDiscoveredNotDispatched ();        /* :576 */
+  …
+  Status = CoreAllEfiServicesAvailable ();      /* :582 */
+```
+
+So every row the P2 diagnosis reads — `P2 SEQ`, `P2 WHY`, `P2 ERR`, `P2 DIAG`,
+`P2 NOLOAD`, `P2 WALK`, `P2 FREE`, `P2 Bins`, `P2 KEY` — is written only after
+`CoreDispatcher ()` has drained the batch. `P2Tick`'s `K` rows are the one exception, and
+the reason is the same fact seen from the other side: they are written *from* the two
+dispatch call sites (`uefi/patches/mu-basecore-local.patch:982` for the load, `:1003` for
+the start), inside the batch. That is why the mirror's panel holds exactly one `K` row and
+nothing else, and why the panel ends on the last driver *before* the one that stops.
+
+### The mirror's blank is an absence, not a loss
+
+The question this leaves is whether the digest was printed and then eaten by the console,
+which wipes rather than scrolls. `work/out/qemu-panel-el3-map-long.txt` settles it by
+arithmetic and not by inference: the capture holds **70 rows**, the panel is `1080x2400` at
+cell `12x24`, i.e. **90x100 cells**, so the cursor stopped at row 70 of 100 and
+`AdvanceNewLine` never cleared the screen. Row 0 is the banner (`Project Silicium for
+Xiaomi Redmi Note 9 Pro 5G`) and row 69 is the assert's own text — `…get info
+addr=0x%08X memory mapping failed.`, the description string `DebugAssert` was handed. The
+console therefore holds that run's complete output, so the missing rows were never
+written; the header's one gap is a sampling gap (`at 0.25s, 5 rows, none shared`) and does
+not move the count. This is the check that separates "the console ate the evidence" from
+"there was never any", and it comes out on the second.
+
+### The two redirects converge, and the reason is address versus value
+
+The three `--el3-stub` captures stop at three different `EnvDxe` addresses and read, at
+first, as three different faults. Two of them are the same stop reached two ways:
+
+| configuration | what reads `0x01FD4000` | stop | how |
+|---|---|---|---|
+| plain | `virt.flash0`, mapped into secure space only below `0x04000000` | RVA `0x950C` | external abort on the *read* |
+| `--el3-zero-mem`, the one block | redirected pool RAM, holding zeros | RVA `0x7D64` | the read succeeds, returns `0`, the failure branch prints, and the assert stores to `PSHOLD` |
+| `--el3-zero-mem`, the platform map (55 blocks) | the same zeros — the plan redirects *addresses*, and none of the 55 blocks carries a value | RVA `0x679C` | the same assert, four instructions later: `PSHOLD`'s own block 97 is redirected too, so the store lands in RAM and the stop is the deadloop |
+
+The third configuration buys four instructions. What `EnvDxe` wants at `0x01FD4000` is a
+**value** that XBL and TZ write before the firmware runs, and a stage-2 table can change
+where an address lands but cannot invent what is there. Every redirected block reads zero
+— `l2_plan` maps blocks to zeroed pool RAM by construction (`tools/qemu-panel-read.py:285`
+onward) — so the SMEM target-info path has nothing to map in the mirror in all three
+configurations, and the payload's first `DEBUG` after the digest is the assert.
+
+That fixes the instrument's ceiling as a statement rather than a complaint. To get the
+mirror past `EnvDxe` without changing a byte of the payload, the stub would have to
+**seed** the block standing in for `0x01FD4000`; and then whatever the next driver reads
+that only XBL or TZ would have left, and the one after that. The mirror's stop is a
+per-word seeding problem with no known size, which is why the phone, not the mirror, is
+the instrument for the loader question — and the phone is absent.
+
+### The phone's own panel confirms it from the other side
+
+Step 4.123 argued from the code that the mirror's `EnvDxe` failure is "a property of the
+modelled environment, not of the payload". The device says the same thing independently.
+The phone prints `P2 SEQ` and `P2 DIAG`, and by the placement above that means
+`CoreDispatcher ()` **returned** on the phone — the batch drained. Index 1 of `P2 SEQ` is
+Apriori entry 2, which `tools/apriori-order.py /tmp/gauguin-kernel.raw` prints as
+`EnvDxe`, and index 1 of the measured string is an `s`. **`EnvDxe` starts on the
+hardware.** The SMEM target-info read the mirror cannot get past is a read the phone
+performs successfully as its second dispatch, so the SMEM path is exonerated on the device
+and the P2 assert is not about it.
+
+### The dispatch order, re-derived rather than carried
+
+`tools/apriori-order.py /tmp/gauguin-kernel.raw` was run again to check the join the SEQ
+table uses: `0 DxeCore, 1 PcdDxe, 2 EnvDxe, 3 ReportStatusCodeRouterRuntimeDxe, … 21
+ClockDxe, 22 ShmBridgeDxe, 23 ScmDxe, 24 DiskIoDxe, …`, trailer *"the array is exactly the
+INF order of `APRIORI.inc`: 70 entries, zero mismatches"*. `P2MarkSeq`
+(`mu-basecore-local.patch:873-889`) fills its ring by **matching a GUID** inside the
+promotion loop, and `DxeCore`'s file type never reaches `CoreAddToDriverList`, so index *i*
+of the string is the *i*-th match and SEQ *i* = Apriori *i+1*. The lone `s` between two
+`L`s is therefore SEQ **21 = Apriori 22 = `ShmBridgeDxe`**; `ScmDxe`, the name an earlier
+alignment gave that character, is Apriori 23 / SEQ 22 and is an `L`.
+
+### Read this step
+
+Instruments: `work/uefi/Mu-Silicium/Mu_Basecore/MdeModulePkg/Core/Dxe/Dispatcher/
+Dispatcher.c` read at `:2211`, `:2239`, `:2483`, `:2552`, `:2554-2556` for `P2Digest`'s
+definition and its only call sites, and `…/Core/Dxe/DxeMain/DxeMain.c` read at `:557`,
+`:562`, `:568`, `:576`, `:582` for the order those are reached in;
+`uefi/patches/mu-basecore-local.patch` read at `:873-889` (`P2MarkSeq`), `:982` and
+`:1003` (the two `P2Tick` sites) and `:953` (the tick format); `tools/apriori-order.py`
+re-run on `/tmp/gauguin-kernel.raw`; and `work/out/qemu-panel-el3-map-long.txt` counted
+row by row against the panel geometry `1080x2400` at cell `12x24`.
+
+| | |
+|---|---|
+| instrument | the patched sources themselves — `P2Digest`'s definition and its two call sites, and `DxeMain.c`'s call order — rather than the panel; the geometry of the panel against the captured row count; `tools/apriori-order.py` re-run on the payload in `boot` |
+| shows | that all the P2 digest rows are written after `CoreDispatcher ()` returns (`DxeMain.c:562` then `:576`, with `P2Digest` called only from `CoreDisplayDiscoveredNotDispatched`, `Dispatcher.c:2483`), so no run that stops inside the Apriori batch can print them — the general form of step 4.123's `EnvDxe`-specific result; that the mirror's 70 rows in a 90x100 cell panel mean nothing was wiped, so the absent digest is an absence and not a loss; that the one-block and platform-map redirects reach the same `smem_target.c +435` assert and differ only by the four instructions between the store and the deadloop; and that `P2 SEQ` index 1 is `EnvDxe` and is `s`, i.e. the phone's dispatcher drained and `EnvDxe` starts on the hardware |
+| adds | the placement argument, which turns "a module that power-holds the board at entry two cannot be seen past" into a rule about the printer's position in `DxeMain`; the row-count check that settles the console-wipe question step 4.122 left open; the address-versus-value reading of why the 55-block plan buys four instructions and no more, and what a mirror would actually need (seeding, per word, unknown count); and the device-side confirmation that the SMEM path works on the phone, which until now was only a code-side argument |
+| corrects | the reading of the three `--el3-stub` captures as three distinct faults: two of the three are one stop, `EnvDxe`'s own assert, reached first by an aborting read and then by a store that lands in RAM once the plan covers `PSHOLD`; and the reading in an earlier draft of this document that named `ScmDxe` as the lone `s` inside the `L` run, which is SEQ 22 and an `L` — the character is SEQ 21, `ShmBridgeDxe`, as step 4.12's table already had it |
+| does not close | the P3 gate; the owed panel reading; and the loader question itself, which is *why* `CoreLoadImage` fails from SEQ 18 (`RpmhDxe`, Apriori 19) onward for 27 of the 46 matches, with one `s` (`ShmBridgeDxe`) in the middle of them — the mirror cannot reach it, so it waits on the phone |
+| not an action | nothing was built, nothing was flashed, and no partition was written; the device was absent throughout, and every claim above is about source on this host, about the payload's own bytes, or about a capture already on disk |

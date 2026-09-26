@@ -36,21 +36,36 @@ phase state from this table, not from the commit titles.
 
 ### The one thing blocking progress
 
-It is no longer a physical reset — that was the previous entry, and the reset
-happened. What blocks progress now is **one line of text on the phone's screen**:
-the name of the first architectural protocol DXE could not find, which
-`CoreDisplayMissingArchProtocols ()` printed at `DxeMain.c:568`, two or three
-lines above the assert. The phone is a distance away and holds that screen until
-the next reset, so reading it costs nothing and every alternative costs a build
-and a flash cycle. `docs/08` step 4.8 has what to look for and the dependency
-chain that narrows the thirteen candidates.
+It is no longer a physical reset, and it is no longer an unread line either. The
+reset happened and the panel was read; `docs/08` steps 4.8, 4.9 and 4.95 then
+derived the set from the volume and the source rather than from the panel, and it
+is **nine architectural protocols with eight producers** — the ninth name shares
+a producer with the eighth. The panel's own reading agreed, and the count in the
+first draft of this section ("the thirteen candidates") was wrong twice over.
 
-If the screen cannot be read, the fallback is a firmware change rather than a
-guess: make the missing-protocol report unconditional, or print it a second time
-after the assert. That is a rebuild —
-`./build_uefi.py -d gauguin -r DEBUG -c` in `work/uefi/Mu-Silicium`, then
-`tools/build-p2-payloads.sh`, then `tools/flash-boot.sh` — and it should be one
-cycle that answers the question whether or not anyone can read the panel.
+What blocks progress now is one step further in: **the nine are absent because
+their producers never loaded**, and the producers are eight of the 27
+`CoreLoadImage` failures the volume's own `P2 SEQ` string measures. The string is
+`ssssssssssssssssssLLLsLLLLLLLLLLLLLLLLLLLLLLLL` — 46 matches, 19 started, 27
+failed to load, and not one `?`, so the batch drained rather than stopping. The
+failure begins at **SEQ 18 = Apriori 19 = `RpmhDxe`**; from there to the end of
+the string 27 of the 28 matches failed to load, the one exception being
+`ShmBridgeDxe` (SEQ 21), which loads and starts exactly where `PdcDxe` (SEQ 19)
+fails on a byte-identical request. One `P2 DIAG` line rendered **Out of
+Resources**, which is the status that pairs with `P2 FREE largest=` — `docs/08`
+steps 4.18 onward are the analysis of that pair.
+
+**This is a question only the phone can answer, and that is now a measurement
+rather than an excuse.** `docs/08` step 4.124 reads where the instrument's own
+printer lives: every `P2` digest row is written from `P2Digest ()`, which
+`CoreDisplayDiscoveredNotDispatched ()` calls and which `DxeMain.c:576` reaches
+only *after* `CoreDispatcher ()` at `:562` has returned. So a run that stops
+anywhere inside the Apriori batch prints none of them, and the `--el3-stub`
+configurations all stop inside `EnvDxe`, which is Apriori entry 2. The mirror's
+ceiling is `EnvDxe`'s first SMEM read, and no stage-2 table lifts it: the redirect
+moves *addresses*, while what `EnvDxe` needs at `0x01FD4000` is a *value* XBL and
+TZ write before the firmware runs. Seeding it is a per-word problem of unknown
+length, so the panel is the instrument and the phone is what holds it.
 
 The pieces a device session uses — the full sequence, with what each outcome
 means and which payload to try next, is
