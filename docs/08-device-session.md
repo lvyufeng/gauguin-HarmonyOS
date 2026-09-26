@@ -20348,6 +20348,15 @@ Variable and Watchdog Timer. Only Capsule, of the missing nine, is not in the li
 this driver's depex can never evaluate TRUE on the record's driver set, and since it is
 not a-priori it has no other route onto the queue.
 
+> **The last clause is false (Step 4.108).** The a-priori loop is not the only route onto
+> `mScheduledQueue`: `CoreDispatcher`'s `do { … } while (ReadyToRun)`
+> (`Dispatcher.c:1062`…`:1216`) re-scans `mDiscoveredList` after every drain and schedules
+> anything still `Dependent` whose `CoreIsSchedulable` comes back TRUE (`:1189-1211`), via
+> the same insert the a-priori loop performs by hand (`:1242-1300`, `:1272-1276`). Every
+> DRIVER file is in `mDiscoveredList` whether or not it is a-priori (`:2044-2053`). A
+> non-a-priori driver is *deferred*, not excluded — so `XhciPciEmulation` is blocked by the
+> first clause, which is right, and not by the second, which is not.
+
 `XhciDxe` has no depex at all, and that is worse rather than better. `CoreGetDepexSectionAndPreProccess`
 (`Dispatcher.c:860-905`) sets `Depex = NULL; Dependent = TRUE` when the `DXE_DEPEX` read
 fails with anything but `EFI_PROTOCOL_ERROR`; and for a NULL depex `CoreIsSchedulable`
@@ -20356,6 +20365,15 @@ and returns FALSE if that errors. `CoreAllEfiServicesAvailable` is the same func
 whose failure is the assert at `DxeMain.c:582`/`:593`. A depex-less driver is therefore
 schedulable only once all thirteen architectural protocols exist, which on this payload
 they do not.
+
+> **Not worse, and not better — synchronised (Step 4.108).** The paragraph above is right
+> about the mechanism and wrong about its consequence. `CoreDispatcher` is called at
+> `DxeMain.c:562` and runs to quiescence *before* `CoreAllEfiServicesAvailable ()` at
+> `:582`, so on the round after the thirteenth protocol is installed the re-scan trips this
+> driver and the drain loads and starts it — inside the dispatcher, ahead of the assert at
+> `:593` and the BDS handoff at `:606`. A NULL depex is the most constrained depex and
+> simultaneously the one that makes its driver arrive at the same instant BDS does, by
+> construction.
 
 `UsbInitDxe`'s single push is at least satisfiable in principle: the GUID appears nowhere
 in this tree (no `.dec`, `.h`, `.inf`, `.dsc` or `.c` defines it), but it *does* appear in
@@ -20381,6 +20399,15 @@ warning — the artifact "is not the payload that answers the open P2 question a
 take the place of the one in `boot` until that reading has been taken" — is therefore
 stronger than it was written to be: even after that reading, this artifact cannot reach
 the gate it was built for.
+
+> **Right conclusion, wrong reason (Step 4.108).** The gate is `ASSERT_EFI_ERROR` at
+> `DxeMain.c:593` on `CoreAllEfiServicesAvailable ()` at `:582`, which is the *same*
+> predicate the USB stack is gated on — so with the nine absent, `gBds->Entry` at `:606` is
+> never reached and BDS does not run at all. That is why no driver addition can reach the
+> gate, and it is a dependency on the P2 load failures rather than a defect of the
+> artifact. The "five of whose producers carry `L`" clause is a letter reading and is
+> superseded by Steps 4.104-4.106; the count is nine, and it is the nine of
+> `mMissingProtocols[]` that Step 4.9 read off the panel.
 
 ### The arithmetic the array read closes, which the candidate does not touch
 
@@ -21138,3 +21165,187 @@ the same five rows from the payload. The reading owed on the payload in `boot`
 | decided | nothing new. This step exists so that a later run reading the older steps does not follow a number this project has already retracted |
 | does not close | the P3 gate, which remains unmet and is now shown to be further away, not closer; and the owed panel reading, which is still owed |
 | standing rules unchanged | `userdata`, the partition table and the firmware LUN are untouched; writes go to `boot` only; the control image is read before anything is overwritten; and the screen is read before the next flash |
+
+## Step 4.108 — the driver the dispatcher can still schedule, and the nine protocols that stop the boot before BDS ever runs
+
+### What this step is
+
+Step 4.103 audited the P3 candidate and closed with a claim about the dispatcher that is
+false, and the claim is load-bearing: it is what turns the candidate from "gated on the
+same thing everything else is" into "dead by construction". The correction is a source
+reading, checked line by line below, and it changes the diagnosis of the P3 gate rather
+than the artifact. Nothing was built, staged, flashed or written to any partition.
+
+### The false claim
+
+Step 4.103, on `XhciDxe`'s absent depex:
+
+> So this driver's depex can never evaluate TRUE on the record's driver set, and since it is
+> not a-priori it has no other route onto the queue.
+
+The first clause is right for `XhciPciEmulation` and the second is right for neither. The
+a-priori promotion loop is **not** the only route onto `mScheduledQueue`.
+
+### The route Step 4.103 missed
+
+`CoreDispatcher` is a `do { … } while (ReadyToRun)` (`Dispatcher.c:1062` … `:1216`), and
+each round is: drain the scheduled queue (`:1063-1186`, one `CoreLoadImage` and
+`CoreStartImage` per entry), signal `gEfiEventDxeDispatchGuid`, then **re-scan
+`mDiscoveredList`** (`:1189-1211`):
+
+```c
+    ReadyToRun = FALSE;
+    for (Link = mDiscoveredList.ForwardLink; Link != &mDiscoveredList; Link = Link->ForwardLink) {
+      DriverEntry = CR (Link, EFI_CORE_DRIVER_ENTRY, Link, EFI_CORE_DRIVER_ENTRY_SIGNATURE);
+      if (DriverEntry->DepexProtocolError) {
+        Status = CoreGetDepexSectionAndPreProccess (DriverEntry);
+      }
+      if (DriverEntry->Dependent) {
+        if (CoreIsSchedulable (DriverEntry)) {
+          CoreInsertOnScheduledQueueWhileProcessingBeforeAndAfter (DriverEntry);
+          ReadyToRun = TRUE;
+        }
+      } else if (DriverEntry->Unrequested) { … }
+    }
+  } while (ReadyToRun);
+```
+
+`CoreInsertOnScheduledQueueWhileProcessingBeforeAndAfter` (`:1242-1300`) is the same
+insert the a-priori loop performs by hand: `Dependent = FALSE`, `Scheduled = TRUE`,
+`InsertTailList (&mScheduledQueue, …)` (`:1272-1276`), plus the `Before`/`After` closure.
+So a driver with a satisfiable depex is scheduled by the re-scan as soon as the protocols
+its depex names exist — on the round after they do. The a-priori loop's only privilege is
+the `Dependent = FALSE` it writes at `:2111`: *run regardless of depex*, in round one.
+
+And every DRIVER file is in `mDiscoveredList` whether it is a-priori or not, because the
+walk's non-FV_IMAGE branch calls `CoreAddToDriverList` unconditionally (`:2044-2053`).
+The candidate's three files are therefore scanned every round. They are deferred, not
+excluded.
+
+### What the correction changes, and what it does not
+
+It does **not** rescue `XhciPciEmulation`. Its 234-byte depex names thirteen protocols,
+eight of them among the nine the panel reports absent, so it cannot evaluate TRUE on this
+driver set — and 4.103's `L`-letter argument for that is now unreadable (Step 4.104), but
+the depex body is not: it is a fact of the FFS file, read from the section, and eight of
+its thirteen pushes are protocol GUIDs nothing in this volume installs.
+
+It does **not** rescue `XhciDxe` either — but it changes *why*, and the new reason is the
+interesting one. With `Depex == NULL`, `CoreIsSchedulable` (`Dependency.c:221-234`) does not
+return TRUE; it returns `CoreAllEfiServicesAvailable () == EFI_SUCCESS`
+(`Dependency.c:225`, `:81-92` in `DxeProtocolNotify.c`). That is the **same predicate**
+`DxeMain` evaluates at `:582` before handing control to BDS:
+
+```
+DxeMain.c:562   CoreDispatcher ();
+DxeMain.c:568   CoreDisplayMissingArchProtocols ();      // DEBUG_CODE
+DxeMain.c:582   Status = CoreAllEfiServicesAvailable ();
+DxeMain.c:593   ASSERT_EFI_ERROR (Status);
+DxeMain.c:606   gBds->Entry (gBds);
+```
+
+So a depex-less driver is the *most* constrained depex — it demands all thirteen — and it
+becomes schedulable at exactly the instant BDS does. But `CoreDispatcher` has already been
+called and runs to quiescence at `:562`, **before** the gate at `:582`: on the round after
+the thirteenth protocol is installed, the re-scan trips `XhciDxe` and the drain loads and
+starts it. `XhciDxe` is therefore dispatched *before* the boot reaches the assert, not
+after it. Step 4.103's "worse rather than better" is the wrong reading of the same fact: a
+NULL depex is not a driver that can never run, it is one that synchronises itself with the
+BDS handoff by construction.
+
+### The nine, restated without the letters
+
+`CoreAllEfiServicesAvailable` walks `mArchProtocols[]` (`DxeProtocolNotify.c:20-35`) in a
+fixed order and returns `EFI_NOT_FOUND` at the **first** entry whose `Present` is FALSE
+(`:81-92`) — so the assert itself names neither how many nor which. The names come from
+`mMissingProtocols[]` (`:56-71`) via `CoreDisplayMissingArchProtocols` (`:263-278`), which
+`DxeMain.c:568` calls on `DEBUG_ERROR` **before** the gate; and `DEBUG_ERROR` is the channel
+that paints this panel (Step 4.104), which is why Step 4.8's photograph carried the list
+in prose and Step 4.9 read it. That reading is a second, independent, already-available
+source for the same set — and it does not depend on the `P2 SEQ` slot map at all.
+
+`tools/arch-protocol-census.py` reproduces the set from the volume: thirteen protocols,
+**thirteen with a promoted producer, zero with none in the volume** — so this is a dispatch
+or initialisation failure and not a packaging one. The join is best made in **array
+indices**, which no slot map touches. The thirteen producers sit at `ap` 5, 6, 8, 9, 31,
+31, 34, 36, 37, 38, 39, 42 and 44 — four in the first ten entries and nine from `ap31`
+upward, with a gap of twenty-one entries between the two groups:
+
+| the four early producers | the nine late producers |
+|---|---|
+| `ap5` RuntimeDxe → Runtime<br>`ap6` ArmCpuDxe → CPU<br>`ap8` MetronomeDxe → Metronome<br>`ap9` ArmTimerDxe → Timer | `ap31` VariableRuntimeDxe → Variable **and** Variable Write<br>`ap34` ResetSystemRuntimeDxe → Reset<br>`ap36` WatchdogTimer → Watchdog Timer<br>`ap37` SecurityStubDxe → Security<br>`ap38` EmbeddedMonotonicCounter → Monotonic Counter<br>`ap39` RealTimeClock → Real Time Clock<br>`ap42` CapsuleRuntimeDxe → Capsule<br>`ap44` BdsDxe → Bds |
+
+The right-hand column is nine protocols, and it is **exactly** the set Step 4.9 read off the
+panel in prose and Step 4.95 corrected from eight to nine — an independent reading that
+carries no slot map with it, joined here to a volume-side table that likewise carries none.
+The left-hand column's four produce the other four protocols that *are* present — Runtime,
+CPU, Metronome and Timer — and the fifth present one, Variable Write, comes from the `ap31`
+entry that appears in both columns.
+
+The batch-slot grouping the census prints (`pos` 4, 5, 7, 8 against 30, 30, 33, 35, 36, 37,
+38, 41, 43) is the same split in the map-dependent spelling: `pos` is an index into the
+46-slot batch, so it moves with the batch — those numbers are the identity map's, and the cut
+map's are 4, 5, 7, 8 against 28, 28, 31, 33, 34, 35, 36, 39, 41. It is printed
+because a panel line addresses slots, but the split itself is robust across the two
+candidate maps — the last of the four, `ap9`, is at slot 8 in both, and the first of the
+nine, `ap31`, is at slot 30 under the identity map and slot 28 under the cut map, because
+`ap14` and `ap22` are the only array entries the cut leaves unhit below it and they shift the
+tail by two — so no architectural-protocol producer is near the boundary in either, and the
+split does not depend on which map is right.
+
+The honest limit: *which slot carries `L`* is a map question (Steps 4.104-4.106), but *that a
+`CoreLoadImage` failure installs no protocol* is not — `P2Record` stamps `L` on the failure
+path at `Dispatcher.c:1111`, and a driver whose PE never loaded never reached its entry
+point. So the second group's nine missing protocols follow from the second group's nine
+producers failing, on either map, as long as the batch is 46 long.
+
+### The diagnosis this produces, and it is different
+
+Step 4.103's conclusion was that the candidate "cannot reach the gate it was built for",
+and it read as a defect of the artifact. The corrected conclusion is a dependency:
+
+> **The P3 gate is `ASSERT_EFI_ERROR` on the same predicate the USB stack is gated on.**
+> Nine architectural protocols are absent; their nine producers are in the a-priori batch
+> and fail in `CoreLoadImage`; with them absent, `CoreAllEfiServicesAvailable` fails at
+> `DxeMain.c:582`, the assert fires at `:593`, and `gBds->Entry` at `:606` is never reached
+> — so **BDS does not run at all**, and no installer, USB host controller or mass-storage
+> driver is reachable regardless of what is added to the volume. The nine load failures are
+> the P2 question's 27, seen from the other end.
+
+That makes P2's load-failure mechanism a hard prerequisite of P3 rather than a parallel
+workstream, and it makes the candidate's standing warning (`build.log`: it "must not take
+the place of the one in `boot` until that reading has been taken") true for a different
+reason than 4.103 gave: not because the artifact is dead, but because it is downstream of
+the same nine.
+
+It also re-orders the owed reading. Under 先读屏，再刷下一次, the next panel from the
+payload in `boot` should be read for `P2 ARCH`'s prose form — the
+`<name> Arch Protocol not present!!` lines that `CoreDisplayMissingArchProtocols` prints
+immediately before the assert — **first**, because they are a direct reading of the gate
+and they do not depend on any slot map. Step 4.105's priority order is unchanged behind
+them, and `P2 APRI miss=`/`unhit=` remain the fields that decide the walk.
+
+### Nothing was built and nothing was flashed
+
+- `docs/08-device-session.md` is the only file this step changes. No `.c`, `.inf`, `.asl`,
+  `APRIORI.inc`, FFS file or payload was written, and the build tree was opened read-only.
+- **The device is absent from this host throughout** — `adb devices` is empty, `lsusb` shows
+  no Qualcomm function (the only non-hub device is a Huawei mouse), and there is no
+  `/dev/ttyUSB*`/`/dev/ttyACM*`. The reading owed on the payload in `boot` (`90B21643…`,
+  rung 7260) remains owed, and nothing was flashed.
+- Digests unchanged: record `work/out/p2-4.94/Mu-gauguin-silicon-gzip.img`, 1,144,832 B,
+  `d621f732f4763a303e980c5af04451479c2ace31801e796993a258f226c177a5`; `boot`'s
+  `work/out/p2-variants/Mu-gauguin-silicon-gzip.img`, 1,142,784 B,
+  `90b21643e3450c326fb3d24baf64d58d4692a5d155c36b76d2e020ff04a96b59` — twenty-fifth step
+  running; candidate 1,169,408 B, `efc8e10d09f0f286011e1aacc638a7edd2ed5fcd86884640b28d14628f58f9f3`,
+  unflashed.
+- Cited, re-read rather than remembered: `Dispatcher.c:1062`, `:1063-1186`, `:1111`,
+  `:1189-1211`, `:1216`, `:1242-1300` (`:1272-1276`), `:2044-2053`, `:2111`;
+  `Dependency.c:221-234` (`:225`); `DxeProtocolNotify.c:20-35`, `:56-71`, `:81-92`,
+  `:263-278`; `DxeMain.c:562`, `:568`, `:582`, `:593`, `:606`; and, in this document,
+  Step 4.8's panel reading, Step 4.9's list, Step 4.95's eight-to-nine correction,
+  Step 4.103's audit, and Steps 4.104-4.106's map withdrawal.
+- Standing rules unchanged: `userdata`, the partition table and the firmware LUN are
+  untouched; writes go to `boot` only; the control image is read before anything is
+  overwritten; and the screen is read before the next flash.
+- **The P3 gate remains unmet and is now shown to be further away, not closer.**
