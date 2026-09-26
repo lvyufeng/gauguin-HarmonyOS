@@ -20351,9 +20351,9 @@ not a-priori it has no other route onto the queue.
 > **The last clause is false (Step 4.108).** The a-priori loop is not the only route onto
 > `mScheduledQueue`: `CoreDispatcher`'s `do { … } while (ReadyToRun)`
 > (`Dispatcher.c:1062`…`:1216`) re-scans `mDiscoveredList` after every drain and schedules
-> anything still `Dependent` whose `CoreIsSchedulable` comes back TRUE (`:1189-1211`), via
-> the same insert the a-priori loop performs by hand (`:1242-1300`, `:1272-1276`). Every
-> DRIVER file is in `mDiscoveredList` whether or not it is a-priori (`:2044-2053`). A
+> anything still `Dependent` whose `CoreIsSchedulable` comes back TRUE (`:1189-1215`), via
+> the same insert the a-priori loop performs by hand (`:1242-1299`, `:1272-1276`). Every
+> DRIVER file is in `mDiscoveredList` whether or not it is a-priori (`:2047`, `:2053`). A
 > non-a-priori driver is *deferred*, not excluded — so `XhciPciEmulation` is blocked by the
 > first clause, which is right, and not by the second, which is not.
 
@@ -21189,9 +21189,9 @@ a-priori promotion loop is **not** the only route onto `mScheduledQueue`.
 ### The route Step 4.103 missed
 
 `CoreDispatcher` is a `do { … } while (ReadyToRun)` (`Dispatcher.c:1062` … `:1216`), and
-each round is: drain the scheduled queue (`:1063-1186`, one `CoreLoadImage` and
+each round is: drain the scheduled queue (`:1066-1178`, one `CoreLoadImage` and
 `CoreStartImage` per entry), signal `gEfiEventDxeDispatchGuid`, then **re-scan
-`mDiscoveredList`** (`:1189-1211`):
+`mDiscoveredList`** (`:1189-1215`):
 
 ```c
     ReadyToRun = FALSE;
@@ -21210,7 +21210,7 @@ each round is: drain the scheduled queue (`:1063-1186`, one `CoreLoadImage` and
   } while (ReadyToRun);
 ```
 
-`CoreInsertOnScheduledQueueWhileProcessingBeforeAndAfter` (`:1242-1300`) is the same
+`CoreInsertOnScheduledQueueWhileProcessingBeforeAndAfter` (`:1242-1299`) is the same
 insert the a-priori loop performs by hand: `Dependent = FALSE`, `Scheduled = TRUE`,
 `InsertTailList (&mScheduledQueue, …)` (`:1272-1276`), plus the `Before`/`After` closure.
 So a driver with a satisfiable depex is scheduled by the re-scan as soon as the protocols
@@ -21218,7 +21218,7 @@ its depex names exist — on the round after they do. The a-priori loop's only p
 the `Dependent = FALSE` it writes at `:2111`: *run regardless of depex*, in round one.
 
 And every DRIVER file is in `mDiscoveredList` whether it is a-priori or not, because the
-walk's non-FV_IMAGE branch calls `CoreAddToDriverList` unconditionally (`:2044-2053`).
+walk's non-FV_IMAGE branch calls `CoreAddToDriverList` unconditionally (`:2053`).
 The candidate's three files are therefore scanned every round. They are deferred, not
 excluded.
 
@@ -21233,7 +21233,7 @@ its thirteen pushes are protocol GUIDs nothing in this volume installs.
 It does **not** rescue `XhciDxe` either — but it changes *why*, and the new reason is the
 interesting one. With `Depex == NULL`, `CoreIsSchedulable` (`Dependency.c:221-234`) does not
 return TRUE; it returns `CoreAllEfiServicesAvailable () == EFI_SUCCESS`
-(`Dependency.c:225`, `:81-92` in `DxeProtocolNotify.c`). That is the **same predicate**
+(`Dependency.c:225`, `:87-93` in `DxeProtocolNotify.c`). That is the **same predicate**
 `DxeMain` evaluates at `:582` before handing control to BDS:
 
 ```
@@ -21255,10 +21255,10 @@ BDS handoff by construction.
 
 ### The nine, restated without the letters
 
-`CoreAllEfiServicesAvailable` walks `mArchProtocols[]` (`DxeProtocolNotify.c:20-35`) in a
+`CoreAllEfiServicesAvailable` walks `mArchProtocols[]` (`DxeProtocolNotify.c:21-36`) in a
 fixed order and returns `EFI_NOT_FOUND` at the **first** entry whose `Present` is FALSE
-(`:81-92`) — so the assert itself names neither how many nor which. The names come from
-`mMissingProtocols[]` (`:56-71`) via `CoreDisplayMissingArchProtocols` (`:263-278`), which
+(`:87-93`) — so the assert itself names neither how many nor which. The names come from
+`mMissingProtocols[]` (`:56-71`) via `CoreDisplayMissingArchProtocols` (`:263-280`), which
 `DxeMain.c:568` calls on `DEBUG_ERROR` **before** the gate; and `DEBUG_ERROR` is the channel
 that paints this panel (Step 4.104), which is why Step 4.8's photograph carried the list
 in prose and Step 4.9 read it. That reading is a second, independent, already-available
@@ -21339,12 +21339,181 @@ them, and `P2 APRI miss=`/`unhit=` remain the fields that decide the walk.
   `90b21643e3450c326fb3d24baf64d58d4692a5d155c36b76d2e020ff04a96b59` — twenty-fifth step
   running; candidate 1,169,408 B, `efc8e10d09f0f286011e1aacc638a7edd2ed5fcd86884640b28d14628f58f9f3`,
   unflashed.
-- Cited, re-read rather than remembered: `Dispatcher.c:1062`, `:1063-1186`, `:1111`,
-  `:1189-1211`, `:1216`, `:1242-1300` (`:1272-1276`), `:2044-2053`, `:2111`;
-  `Dependency.c:221-234` (`:225`); `DxeProtocolNotify.c:20-35`, `:56-71`, `:81-92`,
-  `:263-278`; `DxeMain.c:562`, `:568`, `:582`, `:593`, `:606`; and, in this document,
+- Cited, re-read rather than remembered: `Dispatcher.c:1062`, `:1066-1178`, `:1111`,
+  `:1189-1215`, `:1216`, `:1242-1299` (`:1272-1276`), `:2049-2053`, `:2111`;
+  `Dependency.c:221-234` (`:225`); `DxeProtocolNotify.c:21-36`, `:56-71`, `:87-93`,
+  `:263-280`; `DxeMain.c:562`, `:568`, `:582`, `:593`, `:606`; and, in this document,
   Step 4.8's panel reading, Step 4.9's list, Step 4.95's eight-to-nine correction,
   Step 4.103's audit, and Steps 4.104-4.106's map withdrawal.
+- Standing rules unchanged: `userdata`, the partition table and the firmware LUN are
+  untouched; writes go to `boot` only; the control image is read before anything is
+  overwritten; and the screen is read before the next flash.
+- **The P3 gate remains unmet and is now shown to be further away, not closer.**
+
+## Step 4.109 — the SEQ is in dispatch order, and that makes its shape readable without a map: eighteen loads, then a wall
+
+### What this step is
+
+Steps 4.104-4.106 spent a long argument on what the 46 `P2 SEQ` characters *cannot* be
+joined to: every letter is addressed by an a-priori slot, and the slot map is the
+hypothesis under test, so no letter can be attributed to a named driver without assuming
+the answer. That is all still true and nothing here withdraws it.
+
+What it left unsaid is that the string carries one reading that needs no map at all, and
+that reading is a *derivation* rather than an assumption: the characters are written in
+**dispatch order**, so the string is a time series, and its shape is a phase transition.
+This step derives that, states what it buys, and says what it does not.
+
+Nothing was built, staged, flashed or written to any partition.
+
+### The queue discipline, which is what makes the claim
+
+`P2MarkSeq` (`Dispatcher.c:595-612`) writes `mP2AprioriRes[Index] = Ch` at the index where
+it finds the GUID in `mP2AprioriGuid[]`, and that array is filled in exactly one place —
+inside the match branch of the promotion loop, at the `CopyGuid` on `:2116` that writes
+`mP2AprioriGuid[mP2Apriori]` — four lines above the `mP2Apriori++` on `:2120` that advances
+the index. So the SEQ indexes the **j-th promotion**. The question this step answers
+is what order the promotions are *dispatched* in, and the answer is the same order.
+
+There are exactly three insertion sites for `mScheduledQueue` in the whole DXE core:
+
+| site | when it runs | order it inserts |
+|---|---|---|
+| `:2113`, the promotion loop's match branch | before the first drain, once per Apriori FV | Apriori array index **ascending** |
+| `:1276`, `CoreInsertOnScheduledQueueWhileProcessingBeforeAndAfter` | only from the re-scan at `:1205` | `InsertTailList`, i.e. the tail |
+| `:999`, `CoreTrust` | only via `gSecurity->Trust` (`DxeMain.c:119` is the only assignment of that member) | the tail |
+
+`CoreDispatcher` drains with `while (!IsListEmpty (&mScheduledQueue))` taking
+`mScheduledQueue.ForwardLink` (`:1066-1068`) — **FIFO** — and the re-scan that reaches
+`:1276` is the statement *after* that loop (`:1189`), so it cannot run while the queue is
+still draining. `CoreTrust` is unreachable on this payload twice over: it is reachable
+only through the Security architectural protocol, which the panel reports absent, and even
+if a caller trusted a driver it would be appended to the tail.
+
+Two further facts close the loop. `AprioriFile` is read per volume (`:2062-2096`) and only
+`FVMAIN` carries one — 70 entries, `mP2AprioriCount` 70 — while `FVMAIN_COMPACT` has none,
+so there is exactly one promotion pass. And that pass runs before the drain, because the
+inner FV is installed *inline* during the outer volume's walk: the FV_IMAGE file takes the
+no-depex branch at `:2037-2041` and goes straight to `CoreProcessFvImageFile`, which is
+also the only way DxeCore can be running at all — a depex'd FV_IMAGE would sit in
+`mDiscoveredList` waiting on architectural protocols the nine failures never install, and
+the panel would never print.
+
+> **So: SEQ slot j is the j-th driver dispatched, for j = 0..45.** Not the j-th Apriori
+> entry, not the j-th file — the j-th *promotion*, which is the j-th dispatch. And this
+> holds under **both** candidate worlds, because both of them disagree about *which* array
+> entries are in the batch and neither disagrees about the promotion loop walking `Index`
+> ascending. The claim is therefore map-free, which is the point.
+
+### What the observed string says, read as a time series
+
+```
+ssssssssssssssssssLLLsLLLLLLLLLLLLLLLLLLLLLLLL
+0                17 18 19 20 21                     45
+```
+
+- Positions 0..17 are lowercase `s`, and `s` is written at `:1158` — inside the branch
+  where `CoreStartImage` returned `EFI_SUCCESS`, after the load already succeeded. So the
+  **first eighteen dispatches of the run loaded and started**, with no failures among them.
+- Positions 18, 19 and 20 are `L` — `CoreLoadImage` failed (`:1111`).
+- Position 21 is `s`: one more driver loaded and started.
+- Positions 22..45 are `L`, twenty-four more.
+
+So of the last twenty-eight dispatches, **one** succeeded. That is a phase transition at
+dispatch 19, and it is a reading of the *observed string* — the positions are dispatch
+positions under either map, so the shape needs no join.
+
+It is also robust to the truncation worry this document has carried since Step 4.15: if
+the 46 photographed characters are a prefix of a longer line, more dispatches follow
+position 45, and the transition at 18 is untouched. The reading survives, and only the
+"27 of 28" denominator could move.
+
+### Why this is worth a step: it explains the null result, and it moves the search
+
+Step 4.37's `tools/pe-facts.py` measured every PE header field on all 80 DRIVER files and
+found that **no field separates the two sets** — not SizeOfImage, not SectionAlignment, not
+Subsystem, not the reloc facts, not the request size. Its conclusion was that the 27 are
+not explained by a property of the images.
+
+The dispatch-order reading says why that had to come out null, and it is not a restatement:
+a property of a *file* cannot separate two sets that are divided by a property of a
+*moment*. If the discriminator is the state of the machine at the instant dispatch 19
+began, then every field measured on the files is measuring the wrong object, and the null
+result is a prediction of this hypothesis rather than evidence against a mechanism. The
+search belongs in accumulated state, and that is where Step 4.43-4.46's heap work already
+was.
+
+### It is not simple exhaustion, and the counter-example is already in this document
+
+The obvious reading of "eighteen succeed, then a wall" is "something ran out", and the
+obvious candidate is the page allocator. The volume's own numbers refuse the simplest
+version of it. `NpaDxe` — at 81,966 B the **largest** promoted image — is dispatch 17 and
+succeeds. `PdcDxe`, at 36,864 B, is dispatch 19 and fails, while `ShmBridgeDxe` asks the
+identical 36,864 B at dispatch 21 and succeeds.
+
+A monotone "the heap is full" curve fails the big request before the small one and never
+lets anything through after it starts failing. Neither holds here. So the consumed state is
+not a scalar remainder; what survives as a candidate is **contiguity** — whether a run of
+the needed size and alignment exists at that instant, which fragmentation of the earlier
+loads would explain and which is exactly the quantity `P2 FREE largest=` probes (the
+4096/1024/256/64/16/4/1-page ladder, `:440-503`) and `P2Tick`'s `free=` field repeats per
+attempt (`:655-686`).
+
+### The reading this buys, and it is the first map-free one
+
+`mP2ApriWhy[Index]` (`:608`) stores `P2WhyLetter (Status)` beside the SEQ character, and
+`P2 WHY` prints that line. Its *positions* are addressed by slots and are therefore subject
+to the same map question as the SEQ's. Its **letter counts are not**: the multiset of
+letters on that line is invariant under any relabelling of the slots, so it is readable
+whatever the map turns out to be.
+
+That is a genuinely new instrument for this project, and it is cheap. If the phase
+transition at dispatch 19 is one mechanism, `P2 WHY` should carry **one repeated letter**
+from position 18 on. If it is several, it will not — and the letters name the reason
+directly, because `P2WhyLetter` (`:554-592`) is a bijection onto the statuses this code
+path can produce: `R` `EFI_OUT_OF_RESOURCES`, `N` `EFI_NOT_FOUND`, `X`
+`EFI_SECURITY_VIOLATION`, `D` `EFI_DEVICE_ERROR`, `E` `EFI_LOAD_ERROR`, `P`
+`EFI_INVALID_PARAMETER`, `U` `EFI_UNSUPPORTED`, `O` anything else. A wall that is all `R`
+is the page allocator; all `E` is the image; all `N` is the device path and the FV.
+
+`P2 STATS started=` is map-free in the same way and already agrees: 19, which is the count
+of `s` characters, not their positions.
+
+### The owed reading, re-prioritised
+
+Step 4.108 prepended `P2 ARCH`'s prose lines because they read the gate directly. This step
+inserts one more field, and it goes second:
+
+1. **`P2 ARCH`'s `<name> Arch Protocol not present!!` lines** — a direct reading of the
+   gate, no map (Step 4.108).
+2. **`P2 WHY`'s letter counts** — the *distribution*, not the positions; the first
+   map-free reading of the load failures this project has had.
+3. `P2 APRI miss=` and `unhit=` — the fields that decide the walk (Steps 4.105-4.106).
+4. `P2 WALK t=0 seen=` and `last=`; then `P2 STATS discovered=`.
+5. Then Step 4.105's remaining order unchanged.
+
+Struck off, unchanged: `matched=`, the array's `bytes=`/`sum=`/`first=`/`last=`, and the
+SEQ's letters as *attributions* to named drivers. The SEQ's letters as a *shape* are now
+worth reading, and that is the distinction this step adds.
+
+### Nothing was built and nothing was flashed
+
+- `docs/08-device-session.md` is the only file this step changes. No `.c`, `.inf`, `.asl`,
+  `APRIORI.inc`, FFS file or payload was written, and the build tree was opened read-only.
+- **The device is absent from this host throughout** — `adb devices` is empty, `lsusb` shows
+  no Qualcomm function, and there is no `/dev/ttyUSB*`/`/dev/ttyACM*`. The reading owed on
+  the payload in `boot` (`90B21643…`, rung 7260) remains owed, and nothing was flashed.
+- Digests unchanged: record `work/out/p2-4.94/Mu-gauguin-silicon-gzip.img`, 1,144,832 B,
+  `d621f732f4763a303e980c5af04451479c2ace31801e796993a258f226c177a5`; `boot`'s
+  `work/out/p2-variants/Mu-gauguin-silicon-gzip.img`, 1,142,784 B,
+  `90b21643e3450c326fb3d24baf64d58d4692a5d155c36b76d2e020ff04a96b59` — twenty-sixth step
+  running; candidate 1,169,408 B, `efc8e10d09f0f286011e1aacc638a7edd2ed5fcd86884640b28d14628f58f9f3`,
+  unflashed.
+- Cited, re-read rather than remembered: `Dispatcher.c:554-592` (`P2WhyLetter`), `:595-612`
+  (`P2MarkSeq`), `:616-631` (`P2Record`), `:655-686` (`P2Tick`), `:999`, `:1066-1068`,
+  `:1111`, `:1158`, `:1189-1215`, `:1205`, `:1242-1299` (`:1276`), `:2037-2041`, `:2062-2096`,
+  `:2113`, `:2116`, `:2120`; `DxeMain.c:119`; `tools/pe-facts.py`; and, in this document,
+  Step 4.37's field census, Steps 4.43-4.46, and Steps 4.104-4.108.
 - Standing rules unchanged: `userdata`, the partition table and the firmware LUN are
   untouched; writes go to `boot` only; the control image is read before anything is
   overwritten; and the screen is read before the next flash.
