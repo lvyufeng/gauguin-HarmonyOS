@@ -91,12 +91,13 @@ not that the status was zero, and `DALSYS`'s status was non-zero with bit 63 cle
 Two things follow. First, the coincidence of index 19 is **not** corroboration — the
 phone fails to *load* `RpmhDxe` there, and the mirror loads it and asserts inside it,
 which is one entry index reached by two mechanisms. Second, the mirror's `CmdDbDxe` is
-a genuine divergence and it is confounded: the seed's SMEM has no heap, which the
-driver says twice two entries earlier, and the phone's payload — md5 `a2963f46…`, the
-one artifact that would separate the seed from the build — is **on no disk here**
-(228,483 files under `work/` hashed, 130 of them images). The seed's next rung is
-therefore SMEM's heap and not a new driver, and the current capture is already its
-control.
+a genuine divergence and it is confounded: the seed's SMEM has no heap, which two
+earlier entries say in SMEM's own words — `EnvDxe` at Apriori 2 cannot read the
+partition table, `DALSys`'s allocation fails at Apriori 11 — and the phone's payload —
+md5 `a2963f46…`, the one artifact that would separate the seed from the build — is
+**on no disk here** (228,483 files under `work/` hashed, 130 of them images). The
+seed's next rung is therefore SMEM's heap and not a new driver, and the current
+capture is already its control.
 
 Two readings are therefore owed to the phone, and both are short — `P2 WHAT` for
 the value behind `K 11 SO`'s non-error, non-`EFI_STATUS` letter, and

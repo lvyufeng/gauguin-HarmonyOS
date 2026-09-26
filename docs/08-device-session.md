@@ -25343,12 +25343,12 @@ and the pattern that hands it back is in the module's own texture: `ldr x9, [x11
 table, its status tested for bit 63 and then returned. `EFI_UNSUPPORTED` is exactly what
 such a call returns when the protocol it names is not there.
 
-### What could have handed it over, and the two rows two entries earlier
+### What could have handed it over, and the rows that say SMEM's heap is missing
 
 The mirror's SMEM is fabricated, and the run is `SEEDED:` from its first line: the seed
 writes the pointer `EnvDxe` reads and the three words it dereferences, and one word into
-`SMEM + 0xC0`. What it does not write is SMEM's own heap, and the driver says so twice, in
-its own words, two entries before the disagreement:
+`SMEM + 0xC0`. What it does not write is SMEM's own heap, and two of the batch's own rows
+say so, in SMEM's own words, well before the disagreement:
 
 ```
 smem_get_addr: SMEM get addr failed! smem_type=402
@@ -25356,12 +25356,18 @@ WARNING: Unable to read memory partition table from SMEM
 smem_alloc: SMEM allocation failed! smem_type=404, buf_size=8192
 ```
 
-the first two arriving in Apriori 11's iteration, the third immediately before `K 11 SO`.
-Apriori 17 runs after them. So the honest statement is: **this is a seeded run, and
-`CmdDbDxe`'s `EFI_UNSUPPORTED` is the first place in it where the seed can be seen to change
-an outcome rather than to move a ceiling** — and the outcome it changes is a change from the
-phone's `s`. Whether it did is not established here, because the other candidate is the
-build, and the two are confounded in every capture this host holds.
+The first two are **Apriori 2's**, and their position is the point: they are stream rows
+68-69, between `K 1` and `K 2`, so they come from `EnvDxe` itself — its own start, or a
+constructor run at its load — and from nothing before or after it. That is the same driver
+the seed exists to satisfy, satisfied on the target-info structure and unsatisfied on the
+heap. The third is **Apriori 11's**: attempt
+1's last row, and in attempt 2 the text shares a row with `K 11 SO 11/69` itself. So
+SMEM's heap is reported missing by two different consumers nine entries apart, and Apriori
+17 runs after both. The honest statement is: **this is a seeded run, and `CmdDbDxe`'s
+`EFI_UNSUPPORTED` is the first place in it where the seed can be seen to change an outcome
+rather than to move a ceiling** — and the outcome it changes is a change from the phone's
+`s`. Whether it did is not established here, because the other candidate is the build, and
+the two are confounded in every capture this host holds.
 
 ### The artifact that would separate build from boot path is not on this disk
 
