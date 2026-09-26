@@ -24784,3 +24784,439 @@ row by row against the panel geometry `1080x2400` at cell `12x24`.
 | corrects | the reading of the three `--el3-stub` captures as three distinct faults: two of the three are one stop, `EnvDxe`'s own assert, reached first by an aborting read and then by a store that lands in RAM once the plan covers `PSHOLD`; and the reading in an earlier draft of this document that named `ScmDxe` as the lone `s` inside the `L` run, which is SEQ 22 and an `L` — the character is SEQ 21, `ShmBridgeDxe`, as step 4.12's table already had it |
 | does not close | the P3 gate; the owed panel reading; and the loader question itself, which is *why* `CoreLoadImage` fails from SEQ 18 (`RpmhDxe`, Apriori 19) onward for 27 of the 46 matches, with one `s` (`ShmBridgeDxe`) in the middle of them — the mirror cannot reach it, so it waits on the phone |
 | not an action | nothing was built, nothing was flashed, and no partition was written; the device was absent throughout, and every claim above is about source on this host, about the payload's own bytes, or about a capture already on disk |
+
+## Step 4.125 — The seeded run stops on Apriori 19, in `rpmh_image_os.c`, and the caller id the panel prints is the image's own
+
+Every run in this step is **SEEDED**, and every capture says so in its own header. The
+instrument is `tools/qemu-el3-stub.S` built with `--el3-zero-mem --el3-seed-smem`: it
+fabricates the word `EnvDxe` reads as the address of the SMEM target-info structure, and
+one word inside `SMEM` itself. Nothing below would be true of an unseeded run, and the
+two captures that are seeded and *still* stop inside `EnvDxe` are in this step precisely
+so the difference is visible. The run of record:
+
+```
+python3 tools/qemu-panel-read.py --kernel /tmp/gauguin-kernel.raw --el3-stub \
+    --el3-zero-mem --el3-seed-smem --seconds 90 --interval 0.25 \
+    --out work/out/qemu-panel-el3-seed5.txt
+```
+
+payload `/tmp/gauguin-kernel.raw` `0dcfbd6a…`, stub `5d3f2929…`, `-M virt,secure=on,virtualization=on,gic-version=2`
+with `-cpu max -m 4096`, 360 screens over 90.2 s, **173 rows, two gaps**. Three more
+captures are read beside it: `seed3` and `seed4`, the same command, whose 173 rows are
+identical to `seed5`'s **row for row, 0 differences**; `seed6`, the same run at a shorter
+interval, 176 rows; and `seed` and `seed2`, which are the seeded runs that still stop at
+`EnvDxe` and are what the seed is measured against.
+
+
+### The three stops the seed removes, and the guard each one is
+
+`EnvDxe` ships as `EnvDxe.efi` and `EnvDxe.inf` and nothing else: `smem.c` is in no file
+under `work/uefi`, and the only `SMEM is not initialized by Boot.` strings in the
+repository are in the instrument itself and in Linux's `drivers/soc/qcom/smem.c:1178`,
+where the same idea is spelled `SMEM is not initialized by SBL` — a different string. The
+guards are readable anyway, out of the image's own bytes. `EnvDxe.efi` at RVA `0x823c`:
+
+```
+823c: ldr  w9, [x8, #0xc0]        ; SMEM + 0xC0
+8240: cmp  w9, #1
+8244: b.ne 0x82b0
+...
+82b0: adrp x19, 0xc000
+82b4: add  x19, x19, #0x1ff       ; "SMEM is not initialized by Boot."
+82bc: orr  w0, wzr, #0x80000000
+82c0: mov  x1, x19
+82c4: bl   0x3f60                 ; print it
+82c8: mov  w1, #0x29f             ; 671
+82d0: add  x0, x0, #0x1c2         ; "smem.c"
+82d4: bl   0x4064                 ; this module's DebugAssert
+82d8: b    0x82d8                 ; and spin
+```
+
+and symmetrically the base-is-zero guard at `0x822c`, which pushes `x19 + 0x1c9` =
+`SMEM base addr=0x%08X, size=%d memory mapping failed.` with `mov w1, #0x293` (**659**),
+the same `smem.c`, the same `DebugAssert`, the same self-loop. All three strings were read
+out of the file at `0xc1ff`, `0xc1c9` and `0xc1c2`. So 671 and 659 are the driver's own
+`__LINE__` values, and both stops are `DebugAssert` sites rather than raw panics — which is
+what makes them reachable by a value rather than by a fault.
+
+There is a third, one stage earlier, and it is the one an unseeded run stops on.
+`smem_target.c +435` guards the *pointer*: three captures taken before this instrument had a
+seed at all — `qemu-panel-el3-map.txt`, `qemu-panel-el3-map-long.txt` and
+`qemu-panel-el3-zeromem.txt`, each with no `SEEDED` line in its header — end on
+`SMEM Target info addr=0x00000000 memory mapping failed.ASSERT smem_target.c +435: SMEM Tar…`.
+Each of the seed's three targets removes one of the three, and the ladder is visible in the
+captures rather than argued from the source:
+
+| stop | what is zero when it fires | the write that removes it | seen stopped there in |
+|---|---|---|---|
+| `smem_target.c +435` | the pointer word at `0x1fd4000` | the pointer | the three unseeded `-map` / `-map-long` / `-zeromem` captures |
+| `smem.c +659` | the structure's base field | the structure | `seed` |
+| `smem.c +671` | `SMEM + 0xC0` | the flag word | `seed2` |
+
+`seed` ends `SMEM base addr=0x00000000, size=0 memory mapping failed.ASSERT smem.c +659: …`
+and `seed2` ends `SMEM is not initialized by Boot.ASSERT smem.c +671: …`. The order matters
+for reading them: `seed`'s pointer was already non-zero — that is why it is not the capture
+that stops at `+435` — and its base field was not, so the two seeded captures sit one rung
+apart on the same ladder, with `seed2` also the earlier one's fix plus one more.
+
+
+### What the seed writes, and what the machine read back
+
+Three writes into three addresses, and five store instructions to make them, all in the
+stub and all before the payload is entered. The capture's header states each one:
+
+1. **the pointer word** — one `str x3, [x0]` puts `0x1fd4010` at `0x1fd4000`. One 64-bit
+   store and not two 32-bit ones: the driver reads the low word at `+0` and the high word
+   at `+4` and concatenates them, so a store that filled half of it would leave the
+   pointer briefly readable in two pieces.
+2. **the container's three qwords**, at `0x40dd4010`. The first holds the magic
+   `0x49494953` in its low word — the value the driver's own compare at RVA `0x9530` tests
+   — beside the size in its high word; the second holds the base `0x80900000`. Base and
+   size are this board's own declaration, out of its `uefiplat.cfg` by way of
+   `MemoryMapLib.c`; the magic is out of the driver. The third is zero, because nothing in
+   the image says what belongs there. The header is explicit about the line this draws:
+   *"only the container is invented, not those numbers."*
+3. **the flag word** — `0x1` at `0x809000c0`, the word the guard at RVA `0x823c` reads and
+   asserts on. This one is not a container at all: it is a word XBL would have left in
+   `SMEM` itself, and the instrument is putting it back by hand.
+
+The read-back is taken out of the machine and not out of the guest's view. The pool page
+for `0x1fd4000` is `0x40dd4000` and holds the pointer; `0x40dd4010` holds
+`0x20000049494953 0x80900000 0x0`; `SMEM0xc0` holds `0x1`. The pointer sits sixteen bytes
+past the word's own page base, which is why the word and the structure share one 4 KB page
+— the page the driver already reads. What that does not say is that the guest's stage-1
+maps the structure, and the header says so itself: this is the physical read.
+
+The stage-2 side is unchanged from step 4.124 and is re-reported in the same header: 57 of
+this platform's regions below `0x40000000`, 55 2 MB blocks redirected one for one to
+`0x40000000..0x46e00000`, `L1[0] = 0x48003003` with 55/55 redirected and 457/457 identity
+entries read back as described, `VTCR_EL2=0x80023d60 VTTBR_EL2=0x48002000
+HCR_EL2=0x80000001 SCR_EL3=0x531`, and an access at or above 4 GB a translation fault —
+an input limit the device this stands in for does not have.
+
+### The batch, row by row, named
+
+Eighteen `K` rows are on the panel and every GUID in them resolves. `tools/apriori-order.py
+/tmp/gauguin-kernel.raw` prints the Apriori file's 70 GUIDs in order; the eighteen are its
+entries **1 to 18**, in order, and entry 0 is `DxeCore`, which never passes through the loop
+that prints a row:
+
+| K | GUID | Apriori name | tick | `mP2Started` |
+|---|---|---|---|---|
+| 1 | `80CF7257-87AB-47F9-A3FE-D50B76D89541` | PcdDxe | `Ss` | 1 |
+| 2 | `BA01F085-582C-5376-AEE1-7F7321248DD7` | EnvDxe | `Ss` | 2 |
+| 3 | `D93CE3D8-A7EB-4730-8C8E-CC466A9ECC3C` | ReportStatusCodeRouterRuntimeDxe | `Ss` | 3 |
+| 4 | `6C2004EF-4E0E-4BE4-B14C-340EB4AA5891` | StatusCodeHandlerRuntimeDxe | `Ss` | 4 |
+| 5 | `B601F8C4-43B7-4784-95B1-F4226CB40CEE` | RuntimeDxe | `Ss` | 5 |
+| 6 | `B8D9777E-D72A-451F-9BDB-BAFB52A68415` | ArmCpuDxe | `Ss` | 6 |
+| 7 | `DE371F7C-DEC4-4D21-ADF1-593ABCC15882` | ArmGicDxe | `Ss` | 7 |
+| 8 | `4C6E0267-C77D-410D-8100-1495911A989D` | MetronomeDxe | `Ss` | 8 |
+| 9 | `49EA041E-6752-42CA-B0B1-7344FE2546B7` | ArmTimerDxe | `Ss` | 9 |
+| 10 | `94527566-2B16-5A7C-B981-D2CFF4AFCFCF` | SmemDxe | `Ss` | 10 |
+| 11 | `BE17C909-CDB8-5503-A06E-52E8F6F9BBFC` | DALSys | `SO` | 11 |
+| 12 | `3C3CA523-8A67-55A6-98D0-7D23BDC109DC` | HWIODxeDriver | `Ss` | 12 |
+| 13 | `453C9622-7C81-5C25-B1D2-EAB4AE296C49` | ChipInfo | `Ss` | 13 |
+| 14 | `09EE56ED-E7FD-5B64-831C-7C32CE88C6E2` | PlatformInfoDxeDriver | `Ss` | 14 |
+| 15 | `8DAA4DF1-51FA-5077-B2B6-C0A096EB636F` | HALIOMMU | `Ss` | 15 |
+| 16 | `ACDF8D8E-CA32-51D8-9273-B92BF2CF019C` | ULogDxe | `Ss` | 16 |
+| 17 | `D461A719-F2EC-5C77-A7AF-045F17ED012C` | CmdDbDxe | `SU` | 16 |
+| 18 | `40256211-624E-580B-97ED-3011FB3CB9A3` | NpaDxe | `Ss` | 17 |
+
+`DALSYSDxe.inf` in this tree carries `BE17C909-…`, `StatusCodeHandlerRuntimeDxe.inf` carries
+`6C2004EF-…`, and the rest resolve the same way, so the names are read and not guessed. The
+row's own fields are all read off lines the panel already holds, so `K` is a third spelling
+and not a fourth measurement: `free=1024` is `P2 FREE`'s largest allocation in KiB, and the
+GUID is the one `P2 DIAG` names.
+
+The fraction is `mP2Started` over `mP2Apriori`, and the denominator is worth its own
+sentence because it is not the size of the Apriori file. `mP2Apriori++` sits in the
+promotion loop's match branch (`Dispatcher.c:2111-2120`), where an Apriori *entry* is
+compared against every entry of `mDiscoveredList` and the counter advances only when the two
+have the same GUID and the same firmware volume handle. So `17/69` is 17 started out of 69
+Apriori entries that found a driver in this volume and went on the scheduled queue.
+`tools/apriori-order.py` reads the file itself out of the same payload and prints 70
+entries, with zero mismatches against `APRIORI.inc`'s order — so exactly one of the file's
+70 names matched nothing here, and which one it was needs the digest's
+`P2 APRI matched=… unhit=…`, which this run does not reach.
+
+**The letters come from the code, and the count from a different line of it.** The second
+letter is `P2WhyLetter (Status)` (`Dispatcher.c:555-591`): `s` is `EFI_SUCCESS`, `R`, `N`,
+`X`, `D`, `E` and `P` are `EFI_OUT_OF_RESOURCES`, `EFI_NOT_FOUND`, `EFI_SECURITY_VIOLATION`,
+`EFI_DEVICE_ERROR`, `EFI_LOAD_ERROR` and `EFI_INVALID_PARAMETER`, `U` is `EFI_UNSUPPORTED`,
+and `O` is everything else. The count is `mP2Started`, and the loop that owns it
+(`Dispatcher.c:1156-1170`) writes it two ways: on a failed start it calls
+`P2Record (…, 'S', Status)` and leaves the count alone, and on a start that did not fail it
+calls `P2MarkSeq (…, 's', EFI_SUCCESS)`, increments, and then `P2Tick` prints — the tick
+itself is unconditional and is called after both, which is why the letter is the tick's
+argument and not the record's.
+
+That makes the two rows that are not `Ss` readable without the digest:
+
+  * `K 17 SU 16/69` — `U` is `EFI_UNSUPPORTED`, and the row above it is
+    `Error: Image at 0009C565000 start failed: Unsupported`. The two agree, and the count
+    staying at 16 is the failure being counted the way the code counts it. The row order
+    puts the failed start inside Apriori 17's own iteration, so the image that could not
+    start is CmdDbDxe's.
+  * `K 11 SO 11/69` — `O` is the fall-through, and here the count and the letter have to be
+    read together. `mP2Started` is incremented only on the branch where `EFI_ERROR (Status)`
+    is false (`Base.h:1074`, `Status >= MAX_BIT`), so a count that went from 10 to 11 says
+    the start did not fail; and `O` says the status was not `EFI_SUCCESS` and not any of the
+    seven named ones. Only one kind of value satisfies both: a status with bit 63 clear and
+    no other bit zero either. So DALSYS's entry point returned a non-zero value that UEFI
+    does not classify as an error — a warning by UEFI's own convention, or a Qcom return
+    code that is not an `EFI_STATUS` at all. Which value it was needs `P2 WHAT`, and no
+    capture on this host has that line. What can be said without it is that the count is a
+    count of *not-failed* starts, and that the one place the two disagree on this panel is
+    named.
+
+The stream holds **two attempts**, and the table above is the second. The count restarts at
+1 at stream row 145, and the boot banner, `Loading DxeCore`, the whole `Memory Allocation`
+list and `K 1` through `K 10` appear a second time: attempt 1's 77 rows (stream rows 3-79)
+and attempt 2's first 77 rows (stream rows 81-157) are **identical, row for row**, to the
+character. They part company at the one row that follows: attempt 1's last row is
+`smem_alloc: SMEM allocation failed! smem_type=404, buf_size=8192`, and attempt 2's
+continuation of that same row is the `K 11 SO 11/69` printed above. So the first attempt
+died on the SMEM allocation failure printed in the course of Apriori 11, the machine was
+entered again — the panel's
+rows 81-84 are the boot banner, `Loading DxeCore at 0x009CCF0000` and `HOBLIST` a second
+time — and the second attempt got past that point and ran 77 rows further. **Every count in
+this step is the second attempt's, and the first attempt's ceiling was K 10.** What caused
+the second entry is not in the capture: a reset in this configuration re-enters the EL3 stub
+and the payload from the stub's own entry, so its rows would look exactly like this, and so
+would a payload that was entered twice for any other reason.
+
+The highest number on the panel is 17 starts, and it is worth stating against the reading it
+replaces. An earlier attempt to say where the run got to put it at *"eight drivers and
+stopped at the ninth"*, and no capture supports that: the mirror never reaches a nineteenth
+`K` row, and the batch's ceiling here is Apriori **18**, with Apriori **19** — `RpmhDxe`,
+`60F4DF83-C758-52B5-9AA0-92EA560EDB8F` — the entry the run dies on. The stub's own comment
+said the ninth, and that line has been corrected in the source rather than left standing
+beside this table.
+
+### The last two rows are one assert, printed by two different modules
+
+```
+K 18 Ss 17/69 free=1024 40256211-624E-580B-97ED-3011FB3CB9A3
+ERROR: C90000002:V03000007 I0 CB29F4D1-7F37-4692-A416-93E82E219766
+ASSERT DebugLib.c +78: Format != ((void *) 0)
+```
+
+The two rows after the last `K` row are one `DebugAssert` reported twice, and the two
+printings come out of two different modules.
+
+The `ERROR:` row is the status-code handler's.
+`Mu_Basecore/MdeModulePkg/Universal/StatusCodeHandler/RuntimeDxe/SerialStatusCodeWorker.c:87`
+formats `"ERROR: C%08x:V%08x I%x"` from the code type, the value and the instance, and
+`:91-98` appends `" %g"` with the caller id when there is one — which is why the row carries
+a GUID at all. The file's own directory is the module whose `FILE_GUID` is
+`6C2004EF-4E0E-4BE4-B14C-340EB4AA5891`, which is `K 4` in the table above: the module
+printing this row is one the batch started sixteen rows earlier, and a run that dies before
+`K 4` cannot print it. The `I0` is the instance, and it is not the bit that identifies
+anything here.
+
+The code type and the value decode against the tree and not against memory:
+`PiStatusCode.h:45` `EFI_ERROR_CODE = 0x2` and `:61` `EFI_ERROR_UNRECOVERED = 0x90000000`
+make `0x90000002` *unrecovered, error code*; `:128` `EFI_SOFTWARE = 0x03000000` with
+`:989` `EFI_SW_EC_ILLEGAL_SOFTWARE_STATE = 0x7` makes `0x03000007` *software, illegal
+software state*. An earlier reading of that value called it `EFI_SW_EC_LOAD_ERROR` with the
+number 9; in this tree `EFI_SW_EC_LOAD_ERROR` is `0x1` (`:983`), so both the name and the
+number were wrong, and the low byte alone — 7, with no truncation to argue about — rules
+that reading out.
+
+The `ASSERT` row is DebugLib's own, and its text is the format `"ASSERT %a +%d: %a"` filled
+in with the failing file, line and expression. The two rows are produced by a single call:
+the module's local `DebugAssert` at RVA `0x19e0` calls the status-code thunk at `0x1a2c`
+with two constants built in place — `mov w0,#0x2` / `movk w0,#0x9000,lsl#16` and
+`mov w1,#0x7` / `movk w1,#0x300,lsl#16`, which are the row's `C90000002` and `V03000007`
+— and then formats `"ASSERT %a +%d: %a\n"` at `0x1a40-0x1a5c` and prints it. The status code is
+reported on one branch of a guard at `0x1a18`; the text is printed on both. So the panel's
+two terminal rows are one event, and the row a reader should trust for *what* happened is
+the `ERROR:` one — it carries the status, and the other carries the file and line.
+
+### The caller id is the image's, not the file's
+
+The caller id on the `ERROR:` row is `CB29F4D1-7F37-4692-A416-93E82E219766`, and it is not
+in the batch table — for a reason that is a fact about how this tree is assembled rather
+than a gap in the census.
+
+  * Apriori entry **19** is `RpmhDxe`, and the GUID the payload's Apriori list carries for
+    it is `60F4DF83-C758-52B5-9AA0-92EA560EDB8F`, which is also the `FILE_GUID` line of
+    `work/uefi/Mu-Silicium/Binaries/gauguin/QcomPkg/Drivers/RpmhDxe/RpmhDxe.inf` — the only
+    INF in the tree carrying that GUID.
+  * The GUID on the panel is the `FILE_GUID` of the *prebuilt* `RpmhDxe` that sits beside
+    it. `CB29F4D1-…` is the `FILE_GUID` in exactly **57** INF files in this tree, every one
+    of them a `QcomPkg/Drivers/RpmhDxe/RpmhDxe.inf` in another board's directory.
+  * The `.efi` beside the gauguin INF contains `CB29F4D1-…` exactly once, at file offset
+    `0xe018` — in the data section, after the text — and contains `60F4DF83-…` nowhere.
+
+The two identify different objects. The FFS file in the payload is named with the GUID the
+board's INF declares; the PE32 inside it is the prebuilt image that was copied in beside
+that INF, and it carries the id it was compiled with. DebugLib reports `gEfiCallerIdGuid`,
+which the build bakes in from the image's own definition, so the panel's caller id is the
+*image's* and not the *container's*. A reader looking for `CB29F4D1` in the Apriori list will
+not find it, and should not: what makes the identification certain is the same file, which
+holds `DebugLib.c` at `0xa696`, `Format != ((void *) 0)` at `0xa6a1` and
+`ASSERT %a +%d: %a` at `0xa6b8` — the three strings the panel's last row is made of — and
+`rpmh_image_os.c` at `0xbdea`, the file the next section's asserts name.
+
+So the failing image is `RpmhDxe`, and the run stops entering it. This closes an
+identification that had been carried as unresolved: the caller GUID is the module's own, it
+is not an `AutoGen.c` caller id, and it is not a driver the batch had already started.
+
+### Why the machine stops: an error branch in `rpmh_image_os.c`
+
+The DebugLib the image was built with is not the one in this tree. This tree prints an
+assert in one of two spellings and the image's is a third: `"ASSERT [%a] %a(%d): %a\n"` is
+what the five libraries that print one here use, `"ASSERT %a(%d): %a\n"` is the only other
+and it occurs exactly once (`ArmPkg/Library/SemiHostingDebugLib/DebugLib.c:199`), and the
+image's own `ASSERT %a +%d: %a` — read out of the payload at `0xa6b8` — occurs in no `.c` or
+`.h` file of `work/uefi` at all. The line number says the same thing. The tree's
+`ASSERT (Format != NULL)` sits at 23 sites and the lowest of them is 54
+(`MsCorePkg/Library/DxeDebugLibRouter/Serial/SerialDebugLib.c`); the rest are at 55, 56, 59,
+61, 81, 88, 93, 93, 103, 110, 116, 133, 151, 153, 173, 200, 258, 259, 298, 490, 542 and 625.
+**78 is not among them**, so the guard the panel prints is the image's own build, not a
+version of this file that moved. The image's own bytes are readable all the same, and the
+function at RVA `0x18dc` is the variadic `DebugPrint` — it spills `q0..q7` and `x2..x7` into
+a register dump on entry — and it begins:
+
+```
+18f4: mov  x8, x1           ; Format
+191c: cbz  x8, 0x19c0       ; if Format == NULL
+1924: ldr  w9, [x10, #1612] ; the debug mask, read after the null test
+19c0: adrp x0, 0xa000 ; add x0, x0, #0x696  ; "DebugLib.c"
+19cc: mov  w1, #0x4e                        ; 78
+19d0: add  x2, x2, #0x6a1                   ; "Format != ((void *) 0)"
+19d4: bl   0x19e0                           ; DebugAssert
+19d8: b    0x19d8                           ; and spin
+```
+
+The null test precedes the mask load, so no debug level can suppress it. Three call sites
+pass a literal null format — RVA `0x6004`, `0x6120` and `0x6190`, each `mov x1, xzr` with
+`w0 = 0x80000000`, `EFI_D_ERROR` — and each is followed within a few instructions by an
+assert that pushes `rpmh_image_os.c` (at `0xbdea`) with a line number of **84**, **175** and
+**187**, and the expression text at `0xb4d4`, which reads back as the one-character literal
+`'0'`. So the message those three would print is `ASSERT rpmh_image_os.c +84: 0`, and the
+same `'0'` is the expression in all four of this file's asserts. A fourth, at line **197**,
+is preceded by a print with a real format — `RPMH_ERR_FATAL`, at `0xbe05` — and its assert is
+otherwise the same shape.
+
+Two of the four are not cold sites in the module — they are the tails of two shared helpers,
+and the helper is what decides. `0x6120` sits inside the helper entered at `0x6114`, which
+tests `(w0 & 0xff) == 0` at `0x6108` and is reached by **66** `bl` call sites; `0x6190` sits
+inside the helper entered at `0x6184`, which tests its argument for a null pointer at
+`0x617c` and is reached by **35**. So a null-format assert in `rpmh_image_os.c` is not a rare event in this
+image: the module holds 53 `DebugAssert` calls and 22 `DebugPrint` calls in all, and it is
+the texture of Qcom's error convention — code dense with `ASSERT`-and-spin sites, most of
+them behind a status check in a helper that a great many paths share.
+
+So the shape is an error branch in the module, reached because the mirror's RPMH path fails
+where the device's does not. Three of the four named sites print with a null format before
+asserting, and on those the machine dies on the print rather than on the assert: DebugLib's
+own guard fires first and spins, which is why the panel's last row names `DebugLib.c` and
+line 78 and not `rpmh_image_os.c`. **Which of the four was reached is not established here**
+— the panel shows the guard and not the branch condition — and it is not claimed. What the
+step does establish is that the terminal row is a branch of the payload's own code and not a
+missing register or a fabricated word: the seed put the words the earlier steps lacked in
+place, the run went eighteen Apriori entries further for it, and it stopped at a place the
+image itself considers fatal.
+
+### The honesty the seed requires
+
+The batch's SMEM rows are the seed's, not the board's, and they are four rows deep:
+`smem_get_addr: SMEM get addr failed! smem_type=402` and the `WARNING: Unable to read
+memory partition table from SMEM` its missing newline let continue on the same row,
+`smem_alloc: SMEM allocation failed! smem_type=404, buf_size=8192`, `smem_get_addr: … smem_type=137`,
+and — in `seed6` — a second `smem_alloc … buf_size=8192` followed by the boot banner
+printing again. What the seed fabricates is the pointer `EnvDxe` asserts on and the one flag
+word in `SMEM`; what it does not fabricate is the allocator behind them, and the allocator
+is what these rows are about. So "SmemDxe started" is a fact about this run, and "SMEM
+works" is not: nothing here says the driver found a partition table, and one thing here says
+it did not.
+
+The same applies in the other direction, and it is the reason the two attempts are worth
+separating. Attempt 1 died at the SMEM allocation failure; attempt 2 did not, and the only
+difference between them that the panel records is the count and the letter on the row where
+they part. A reader comparing this step's ceiling — Apriori 18 — against the device's own
+reading should expect the device to be *less* far along, not more, because the device's
+`SMEM` is real and this run's is not.
+
+### What the stream's first rows are, and what a gap is not
+
+The join that turns 47 kept screens into one stream is worth reading against a run rather
+than against its own docstring, and reading it changed two things.
+
+The run's log **fits the panel**, which is the premise of everything below. The kept-screen
+census of a 7 s seeded run sampled every 0.1 s shows row counts growing 3 → 92 and then flat
+at 92 for the last eleven samples, against a panel of `1080x2400` at cell `12x24` — 90
+columns by 100 rows. `AdvanceNewLine` zeroes the whole buffer only when the cursor passes row
+99, and with the log at 92 rows it never fires. So *"it wipes rather than scrolls"* is true
+of the code and of no capture of this payload, and the two should not be run together.
+
+The stream's own first rows are the case in point. Its rows 0-2 are the first screen taken
+whole — banner, version, `MMU In` — and the console then wrote `Loading DxeCore at
+0x009CCF0000` over that third row, because `MMU In` is printed with a carriage return and
+the next print resumed at column 0 of the row it was on. So the panel physically showed the
+banner once and the stream begins `banner, version, MMU In, banner, version, Loading
+DxeCore…`, an arrangement no screen ever held. The text of the run is not lost — the row is
+in the stream — but the order of its first six rows is the merge's and not the console's,
+and the banner appears twice at the top of the capture for that reason rather than because
+the console printed it twice. (It does appear a third time, at row 81, and that one is
+real: it is attempt 2.)
+
+Four of the 47 samples overlap the stream by **nothing**. Replaying the join shows all four
+are one mechanism: a row the console rewrote in place. `smem_get_addr: SMEM get addr
+failed! smem_type=402` takes `WARNING: Unable to read memory partition` onto its own row,
+`smem_alloc: SMEM allocation failed! …buf_size=8192` takes a `K` tick onto its row, and
+`smem_get_addr … smem_type=137` takes another — a line printed without a newline is
+continued by whatever prints next, and the row afterwards holds both. The join compares rows
+over the whole overlap, so one such row rejects the join even when every other row matches
+and the rows that are genuinely new are the last two or three: the four gaps hold 65 of 69,
+77 of 81, 80 of 85 and 2 of 4 of their rows already.
+
+A **third** reading — the one this step went looking for, that a screen the console has
+stopped printing on is reported as a gap too — is **wrong, and the replay refutes it**. If
+nothing new was printed, the screen is a suffix of the stream, the join takes the whole of
+it, and nothing is appended: no gap is reported at all. Eleven of the 47 samples end that
+way, flat at 92 rows. Which is why "nothing was appended" is not by itself evidence that
+anything was missed, and why the count a gap carries is what tells a rewrite from a loss —
+with the caveat that a rewrite also depresses that count, so the count separates the two
+readings only at its ends.
+
+The docstring now says all three; before this step it said two, and the mechanism it named
+for the four gaps was the wrong one of the three.
+
+### Read this step
+
+Instruments: `aarch64-linux-gnu-objdump -d` over
+`work/uefi/Mu-Silicium/Binaries/gauguin/QcomPkg/Drivers/RpmhDxe/RpmhDxe.efi` (RVA `0x18dc`,
+`0x191c`, `0x19c0`, `0x19e0`, `0x1a18`, `0x1a2c`, `0x1a40`, `0x6000`, `0x6108`, `0x6114`,
+`0x617c`, `0x6184`, `0x61c4`) with its string table read out of the file bytes at the
+offsets the code loads (`0xa696`, `0xa6a1`, `0xa6b8`, `0xb4d4`, `0xbe05`, `0xbdea`, `0xa65d`)
+and the two `FILE_GUID`s searched as little-endian GUID bytes; the same over
+`…/EnvDxe/EnvDxe.efi` for `0x822c`/`0x823c`/`0x82b0`/`0x827c` and `0xc1c2`/`0xc1c9`/`0xc1ff`;
+`Binaries/gauguin/QcomPkg/Drivers/DALSYSDxe/DALSYSDxe.inf` and
+`Binaries/*/QcomPkg/Drivers/RpmhDxe/RpmhDxe.inf` counted across the tree;
+`StatusCodeHandler/RuntimeDxe/StatusCodeHandlerRuntimeDxe.inf` for the handler's GUID;
+`tools/apriori-order.py` re-run on `/tmp/gauguin-kernel.raw`;
+`MdeModulePkg/Core/Dxe/Dispatcher/Dispatcher.c` at `:555-591`, `:597-631`, `:655-681` and
+`:1090-1170`; `MdePkg/Include/Base.h:1074`, `MdePkg/Include/Uefi/UefiBaseType.h:161` and
+`MdePkg/Include/Pi/PiStatusCode.h` at `:45`, `:61`, `:128`, `:983`, `:989`;
+`SerialStatusCodeWorker.c` at `:70-110`; the seed and the stage-2 plan re-read in
+`tools/qemu-el3-stub.S`; and the 47 kept screens of a 7 s seeded run replayed through
+`fb_lines` / `fb_overlap` / `fb_merge`.
+
+| | |
+|---|---|
+| instrument | the payload's own bytes disassembled, the board's own INFs counted, the dispatcher's own source, and four seeded captures plus one 47-screen replay — nothing was built, flashed or written |
+| shows | that the three stops the seed removes are `smem_target.c +435`, `smem.c +659` and `smem.c +671`, all `DebugAssert` sites, and that each of the seed's three writes removes one, with a capture sitting on each rung; that the seeded run reaches 18 batch rows and **17 starts**, with `K 17 SU` = CmdDbDxe failing `EFI_UNSUPPORTED` and `K 11 SO` the one row whose count and letter disagree; that the stream holds **two attempts** whose first 77 rows are identical; that the panel's last two rows are one `DebugAssert` in `RpmhDxe`, printed once through the status-code handler and once by DebugLib; that the caller id on the `ERROR:` row is `RpmhDxe`'s *image* GUID and not the Apriori list's; and that the stop is a branch in `rpmh_image_os.c` whose three null-format prints trip DebugLib's own guard first |
+| adds | the seed's three writes into three addresses with their machine-side read-back; the batch table with all 18 GUIDs named from the Apriori list and the tree's INFs, with the tick/record asymmetry that makes the two non-`Ss` rows readable and the arithmetic that forces `SO` to mean "not a failure, not a success"; the `ERROR:` row's producer and its code type and value decoded against `PiStatusCode.h`; the `rpmh_image_os.c` line numbers and the literal `'0'`, recovered from machine code because the source is in no file of the tree; and the corrected reading of the join's gaps, including the case that is not a gap |
+| corrects | *"eight drivers and stopped at the ninth"* — no capture supports it and the measured ceiling is Apriori 18 with Apriori 19 the entry that stops; `EFI_SW_EC_LOAD_ERROR 0x9` — wrong in both name and number; the caller GUID as unresolved or as an `AutoGen.c` caller id; `"it wipes rather than scrolls"`, which is true of the code and of no capture here; and this step's own working hypothesis of a third cause of a zero-overlap screen, which the replay refutes |
+| does not close | the P3 gate and the owed panel reading of the flashed 4.74 set; which of the four `rpmh_image_os.c` sites the run dies on and which branch of the module is taken; the value `SO` stands for, which needs `P2 WHAT`; the identity of the DebugLib build whose line 78 asserts; the cause of the second entry into the payload; and Apriori 19 onwards — 51 of the list's 70 entries that no `K` row names, whose fates this run does not report |
+| not an action | nothing was built, nothing was flashed, and no partition was written; the device was absent throughout, and every claim above is about source on this host, about the payload's own bytes, or about a capture already on disk |
+
+What this step still does not have is the digest. `P2Digest` is called only after
+`CoreDispatcher ()` returns (`Dispatcher.c:2552`) and this run dies inside the batch, so
+`P2 SEQ`, `P2 WHY`, `P2 ERR`, `P2 RETRY`, `P2 BIN`, `P2 FREE` and `P2 APRI` are in no
+host-side capture — and the two readings this step had to do without the digest, `SO`'s
+value and the Apriori survivors after entry 19, are exactly the two it would have
+answered.

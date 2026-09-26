@@ -15,15 +15,24 @@ without a photograph, without a phone, and without a transcription: dump the reg
 decodes it exactly - the values are only 0 and 1 and the origin is known, so there
 is nothing to estimate.
 
-What this tool adds is the part the console makes hard: **it wipes.** When the
-cursor passes the last row, `AdvanceNewLine` zeroes the whole buffer rather than
-scrolling, so one dump is one screen - the last 100 printed rows - and a boot log
-is longer than that. So the region is sampled repeatedly and the screens are joined
-on content (`panel-text.py`'s `fb_overlap`), which recovers the stream as long as
-consecutive samples share a line. At `PcdFrameBufferDelay` 10000 us per newline a
-full screen takes about a second, so the default quarter-second interval has room
-to spare; an interval longer than a screenful of output is the one way to lose
-text, and it is reported as a gap rather than spliced over.
+What this tool adds is the part the console makes hard: **a dump is one screen and
+not the log.** When the cursor passes the last row, `AdvanceNewLine` zeroes the
+whole buffer rather than scrolling, so a log longer than the panel is read as the
+last 100 printed rows and never the first. Every run of this payload so far has
+been the other case - 92 rows of log onto a 100-row screen, so the screen holds the
+whole log from its first row and each sample is the previous one extended, which is
+what lets the record read as one continuous stream. Either way the region is
+sampled repeatedly and the screens are joined on content (`panel-text.py`'s
+`fb_overlap`), which recovers the stream as long as consecutive samples share a
+line. At `PcdFrameBufferDelay` 10000 us per newline a full screen takes about a
+second, so the default quarter-second interval has room to spare.
+
+A sample that joins onto nothing is reported and not spliced over, and the report
+says which of two things it was, because they are not the same finding: a row the
+console rewrote in place (a line printed without a newline, so the next print
+continues on its row) shows up as a screen the stream already holds most of, and
+appending it duplicates the log while losing nothing; a screen of rows the stream
+does not hold is text printed between two samples, and that is a hole.
 
 The region's address and length are read out of the platform's `MemoryMapLib.c` and
 not passed in, for the same reason `panel-text.py` reads the font out of `Font.h`:
@@ -107,6 +116,29 @@ ZERO_MEM_POOL_BASE = 0x40000000
 
 # The size of a stage-2 level 2 block, which is what a redirected region is.
 STAGE2_BLOCK = 0x200000
+
+# How far past the SMEM word the fabricated target-info structure goes. The same
+# number is in `qemu-el3-stub.S` as SEED_SMEM_OFF and it is there that it decides
+# anything; here it is only used to say what was asked for. The read-back below
+# takes the stub's own offset out of the two addresses the stub recorded and
+# compares it with this one, so the copy cannot go stale in silence.
+SEED_SMEM_OFF = 0x10
+
+# The magic `EnvDxe` compares the structure's first word against, read off its
+# own image at RVA 0x9530 (`mov w13,#0x4953; movk w13,#0x4949,lsl #16`) and
+# carried in `qemu-el3-stub.S` as SEED_SMEM_MAGIC. Used here only to check the
+# read-back; the write is the stub's.
+SEED_SMEM_MAGIC = 0x49494953
+
+# The word EnvDxe reads out of SMEM itself, at SMEM + this offset, and compares
+# against 1 - `ldr w9,[x8,#192]; cmp w9,#1; b.ne <assert>` at RVA 0x823C, which
+# is `smem.c +671` "SMEM is not initialized by Boot." The stub writes it; this
+# is the offset the read-back fetches it from, and it is named in
+# `qemu-el3-stub.S` as SEED_SMEM_FLAG_OFF.
+SEED_SMEM_FLAG_OFF = 0xC0
+
+# What that word has to be. It is 1 on the device because XBL put it there.
+SEED_SMEM_FLAG = 1
 
 # A stage-2 level 2 table has 512 entries covering the low gigabyte.
 STAGE2_L2_ENTRIES = 512
@@ -307,7 +339,57 @@ def l2_plan(regions, load_addr):
     return {blk: ZERO_MEM_POOL_BASE + i * STAGE2_BLOCK for i, blk in enumerate(blocks)}
 
 
-def build_el3_stub(load_addr, out, zero_mem=False, plan=None):
+def smem_region(pkg):
+    """(base, size) of this board's SMEM, out of the platform's own memory map.
+
+    Read for the same reason `low_regions` reads the map: EnvDxe's SMEM driver
+    takes the base and size out of the structure this instrument fabricates, so
+    the values have to be the board's declaration and not a guess. They are in
+    `uefiplat.cfg` - the map is generated from it - and the generated map is what
+    is read here, because the claim is about the firmware under test.
+
+    This is deliberately *not* filtered by `LOW_MMIO_LIMIT`: SMEM is at
+    0x80900000, above it, because on this board SMEM is in DDR and not in the
+    register space. The stage-2 redirect does not touch it and does not need to -
+    `-M virt` backs that address with real RAM, so the driver that maps it gets
+    zeroed memory, which is what a machine with no secure world would have there.
+    """
+    path = os.path.join(pkg, "Library", "MemoryMapLib", "MemoryMapLib.c")
+    try:
+        with io.open(path, encoding="utf-8", errors="replace") as fh:
+            text = fh.read()
+    except OSError as exc:
+        die(f"cannot read the platform memory map at {path}: {exc}")
+    m = re.search(r'\{\s*"SMEM"\s*,\s*(0x[0-9A-Fa-f]+)\s*,\s*(0x[0-9A-Fa-f]+)', text)
+    if not m:
+        die(f"{os.path.relpath(path, REPO)} declares no \"SMEM\" region, so this"
+            f" board's SMEM base and size are not in the tree and the structure"
+            f" EnvDxe parses would have to be invented rather than transcribed;"
+            f" stopping rather than seeding a number nothing in the tree says")
+    return int(m.group(1), 16), int(m.group(2), 16)
+
+
+def seed_block_for(plan):
+    """The pool address the seed goes in: the block that holds `ZERO_MEM_IPA`.
+
+    One lookup, and it is a lookup rather than an arithmetic of this file's own
+    because the pool is assigned densely and out of order - block 15 of the low
+    gigabyte is the 6th block `l2_plan` handed out, not the 16th - so the address
+    is a fact about the plan and not something to be recomputed beside it. If the
+    block is not in the plan then nothing the guest does at that address reaches
+    RAM, and seeding it would be writing bytes into a block no redirect points
+    at: a run whose header said it was seeded and whose EnvDxe still stopped.
+    """
+    blk = ZERO_MEM_IPA // STAGE2_BLOCK
+    if blk not in plan:
+        die(f"{ZERO_MEM_IPA:#x} is in block {blk}, which the plan does not"
+            f" redirect - the platform's memory map does not declare a region"
+            f" there, so a seed written into the pool would never be read and the"
+            f" run would stop exactly where an unseeded one does")
+    return plan[blk]
+
+
+def build_el3_stub(load_addr, out, zero_mem=False, plan=None, seed=None):
     """Assemble `qemu-el3-stub.S` to the addresses the run will use.
 
     Every address the stub has to agree with is a `--defsym` and not a `.set` in
@@ -338,6 +420,15 @@ def build_el3_stub(load_addr, out, zero_mem=False, plan=None):
     addresses in the binary the addresses the assembly names. Local symbols were
     resolved all along, which is why only the stage-2 half was affected and the
     plain EL3 stub worked.
+
+    `seed` is `(pool block, base, size)` - the address `l2_plan` gave the block
+    holding `ZERO_MEM_IPA`, and this board's SMEM region - and passing it is what
+    turns SEED_SMEM on. The stub does the rest of the arithmetic: it adds the
+    IPA's own offset within its 2 MB and SEED_SMEM_OFF to reach the two places it
+    writes, so the offset is written in one file, and the read-back below checks
+    the result rather than assuming it. A seed and a redirect are one feature: the
+    pool block the seed lands in is reached by the guest only because the redirect
+    exists, and a seed with no redirect would be bytes nothing reads.
 
     The symbol table the launcher reads offsets from stays the object's - a linked
     ELF's symbols are absolute and `stub_symbol`'s offsets would stop being
@@ -379,6 +470,18 @@ def build_el3_stub(load_addr, out, zero_mem=False, plan=None):
         include = ["-I", os.path.dirname(inc)]
         defsym += ["--defsym", "ZERO_MEM=1",
                    "--defsym", f"S2_MOVED_IPA={ZERO_MEM_IPA:#x}"]
+    if seed:
+        if not zero_mem:
+            die("--el3-seed-smem writes into a pool block that only"
+                " --el3-zero-mem creates; the seed would land in memory the"
+                " guest cannot reach and the run would be a plain one wearing a"
+                " seeded run's header")
+        block, smem_base, smem_size = seed
+        defsym += ["--defsym", "SEED_SMEM=1",
+                   "--defsym", f"SEED_SMEM_BLOCK={block:#x}",
+                   "--defsym", f"SEED_SMEM_IPA={ZERO_MEM_IPA:#x}",
+                   "--defsym", f"SEED_SMEM_BASE={smem_base:#x}",
+                   "--defsym", f"SEED_SMEM_SIZE={smem_size:#x}"]
     for argv in ([asm] + defsym + include + ["-o", obj, src],
                  [ld, "-Ttext", f"{load_addr:#x}", "--build-id=none",
                   "-o", elf, obj],
@@ -473,6 +576,52 @@ def stub_tables(mon, load_addr, obj, plan):
             words)
 
 
+def stub_seed(mon, load_addr, obj, plan, flag_addr):
+    """What the seed actually put in memory, read back out of the machine.
+
+    Returns `(pool_page, pointer, struct_pool, written, struct_bytes, flag)` or
+    None if the read failed: the pool address of the page holding the SMEM word,
+    the pointer value as the guest will dereference it, the pool address of the
+    structure, the first qword as the stub recorded having written it, the
+    structure's three words as the machine holds them, and the word the stub put
+    at `flag_addr` - which is inside SMEM itself and not inside anything this
+    file laid out.
+
+    The check that matters is not that these equal what the launcher asked for -
+    the launcher asked for two addresses and never named the structure - but that
+    they are *internally* consistent, which is a claim about the guest's walk and
+    not about this file's intent. `pointer - struct_pool` is the IPA offset the
+    pointer names minus the pool offset the bytes sit at, and if those are equal
+    the byte the guest's stage-2 redirect will fetch is the byte written here.
+    The caller does that comparison; this function only fetches.
+    """
+    scratch = tempfile.mkdtemp(prefix="qemu-el3-seed-")
+    try:
+        diag = os.path.join(scratch, "seed.bin")
+        off = stub_symbol(obj, "seed_diag")
+        mon.cmd(f'pmemsave {load_addr + off:#x} 32 "{diag}"', timeout=10.0)
+        with open(diag, "rb") as fh:
+            pool_page, pointer, struct_pool, written = struct.unpack("<QQQQ", fh.read(32))
+        if not struct_pool:
+            return None
+        body = os.path.join(scratch, "struct.bin")
+        mon.cmd(f'pmemsave {struct_pool:#x} 24 "{body}"', timeout=10.0)
+        with open(body, "rb") as fh:
+            struct_bytes = struct.unpack("<QQQ", fh.read(24))
+        # The flag is not in the stub's own memory, so it is fetched by its
+        # address in SMEM instead of by a stub symbol: this is the one read that
+        # would still be right if the stub were wrong about where it wrote.
+        word = os.path.join(scratch, "flag.bin")
+        mon.cmd(f'pmemsave {flag_addr:#x} 4 "{word}"', timeout=10.0)
+        with open(word, "rb") as fh:
+            flag = struct.unpack("<I", fh.read(4))[0]
+    except (OSError, SystemExit):
+        return None
+    finally:
+        shutil.rmtree(scratch, ignore_errors=True)
+    return pool_page, pointer, struct_pool, written, struct_bytes, flag
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--kernel", help="the raw BootShim + FD payload to launch")
@@ -497,6 +646,21 @@ def main():
                          " The payload is not touched; the guest's own page tables"
                          " are not touched; an access at or above 4 GB is a"
                          " translation fault that only this instrument produces")
+    ap.add_argument("--el3-seed-smem", action="store_true",
+                    help="with --el3-stub --el3-zero-mem: fabricate the small"
+                         " structure EnvDxe reads at Apriori slot 2 - the pointer"
+                         f" at {ZERO_MEM_IPA:#x} and the three fields it addresses -"
+                         " so that the dispatcher gets past the driver instead of"
+                         " asserting on the zero a register model returns, and the"
+                         " digest rows DxeCore prints after the batch can be read."
+                         " The container is invented; the SMEM base and size in it"
+                         " and the magic its first word is checked against are the"
+                         " board's own declaration and the driver's own compare,"
+                         " read out of the platform's memory map and the driver's"
+                         " image. One more word is written, into SMEM itself rather"
+                         " than into the container, because the driver asserts"
+                         " after reading it; see the SEEDED block in the output"
+                         " for which parts are the board's and which are not")
     ap.add_argument("--memory", type=int, default=4096, help="MB")
     ap.add_argument("--load-addr", default=DEFAULT_LOAD_ADDR, type=lambda v: int(v, 0))
     ap.add_argument("--extra", action="append", default=[], metavar="ARG",
@@ -525,7 +689,7 @@ def main():
     # platform comes first here because the stage-2 instrument is built out of
     # the platform's own memory map.
     pkg, dsc = platform_paths(args.mu, args.platform)
-    stub, stub_obj, plan = None, None, None
+    stub, stub_obj, plan, seed = None, None, None, None
     if args.el3_stub:
         if args.machine != "virt":
             die(f"--el3-stub and --machine {args.machine} disagree about whether the"
@@ -560,13 +724,29 @@ def main():
             # under test is looking at - one variable too many in a log whose whole
             # value is that the only difference from the previous one is a flag.
             args.machine += ",virtualization=on,gic-version=2"
+            if args.el3_seed_smem:
+                smem_base, smem_size = smem_region(pkg)
+                seed = (seed_block_for(plan), smem_base, smem_size)
+                print(f"seed     EnvDxe's SMEM word at {ZERO_MEM_IPA:#x} -> pointer to"
+                      f" {ZERO_MEM_IPA + SEED_SMEM_OFF:#x}, structure written at"
+                      f" {seed[0] + (ZERO_MEM_IPA & (STAGE2_BLOCK - 1)) + SEED_SMEM_OFF:#x}"
+                      f" in the pool block for {(ZERO_MEM_IPA // STAGE2_BLOCK) * STAGE2_BLOCK:#x}"
+                      f" - the container is fabricated, the base"
+                      f" {smem_base:#x} and size {smem_size:#x} are this board's own"
+                      f" declaration; see tools/qemu-el3-stub.S")
         stub, stub_obj = build_el3_stub(
             args.load_addr,
             os.path.join(tempfile.mkdtemp(prefix="qemu-el3-"), "el3.bin"),
-            args.el3_zero_mem, plan)
+            args.el3_zero_mem, plan, seed)
     elif args.el3_zero_mem:
         die("--el3-zero-mem is the stub's behaviour and means nothing without"
             " --el3-stub; an abort it did not answer would still stop the boot")
+    elif args.el3_seed_smem:
+        die("--el3-seed-smem writes into the pool block the stage-2 redirect"
+            " creates, so it means nothing without --el3-zero-mem; without the"
+            " redirect the seed would sit in memory no guest access reaches and"
+            " the run would stop exactly where an unseeded one does, wearing a"
+            " header that said it was seeded")
 
     pt = load_panel_text()
     geo = pt.load_geometry(args.mu, dsc)
@@ -591,7 +771,7 @@ def main():
     mon = Monitor(args.socket)
 
     lines, screens, gaps = [], 0, []
-    tables = None
+    tables, seed_got = None, None
     worst, weak = 60.0, 0
     scratch = tempfile.mkdtemp(prefix="qemu-panel-")
     dump = os.path.join(scratch, "fb.bin")
@@ -614,7 +794,15 @@ def main():
                 weak += len(rep["weak"])
             k = pt.fb_overlap(lines, got)
             if screens and got and k == 0:
-                gaps.append((tick - t0, len(got)))
+                # A screen that joins onto nothing is either one the console
+                # rewrote while it was being read - a line printed without a
+                # newline, so the next print continued on that row, and the rows
+                # below then repeat the log above - or text printed between two
+                # samples, which is gone. The count of the screen's rows the stream
+                # already holds is the fact both cases can be read off; the header
+                # does not decide which this sample was.
+                gaps.append((tick - t0, len(got),
+                             sum(1 for row in got if row in lines)))
             new = got[k:]
             if new and not args.quiet:
                 for line in new:
@@ -632,6 +820,9 @@ def main():
         # that answered it.
         if stub and args.el3_zero_mem:
             tables = stub_tables(mon, args.load_addr, stub_obj, plan)
+            if seed:
+                seed_got = stub_seed(mon, args.load_addr, stub_obj, plan,
+                                     seed[1] + SEED_SMEM_FLAG_OFF)
         shutil.rmtree(scratch, ignore_errors=True)
         if proc:
             proc.terminate()
@@ -665,6 +856,12 @@ def main():
                              f" read back out of the guest; nothing is claimed about"
                              f" them and the run below is only as good as its own"
                              f" evidence\n")
+                    if seed:
+                        fh.write(f"# SEEDED, and the tables could not be read back, so"
+                                 f" the seed is unverified too: the two halves of this"
+                                 f" instrument are the redirect and the value, and a"
+                                 f" capture that cannot show the first says nothing"
+                                 f" about the second\n")
                 else:
                     l1_0, l2, backing, diag = tables
                     l2_addr = args.load_addr + stub_symbol(stub_obj, "s2_l2")
@@ -717,20 +914,147 @@ def main():
                     fh.write(f"#   an access at or above 4 GB is a stage-2 translation"
                              f" fault here; the device it is standing in for has no"
                              f" such input limit\n")
+                    if seed:
+                        block, smem_base, smem_size = seed
+                        fh.write(f"# SEEDED: the word at {ZERO_MEM_IPA:#x} is not the"
+                                 f" zero a register model returns - it is"
+                                 f" FABRICATED, and so is the structure it points at."
+                                 f" EnvDxe reads the word as the address of the SMEM"
+                                 f" target-info structure and asserts when it is"
+                                 f" zero, so no unseeded run under this instrument"
+                                 f" gets past Apriori slot 2 and no unseeded run"
+                                 f" carries the digest rows. This one may, and"
+                                 f" anything it says about EnvDxe or about what"
+                                 f" follows it is said with this lie in place."
+                                 f" See tools/qemu-el3-stub.S\n")
+                        fh.write(f"#   what the container holds: the SMEM base"
+                                 f" {smem_base:#x} and size {smem_size:#x} are this"
+                                 f" board's own, out of its uefiplat.cfg by way of"
+                                 f" MemoryMapLib.c, and the magic {SEED_SMEM_MAGIC:#x}"
+                                 f" is out of the driver's own compare at RVA 0x9530."
+                                 f" The structure's third qword is zero because"
+                                 f" nothing in the image says what belongs there -"
+                                 f" only the container is invented, not those"
+                                 f" numbers. The last write is not into the"
+                                 f" container at all: one word goes into SMEM itself,"
+                                 f" at {smem_base + SEED_SMEM_FLAG_OFF:#x}, which is"
+                                 f" where EnvDxe reads a {SEED_SMEM_FLAG:#x} and"
+                                 f" asserts smem.c +671 when it does not find one -"
+                                 f" that word is what XBL would have left there and"
+                                 f" this instrument is putting it back by hand\n")
+                        if seed_got is None:
+                            fh.write(f"#   the seed could not be read back out of the"
+                                     f" machine; nothing is claimed about it, and in"
+                                     f" particular this run is not evidence that the"
+                                     f" word was written\n")
+                        else:
+                            pool_page, pointer, struct_pool, written, body, flag = seed_got
+                            ipa_page = ZERO_MEM_IPA & ~0xFFF
+                            stride = struct_pool - pool_page
+                            want0 = (smem_size << 32) | SEED_SMEM_MAGIC
+                            consistent = (pointer - struct_pool == ipa_page - pool_page
+                                          and stride == SEED_SMEM_OFF
+                                          and written == want0
+                                          and body[0] == want0
+                                          and body[1] == smem_base
+                                          and body[2] == 0
+                                          and flag == SEED_SMEM_FLAG)
+                            verdict = ("the pointer names the structure, the"
+                                       " structure holds the base and size this"
+                                       " board declares, and the driver's own"
+                                       " checks read off it" if consistent else
+                                       "THE SEED IS NOT WHAT THIS HEADER"
+                                       " DESCRIBES")
+                            fh.write(f"#   read back out of the machine: the pool page"
+                                     f" for {ipa_page:#x} is {pool_page:#x}, it holds"
+                                     f" the pointer {pointer:#x}, and {struct_pool:#x}"
+                                     f" holds {body[0]:#x} {body[1]:#x} {body[2]:#x};"
+                                     f" SMEM{SEED_SMEM_FLAG_OFF:#x} holds"
+                                     f" {flag:#x} - {verdict}\n")
+                            if pointer - struct_pool != ipa_page - pool_page:
+                                fh.write(f"#   the pointer names {pointer:#x}, which is"
+                                         f" {pointer - ipa_page:#x} past the word, but"
+                                         f" the structure sits"
+                                         f" {struct_pool - pool_page:#x} into the"
+                                         f" block; the guest would fetch"
+                                         f" {pool_page + pointer - ipa_page:#x}, which"
+                                         f" this run did not write\n")
+                            if stride != SEED_SMEM_OFF:
+                                fh.write(f"#   the stub put the structure"
+                                         f" {stride:#x} past the word and this tool"
+                                         f" believes it is {SEED_SMEM_OFF:#x}; the"
+                                         f" number in the two files has drifted\n")
+                            if written != want0 or body[0] != want0:
+                                fh.write(f"#   the structure's first qword is"
+                                         f" {body[0]:#x} and EnvDxe needs the magic"
+                                         f" {SEED_SMEM_MAGIC:#x} in its low half and"
+                                         f" the size in its high half, which is"
+                                         f" {want0:#x}; a mismatch sends the driver"
+                                         f" down its \"not present\" assert and the"
+                                         f" rows below are unreachable from here\n")
+                            if body[1] != smem_base:
+                                fh.write(f"#   the structure's base field is"
+                                         f" {body[1]:#x} and this board declares"
+                                         f" {smem_base:#x}; EnvDxe asserts"
+                                         f" smem.c +659 when that field is zero, and"
+                                         f" uses it as the SMEM it maps when it is"
+                                         f" not\n")
+                            if flag != SEED_SMEM_FLAG:
+                                fh.write(f"#   SMEM{SEED_SMEM_FLAG_OFF:#x} holds"
+                                         f" {flag:#x} and EnvDxe asserts smem.c +671"
+                                         f" unless it holds {SEED_SMEM_FLAG:#x}, so"
+                                         f" the write that was meant to reach SMEM"
+                                         f" did not; this run's stop is the one an"
+                                         f" unseeded run would have made and says"
+                                         f" nothing new about the driver\n")
+                            if body[2] != 0:
+                                fh.write(f"#   the structure's third qword is"
+                                         f" {body[2]:#x}, not the zero this run"
+                                         f" meant to write\n")
+                            if consistent:
+                                fh.write(f"#   the machine's own bytes are checked, not"
+                                         f" the guest's view of them: this is the"
+                                         f" physical read, so it says the seed is"
+                                         f" there and not that the guest's stage 1"
+                                         f" maps it. The pointer is 16 bytes past the"
+                                         f" word's own page base, so the page it"
+                                         f" names is the page the driver already"
+                                         f" reads; that is why the two are put in"
+                                         f" one 4 KB page\n")
         fh.write(f"# region  {name} at {base:#x}, dumping {need:#x} bytes\n")
         fh.write(f"# {len(lines)} rows, weakest margin {worst:.2f} of 60 sub-blocks,"
                  f" {weak} characters under {args.min_margin}\n")
         if gaps:
-            fh.write(f"# {len(gaps)} GAP(S) - samples that shared no line with the"
-                     f" stream. Text between them was printed and lost; the stream"
-                     f" below is not continuous across these points.\n")
-            for t, n in gaps:
-                fh.write(f"#   at {t:.2f}s, {n} rows, none shared\n")
+            fh.write(f"# {len(gaps)} GAP(S) - samples that could not be joined onto"
+                     f" the stream: the tail of what had been read was not the head"
+                     f" of the screen, so the rows below a gap are not known to"
+                     f" continue the rows above it. Each gap carries how many of the"
+                     f" screen's rows the stream already held, which is what the two"
+                     f" causes read as and what tells them apart. A row the console"
+                     f" rewrote in place - a line printed without a newline, so the"
+                     f" next print continued on that row - makes the screen almost"
+                     f" all rows the stream already holds, and appending it repeats"
+                     f" the log above the gap instead of extending it: the rows to"
+                     f" read are the ones after the copy ends, and nothing the run"
+                     f" printed is missing. Text printed between two samples makes"
+                     f" the screen almost all rows the stream does not hold, and no"
+                     f" reading recovers it.\n")
+            for t, n, again in gaps:
+                fh.write(f"#   at {t:.2f}s, a screen of {n} rows, of which {again}"
+                         f" are rows the stream already holds\n")
         for i, line in enumerate(lines):
             fh.write(f"{i:4d} |{line}|\n")
 
     print(f"\n{len(lines)} rows from {screens} screens;"
           f" weakest margin {worst:.2f}, {weak} characters under {args.min_margin}")
+    for t, n, again in gaps:
+        print(f"  at {t:.2f}s a screen of {n} rows, {again} of them rows the stream"
+              f" already holds"
+              + (" - reads as a rewritten row: the rows below repeat the log, and"
+                 " the text after the copy is what the run added"
+                 if again * 2 >= n else
+                 " - reads as text printed between samples, and the stream is not"
+                 " continuous there"))
     if tables:
         _l1_0, l2, backing, diag = tables
         wrong = [i for i, pa in sorted(plan.items())
@@ -741,9 +1065,26 @@ def main():
               f" {ZERO_MEM_IPA:#x} reads {backing[0]:#x}")
         print(f"  as the guest reads them back: VTCR_EL2={diag[0]:#x}"
               f" VTTBR_EL2={diag[1]:#x} HCR_EL2={diag[2]:#x} SCR_EL3={diag[3]:#x}")
+    if seed:
+        smem_base, smem_size = seed[1], seed[2]
+        if seed_got is None:
+            print("seed     SEEDED RUN, but the seed could not be read back out of"
+                  " the machine - so nothing here says it was written")
+        else:
+            pool_page, pointer, struct_pool, written, body, flag = seed_got
+            ok = (written == body[0]
+                  and body[0] == (smem_size << 32) | SEED_SMEM_MAGIC
+                  and body[1] == smem_base and body[2] == 0
+                  and flag == SEED_SMEM_FLAG)
+            print(f"seed     FABRICATED container, read back out of the machine:"
+                  f" {pool_page:#x} holds the pointer {pointer:#x}, and"
+                  f" {struct_pool:#x} holds {body[0]:#x} {body[1]:#x} {body[2]:#x}"
+                  f" (base {smem_base:#x}, size {smem_size:#x}), and SMEM"
+                  f"{SEED_SMEM_FLAG_OFF:#x} holds {flag:#x}"
+                  f" - {'consistent' if ok else 'NOT WHAT THE HEADER DESCRIBES'}")
     if gaps:
-        print(f"{len(gaps)} sample(s) shared no line with the stream - see the header"
-              f" of {os.path.relpath(args.out, REPO)}: the log is not continuous there")
+        print(f"{len(gaps)} sample(s) could not be joined onto the stream, listed"
+              f" above and in the header of {os.path.relpath(args.out, REPO)}")
     print(f"wrote {os.path.relpath(args.out, REPO)}")
     return 1 if (gaps or weak) else 0
 

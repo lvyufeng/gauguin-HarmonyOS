@@ -388,25 +388,60 @@ def fb_overlap(seen, lines):
 
 
 def fb_merge(paths, geo, font, min_margin):
-    """One stream out of many dumps, because the console wipes instead of scrolling.
+    """One stream out of many dumps, because one dump is one screen and not the log.
 
-    One dump is one screen: the last `PANEL_ROWS` lines the firmware printed, and
-    never the first, since `AdvanceNewLine` zeroes the whole buffer when the
-    cursor passes the last row. Reading a boot off this channel therefore means
-    sampling it, and sampling means most lines arrive in several dumps. So the
-    screens are joined on content - the longest tail of what has been collected
-    that is also the head of the next screen is the overlap, and everything after
-    it is new.
+    A screen holds whatever the console has put on it and nothing else, and how
+    much that is depends on how long the log is. `AdvanceNewLine` zeroes the whole
+    buffer when the cursor passes the last row, so a log longer than the panel is
+    read as the last `PANEL_ROWS` lines and never the first; a log shorter than the
+    panel - which is every run of this payload so far, 92 rows onto a 100-row
+    screen - is held whole, from its first row, and each sample is the previous one
+    extended. Both cases mean a boot off this channel is sampled rather than read
+    once, and the screens are joined on content: the longest tail of what has been
+    collected that is also the head of the next screen is the overlap, and
+    everything after it is new. The first screen has nothing to be joined onto and
+    is therefore taken whole, which is worth knowing before reading the top of this
+    function's output: if the console then overwrites a row that screen held, the
+    stream keeps both, and its first rows can be an arrangement no screen ever
+    displayed. For a screen that holds the whole log that is the
+    whole stream, which is the case this rule was written against and the case the
+    captures are made of; a screen that had scrolled - the log outgrowing the panel
+    - matches the stream in the middle instead, and this rule reports it as a gap
+    rather than guessing. Nothing has needed the scrolled case yet, and the
+    failure mode until something does is the loud one.
 
-    A screen that overlaps by *nothing* is reported, not silently appended. Two
-    dumps that share no line may be adjacent (the console printed more than a
-    screenful between them) or may be a screen the sampler missed the start of,
-    and only the reader can tell those apart. Either way a gap in the middle of a
-    boot log is a hole in the evidence, and the one thing this must not do is make
-    it invisible.
+    A screen that overlaps by *nothing* is reported, not silently appended, and
+    the case this payload produces is a row the console rewrote in place. A line
+    printed without a newline is continued on the same row by whatever prints
+    next - `MMU In\\r` above the DXE banner, `smem_alloc: SMEM allocation failed!
+    ...` sharing its row with the next tick, `smem_get_addr: ...` taking the
+    `WARNING: Unable to read memory partition` that follows it - so a sample taken
+    across that instant holds a row whose text is not the text the stream carries
+    for it. The join is row-wise over the whole overlap, so one such row anywhere
+    in it is enough to reject the join even when every other row matches and the
+    rows genuinely new are only the last two or three. The four gaps of the
+    47-screen replay hold 65 of 69 of their rows, 77 of 81, 80 of 85 and 2 of 4
+    already, which is the shape of a rewrite and not of a loss.
 
-    Returns (lines, screens kept, [(path, lines in it)] for the screens that
-    overlapped nothing, and the weakest per-character margin seen anywhere).
+    A screen of rows the stream does not have - text printed between two samples -
+    is the other way to overlap by nothing, and no reading recovers it. None has
+    been seen in this payload, and the count is what would show one, since a lost
+    stretch puts almost none of the screen's rows in it. What the count does not
+    do is separate the two cleanly: a rewritten row is a row the screen has and the
+    stream has too, in an older form, so it depresses the count by one without
+    being text the run lost, and the count is only ever read on a screen whose join
+    already failed, which one rewritten row is enough to cause.
+
+    A screen the console has stopped printing on is not a gap at all, and reading
+    one as a gap is the mistake this rule makes easy. Nothing new means the screen
+    is a suffix of the stream, so the join takes the whole of it and appends
+    nothing: eleven of the 47 samples end that way, flat at 92 rows on a 100-row
+    panel, and they are why "nothing was appended" is not by itself evidence that
+    anything was missed.
+
+    Returns (lines, screens kept, [(path, lines in it, rows the stream already
+    holds)] for the screens that overlapped nothing, and the weakest
+    per-character margin seen anywhere).
     """
     out, kept, gaps, worst, weak = [], 0, [], 60.0, 0
     for p in paths:
@@ -418,7 +453,11 @@ def fb_merge(paths, geo, font, min_margin):
             weak += len(rep["weak"])
         k = fb_overlap(out, lines)
         if kept and k == 0:
-            gaps.append((p, len(lines)))
+            # Counted by content and not by position: the stream is not
+            # necessarily the log's own prefix by the time a second gap arrives,
+            # because the screen the first gap appended is in it too. What the
+            # count says is how much of this screen is text the stream already has.
+            gaps.append((p, len(lines), sum(1 for row in lines if row in out)))
         out += lines[k:]
         kept += 1
     return out, kept, gaps, worst, weak
@@ -1550,8 +1589,9 @@ def main():
         if gaps:
             print(f"  {len(gaps)} dump{'s' if len(gaps) != 1 else ''} overlapped"
                   f" nothing already read: a gap in the stream, not a join")
-            for p, n in gaps:
-                print(f"    {os.path.basename(p)}: {n} rows, none shared")
+            for p, n, again in gaps:
+                print(f"    {os.path.basename(p)}: {n} rows, {again} of them rows the"
+                      f" stream already holds")
             return 1
         if weak:
             return 1

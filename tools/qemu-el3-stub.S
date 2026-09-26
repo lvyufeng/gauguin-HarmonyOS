@@ -83,10 +83,33 @@
  * branch, and no run under this instrument can say what the device would have
  * done there.
  *
- * It buys this: the dispatcher runs the whole Apriori batch instead of stopping
- * at slot 2, so the console carries the `KEY` line, the `P2 RETRY` statuses and
- * the `P2 FWHY` largest-free-run readings - the measurements the P2 diagnosis
- * turns on and which until now could only be had by photographing a phone.
+ * It buys this: the dispatcher runs past slot 2 instead of stopping there. No
+ * unseeded run under this instrument gets past slot 2 at all, so the only record
+ * of what the batch does is a photograph of a phone; a seeded run carries 18 rows
+ * of it. What those rows show is that the batch is where this stops and not where
+ * it resumes: the highest progress any seeded run has reached is 17 starts
+ * (`K 18 Ss 17/69`), sixteen of the eighteen ticks are `Ss`, DALSYS's is `SO` and
+ * CmdDbDxe's is `SU`, and the index and `mP2Started` never diverge in any capture.
+ * The run still dies *inside* the batch, on Apriori 19, so the digest rows
+ * `DxeCore` prints once the batch is done - the `P2 SEQ` / `P2 WHY` / `P2 ERR` /
+ * `P2 RETRY` measurements the P2 diagnosis turns on, and which until now could
+ * only be had by photographing a phone - are in no host-side capture yet.
+ * Reaching the place a device-side run already reached is not the same as getting
+ * past it, and this file is where that distinction is easy to lose.
+ *
+ * And it does not buy that on its own, which is the correction this file carries.
+ * Giving the machine back its registers is not enough to get past EnvDxe, because
+ * EnvDxe does not stop on a register it cannot reach: it stops on a *value* it
+ * reads from one, the address of the SMEM target-info structure, which on a real
+ * board XBL and the secure world wrote there before the firmware ran. Zero is not
+ * a missing register to that code, it is a failed lookup, and it asserts. So a
+ * ZERO_MEM run reaches the same assert as a plain one, and the digest rows stay
+ * unwritten. SEED_SMEM is what gets past it, by fabricating the three words the
+ * driver's own parse reads and the one word it then reads out of SMEM - and a
+ * run that carries those rows carries them because of values this file invented.
+ * Every capture made under this instrument records which of the two it was,
+ * because a reader who takes an unseeded run for a seeded one, or the reverse,
+ * will read the log backwards.
  *
  * It is loaded at EL3_LOAD and branches to PAYLOAD, which is where the real
  * payload would have been loaded. Both are build-time symbols so that the stub
@@ -94,11 +117,14 @@
  * the tables back out of the guest afterwards, so the two ends cannot drift.
  *
  *   aarch64-linux-gnu-as --defsym PAYLOAD=0x48010000 --defsym EL3_LOAD=0x48000000 \
- *       --defsym ZERO_MEM=1 -I <dir with s2_l2.inc> -o stub.o stub.S
+ *       --defsym ZERO_MEM=1 --defsym SEED_SMEM=1 --defsym SEED_SMEM_BLOCK=0x40c00000 \
+ *       --defsym SEED_SMEM_IPA=0x01FD4000 --defsym SEED_SMEM_BASE=0x80900000 \
+ *       --defsym SEED_SMEM_SIZE=0x200000 \
+ *       -I <dir with s2_l2.inc> -o stub.o stub.S
  *   aarch64-linux-gnu-objcopy -O binary stub.o stub.bin
  *
- * `tools/qemu-panel-read.py --el3-stub --el3-zero-mem` does exactly this and
- * passes the addresses through, so the numbers have one home.
+ * `tools/qemu-panel-read.py --el3-stub --el3-zero-mem --el3-seed-smem` does
+ * exactly this and passes the addresses through, so the numbers have one home.
  */
 
     /*
@@ -119,6 +145,137 @@
     .ifndef ZERO_MEM
     .equ  ZERO_MEM, 0
     .endif
+
+    /*
+     * SEED_SMEM puts one fabricated value into the redirected block that stands
+     * in for SMEM, and it is the one thing in this file that is not a model of
+     * anything: it is a lie, told once, so that a run can get past the driver
+     * that would otherwise stop it.
+     *
+     * The case for telling it. EnvDxe, at Apriori slot 2, reads a 64-bit value
+     * from 0x01FD4000 - SMEM + 0x0D4000 - and treats it as the address of the
+     * SMEM target-info structure: `ldr w8,[x13]; ldr w9,[x14]; bfi x8,x9,#32,#32`
+     * at RVA 0x950C..0x9518, then `cbz x8, <assert>`. Zero is not the value it
+     * wants; zero is the failure it prints. On the device the word is written by
+     * XBL and TZ before the firmware runs, and no stage-2 table can supply it,
+     * because a table moves addresses and this is a value. So the guest stops at
+     * slot 2 in every configuration of this instrument, the dispatcher never
+     * finishes its Apriori batch, and the P2 digest - which DxeCore prints after
+     * `CoreDispatcher ()` returns - is never written. Those rows are the whole
+     * point of the instrument, so the alternative to seeding is not a purer run;
+     * it is no run.
+     *
+     * What is fabricated, exactly. One qword at the redirected offset for
+     * 0x01FD4000 (the pointer), three qwords at the address it names (the
+     * structure the driver parses field by field), and one word inside SMEM
+     * itself, at SMEM + 0xC0. Nothing else. The payload's bytes are not touched -
+     * this is the machine's RAM, arranged before the guest starts - so the
+     * property that the instrument changes no byte of what it watches is kept.
+     *
+     * The fourth write is not part of the container and is not the same kind of
+     * lie. The container is a thing this file builds and the driver reads; SMEM is
+     * a region that exists on the device whether or not this file does, and the
+     * word at +0xC0 is one EnvDxe reads out of it directly - `ldr w9,[x8,#192];
+     * cmp w9,#1; b.ne <assert>` at RVA 0x823C, which is `smem.c +671` "SMEM is
+     * not initialized by Boot." On the device XBL leaves 1 there before the
+     * firmware starts, so writing 1 is restoring a value rather than inventing
+     * one; but it is still this instrument writing into a region the firmware
+     * owns, which the other three writes are not, and a run that stops on the
+     * word at SMEM + 0xC0 is a run that stopped on this line.
+     *
+     * The three fields are not invented, and that is the difference between this
+     * and a run that simply makes things up. The driver stores the structure's
+     * first qword, its `+8` and its `+16` into its own `.data + 0xA40` and then
+     * reads them back through three accessors: `[+8]` is the SMEM base, `[+4]` -
+     * the *high* half of the first qword - is the size, `[+0]` is checked against
+     * the magic, and the low half of `[+16]` is a count that falls back to 498
+     * when it is zero (RVA 0x946c, 0x947c and 0x948c read 0xA48, 0xA44 and 0xA50;
+     * RVA 0x9524-0x9554 writes them). So the base and size seeded here are this
+     * board's own SMEM region - 0x80900000 for 0x00200000, from
+     * `device/config/uefiplat.cfg` by way of the platform's `MemoryMapLib.c`, and
+     * passed in rather than written down - and the magic is taken from the
+     * image's own compare (`mov w13,#0x4953; movk w13,#0x4949,lsl #16` at RVA
+     * 0x9530). Only the existence of the structure is invented; its contents are
+     * the board's declaration.
+     *
+     * What it costs in fidelity, and this is the part a reader has to carry. A
+     * run with SEED_SMEM on can say EnvDxe returned, and it cannot say what the
+     * device would have done with the real structure. Two of the fields are the
+     * board's own values carried by an invented container, which is a smaller
+     * lie than an invented value; the third is left zero because nothing in the
+     * driver's image says what belongs there, and 498 is only the default it
+     * falls back to. If a later driver branches on that third field, this
+     * seeding is where the wrong answer would come from, and it should be the
+     * first thing suspected.
+     *
+     * The larger cost is not any one field: it is that SMEM is now a region
+     * holding four words this file wrote and zeros everywhere else, and drivers
+     * allocate from it. The first seeded run that got past EnvDxe carried
+     * `smem_get_addr: SMEM get addr failed! smem_type=402` and `smem_alloc: SMEM
+     * allocation failed! smem_type=404, buf_size=8192K` in its own log, which is
+     * the instrument talking and not the firmware. Any driver failure downstream
+     * of those lines has to be read with that in front of it.
+     *
+     * The addresses are `--defsym`s for the same reason every other address here
+     * is: SEED_SMEM_BLOCK is the pool address `l2_plan` gave the block holding
+     * 0x01FD4000, and the launcher computes both out of the platform's own
+     * memory map so that neither end can drift from the run it is part of.
+     */
+    .ifndef SEED_SMEM
+    .equ  SEED_SMEM, 0
+    .endif
+
+    .ifndef SEED_SMEM_IPA
+    .equ  SEED_SMEM_IPA, 0x01FD4000
+    .endif
+
+    /*
+     * How far past the pointer the structure goes: 16 bytes, inside the *same*
+     * 4 KB page, and that is the whole reason for the number.
+     *
+     * The driver reads the pointer at 0x01FD4000 and then dereferences it. If the
+     * structure were anywhere else - the next page, or a block of its own - the
+     * guest would have to have that address mapped in its *own* stage-1 tables,
+     * and whether it does is a property of the firmware's MMU setup that this
+     * instrument would be guessing at. Sixteen bytes past the pointer page's base
+     * removes the question: the page is the one the driver already reads
+     * successfully in every run, and the redirect maps the whole 2 MB block, so
+     * the byte the guest fetches is the byte written below.
+     */
+    .equ  SEED_SMEM_OFF, 0x10
+
+    /* The magic EnvDxe compares the structure's first word against, from RVA 0x9530. */
+    .equ  SEED_SMEM_MAGIC, 0x49494953
+
+    /*
+     * The board's own SMEM region, which is what the two fields of the fabricated
+     * structure have to hold: the driver reads `+8` as the base and the high half
+     * of `+0` as the size, and asserts `smem.c +659` when the base is zero. These
+     * are `--defsym`s - the launcher reads them out of `uefiplat.cfg` through the
+     * platform's `MemoryMapLib.c` - so the values are this board's declaration
+     * rather than this file's guess. The defaults are that declaration, kept so
+     * the file assembles on its own; a run that used them without the launcher's
+     * would be a run whose numbers nothing checked.
+     */
+    .ifndef SEED_SMEM_BASE
+    .equ  SEED_SMEM_BASE, 0x80900000
+    .endif
+
+    .ifndef SEED_SMEM_SIZE
+    .equ  SEED_SMEM_SIZE, 0x00200000
+    .endif
+
+    /*
+     * The word EnvDxe reads out of SMEM itself, at SMEM + 0xC0, and compares
+     * against 1 - `ldr w9,[x8,#192]; cmp w9,#1; b.ne <assert>` at RVA 0x823C,
+     * which is `smem.c +671` "SMEM is not initialized by Boot." Unlike the three
+     * fields above, this one is not read out of the structure this file builds;
+     * it is read out of the region the structure *names*. So the write below
+     * lands at SEED_SMEM_BASE + 0xC0, and what it overwrites is the first word of
+     * the header XBL would have written on the device.
+     */
+    .equ  SEED_SMEM_FLAG_OFF, 0xC0
+    .equ  SEED_SMEM_FLAG, 1
 
     /*
      * Where the two translation tables go, inside the stub's own 64 KB. `.org`
@@ -147,6 +304,13 @@
     .equ  S2_DIAG_OFF, 0x1F00
 
     /*
+     * And a second record, for the seed. Next to the first so that the two are
+     * read by the same `--read-back` pass and a capture cannot carry one without
+     * the other.
+     */
+    .equ  SEED_DIAG_OFF, 0x1F40
+
+    /*
      * A stage-2 block descriptor, and the layout is not the stage-1 one, which is
      * the trap: S2AP is bits [7:6] rather than an AP field at [7:6] with the same
      * meaning by accident, MemAttr is four bits at [5:2], shareability is [9:8],
@@ -163,6 +327,16 @@
      * has to be able to execute from the identity-mapped RAM it was loaded into.
      */
     .equ  S2_BLOCK, 0x7FD
+
+    /*
+     * The size of one stage-2 block, named here because the seeding block below
+     * has to reduce an IPA to its offset within its block, and `tools/
+     * qemu-panel-read.py` reduces the same number the same way when it works out
+     * which pool block that IPA's 2 MB got. Two places, one constant, and the
+     * launcher asserts they agree by passing the block's base rather than the
+     * offset - the addition is this file's.
+     */
+    .equ  S2_MOVED_BLOCK, 0x200000
 
     /*
      * The address the guest reads and cannot get. Kept as a symbol because the
@@ -260,6 +434,103 @@ _start:
     stp   x5, x6, [x7, #16]
 .endif
 
+.if SEED_SMEM
+    /*
+     * The lie, written before the guest exists. Four stores into the container:
+     * the pool block standing in for the 2 MB holding 0x01FD4000 gets the
+     * pointer, and the pointer's target gets the three words the driver reads. A
+     * fifth store, further down, is not into the container at all. The header
+     * above has the argument for doing this at all and the list of what it costs.
+     *
+     * Both addresses are *pool* addresses and not the guest's. That is the part
+     * that is easy to get wrong and was got wrong first: at EL3 there is no stage
+     * 2, because stage 2 applies to accesses made *from* EL1 and EL0 - so a store
+     * to the raw IPA 0x01FD4010 from here is a physical store to 0x01FD4010,
+     * which under `virt` is inside the secure flash bank and not RAM at all. The
+     * value written has to be the IPA, because that is what the guest will
+     * dereference; the place it is written has to be the pool block, because that
+     * is where the machine keeps the bytes the guest's own stage-2 redirect will
+     * fetch.
+     *
+     * `str x3, [x0]` is one 64-bit store and it is why the pointer is one
+     * instruction and not two: the driver reads the low word at +0 and the high
+     * word at +4 and concatenates them, so a little-endian 64-bit store is
+     * exactly the pair it will read back. Both addresses are below 4 GB, so the
+     * high word is zero and the two forms agree anyway - worth stating rather
+     * than relying on, because a target at or above 4 GB would make them differ
+     * and this comment is the only place that would say so.
+     */
+    ldr   x0, =SEED_SMEM_BLOCK
+    add   x0, x0, #(SEED_SMEM_IPA & (S2_MOVED_BLOCK - 1))
+    add   x1, x0, #SEED_SMEM_OFF          /* the structure, in the pool */
+    ldr   x3, =SEED_SMEM_IPA
+    add   x3, x3, #SEED_SMEM_OFF          /* the pointer, as the guest will see it */
+
+    str   x3, [x0]
+
+    /*
+     * The three words of the structure, and each of them is a field the driver
+     * reads and not a filler. The driver stores the first qword at its own
+     * `.data + 0xA40` and later takes `[+4]` of that as the SMEM *size* and
+     * checks `[+0]` against the magic; it takes `[+8]` as the SMEM *base*, which
+     * is the value whose being zero is the next assert the boot reaches; and it
+     * takes the low half of `[+16]` as a count that falls back to 498 when zero.
+     * So the size and base are the board's own - 0x80900000 for 0x200000, out of
+     * `device/config/uefiplat.cfg` through `MemoryMapLib.c`, passed in as
+     * SEED_SMEM_BASE and SEED_SMEM_SIZE - and the third word is left zero, which
+     * is both what the driver tolerates and what this instrument can honestly
+     * say: it does not know what belongs there.
+     */
+    ldr   x5, =SEED_SMEM_SIZE
+    lsl   x5, x5, #32
+    mov   w2, #0x4953
+    movk  w2, #0x4949, lsl #16
+    orr   x5, x5, x2                      /* magic in the low half, size in the high */
+    ldr   x6, =SEED_SMEM_BASE
+    str   x5, [x1]
+    str   x6, [x1, #8]
+    str   xzr, [x1, #16]
+
+    /*
+     * One more word, and this one is an experiment rather than a fix. With the
+     * pointer supplied, EnvDxe gets past `smem_target.c +435`; with the
+     * structure's base field supplied as well, it gets past `smem.c +659`; and
+     * then it stops at `smem.c +671`, which asserts unless the word at
+     * SMEM + 0xC0 is 1:
+     *
+     *     ldr w9, [x8, #192]      ; x8 = the base it just read out of the structure
+     *     cmp w9, #1
+     *     b.ne <assert, "SMEM is not initialized by Boot.">
+     *
+     * at RVA 0x823C. On the device that word is 1 because XBL wrote SMEM's header
+     * before any of this ran. Under `virt` the address is RAM holding zero, so the
+     * driver's conclusion - that the boot stage did not initialise SMEM - is
+     * *correct about the machine it is running on*, and the assert is not a model
+     * artefact at all.
+     *
+     * Which is why this is written to find out what the wall is made of rather
+     * than to get past it. If EnvDxe proceeds, the mirror needs a handful of flag
+     * words and is within reach. If it stops on the next thing it reads out of
+     * SMEM, then what the mirror is missing is SMEM's *contents* - a structure
+     * this file has no honest way to supply, because the device's own copy lives
+     * in RAM that XBL fills at boot and that no partition backup can contain.
+     * The run this was added for is the answer, and `docs/08` carries which it
+     * was.
+     */
+    ldr   x7, =SEED_SMEM_BASE
+    mov   w8, #SEED_SMEM_FLAG
+    str   w8, [x7, #SEED_SMEM_FLAG_OFF]
+
+    /* A record, so the launcher can read the seed back out of the machine's own
+     * memory rather than out of the arguments it passed: what was written and
+     * what was meant to be written are different claims, and only the first is a
+     * run. Every field is a value this code computed and not a symbol it was
+     * given, so the record is evidence rather than an echo. */
+    adr   x4, seed_diag
+    stp   x0, x3, [x4]
+    stp   x1, x5, [x4, #16]
+.endif
+
     /* No FP or SIMD trapping anywhere below. */
     msr   cptr_el3, xzr
     mov   x0, #0x33ff
@@ -339,6 +610,21 @@ smc_handler:
     .globl s2_diag
     .org  S2_DIAG_OFF
 s2_diag:
+    .space 32
+
+    /*
+     * What SEED_SMEM actually wrote: the two pool addresses, the pointer as the
+     * guest will read it, the structure's first qword as this file recorded
+     * writing it - and nothing about the word at SMEM + 0xC0, because that one
+     * is not in this stub's memory for a record to be taken from. The launcher
+     * fetches it by its address in SMEM instead, which is the one read that would
+     * still be right if this file were wrong about where it wrote. Read back out
+     * of the machine after the run; placed with `.org` for the same reason the
+     * tables are - the launcher finds it by symbol and the offset is in one file.
+     */
+    .globl seed_diag
+    .org  SEED_DIAG_OFF
+seed_diag:
     .space 32
 
     .globl s2_l1

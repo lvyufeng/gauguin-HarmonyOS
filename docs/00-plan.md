@@ -7,7 +7,7 @@ cellular and cameras are permanently out of reach, Wi-Fi/audio/GPU are hard but 
 Each phase ends with a commit. A phase is only "done" when its gate has actually been
 observed on hardware, not when the code compiles.
 
-## Where things actually stand (2026-09-23)
+## Where things actually stand (2026-09-26)
 
 Nothing below is "done" except P0, and the only gate observed on hardware is
 P0's plus the first half of P2's (see its row). This table is the honest state;
@@ -17,7 +17,7 @@ the sections under it are the plan.
 |---|---|---|
 | **P0** survey + backup | partitions dumped and verified; no existing port | **done** — 74 partitions carved and signature-checked, `boot`/`abl`/`recovery` hashes match the device, 86 XBL drivers recovered, and `git ls-files Silicon/Qualcomm` confirms no SM7225 package upstream |
 | **P1** mainline kernel | device boots mainline and prints something | **not done** — `work/out/boot-pstore.img` is built, reproducible (`make_boot_image.py --kernel`), and carries both channels a device with no UART needs: the panel itself (`simple-framebuffer` + `simpledrm` + fbcon, so the boot log is photographed off the screen) and pstore (`console-ramoops-0`, readable from Android after a warm reboot). The earlier `fastboot boot` was refused with `Failed to load/authenticate boot image` on the RAM path, and the partition path has never been tried |
-| **P2** UEFI skeleton | the boot manager draws on the phone's screen and UFS appears as a block device | **half met, and it is the half that decides viability** — **our firmware executes on this phone**. The image carrying the current device tree was written to `boot`, and on the reboot the panel filled with our own output, ending in `ASSERT [DxeCore] DxeMain.c(593)`. That text can only come from us: `DxeMain.c:593` is our line, and in a DEBUG build `SerialPortLib` is bound to `FrameBufferSerialPortLib`, so every `DEBUG ()` string is drawn into the framebuffer — which is why the firmware can talk while there is no shell, no boot-manager menu and no UART. (It also means text on the panel is not evidence that BDS ran.) What remains is the second half: DXE stops because at least one *architectural protocol* was never installed, and the name of the first missing one is printed two lines above the assert, on a screen that is legible by design (`GetFontScale ()` gives 10×24 glyphs, ~90×100 of them) and is wiped only when it scrolls. `docs/08` step 4.8 has the reading, and the dep chain that narrows it. That chain's
+| **P2** UEFI skeleton | the boot manager draws on the phone's screen and UFS appears as a block device | **half met, and it is the half that decides viability** — **our firmware executes on this phone**. The image carrying the current device tree was written to `boot`, and on the reboot the panel filled with our own output, ending in `ASSERT [DxeCore] DxeMain.c(593)`. That text can only come from us: `DxeMain.c:593` is our line, and in a DEBUG build `SerialPortLib` is bound to `FrameBufferSerialPortLib`, so every `DEBUG ()` string is drawn into the framebuffer — which is why the firmware can talk while there is no shell, no boot-manager menu and no UART. (It also means text on the panel is not evidence that BDS ran.) What remains is the second half: DXE stops because at least one *architectural protocol* was never installed, and the name of the first missing one is printed two lines above the assert, on a screen that is legible by design (`GetFontScale ()` gives 10×24 glyphs, ~90×100 of them) and is wiped only when it runs past the last row — which the mirror's own run of record does not: its log is 92 rows on a 100-row panel, so no capture of this payload shows a wipe, and a *gap* between two samples is a row the console rewrote in place rather than text that was lost (`docs/08` step 4.125). `docs/08` step 4.8 has the reading, and the dep chain that narrows it. That chain's
 length was itself wrong for a while: `docs/08` step 4.9 recorded the panel as naming
 **eight** missing protocols, and the set is **nine** — `Variable` and `Variable Write`
 are installed by one driver, two statements apart, and that driver's `P2 SEQ` letter is
@@ -61,11 +61,31 @@ printer lives: every `P2` digest row is written from `P2Digest ()`, which
 `CoreDisplayDiscoveredNotDispatched ()` calls and which `DxeMain.c:576` reaches
 only *after* `CoreDispatcher ()` at `:562` has returned. So a run that stops
 anywhere inside the Apriori batch prints none of them, and the `--el3-stub`
-configurations all stop inside `EnvDxe`, which is Apriori entry 2. The mirror's
-ceiling is `EnvDxe`'s first SMEM read, and no stage-2 table lifts it: the redirect
-moves *addresses*, while what `EnvDxe` needs at `0x01FD4000` is a *value* XBL and
-TZ write before the firmware runs. Seeding it is a per-word problem of unknown
-length, so the panel is the instrument and the phone is what holds it.
+configurations all used to stop inside `EnvDxe`, which is Apriori entry 2.
+
+Step 4.125 moved that ceiling without removing it. The stop was never the
+stage-2 map — the redirect moves *addresses*, while what `EnvDxe` needs at
+`0x01FD4000` is a *value* XBL and TZ write before the firmware runs — so the
+value was fabricated: three writes into three addresses (the pointer, the SMEM
+target-info structure it names, and the `SMEM + 0xC0` flag) buy the mirror past
+`smem_target.c +435`, then `smem.c +659`, then `smem.c +671`. With those in place
+the run walks the Apriori batch in order, prints `K 1` through `K 18` with a name
+for each row, and dies on **Apriori 19 = `RpmhDxe`** — the same entry index at
+which the device's `P2 SEQ` records its first failure, though by the other
+mechanism: there the image fails to load, here it loads, starts, and then asserts
+inside its own error branch. The last two panel rows decode — `EFI_SOFTWARE |
+EFI_SW_EC_ILLEGAL_SOFTWARE_STATE`, reported under `RpmhDxe`'s own baked-in caller
+id, and then a `DebugLib` guard firing because a print was reached with a null
+format. Which of `rpmh_image_os.c`'s four such sites was reached is not
+established. The digest is still absent for the original reason: this run dies
+inside the batch too.
+
+Two readings are therefore owed to the phone, and both are short — `P2 WHAT` for
+the value behind `K 11 SO`'s non-error, non-`EFI_STATUS` letter, and
+`P2 APRI unhit=` for the one Apriori name that matches nothing in this volume.
+Neither blocks building. The payload that carries the `P2` digest literals is
+already built and hashed — `work/out/p2-variants/Mu-gauguin-silicon-gzip.img`,
+`90b21643…` — and still owes its first reading, under *先读屏，再刷下一次*.
 
 The pieces a device session uses — the full sequence, with what each outcome
 means and which payload to try next, is
@@ -316,8 +336,11 @@ exposed UART — plan on the UEFI `ULogDxe` log buffer or on-screen debug). That
 went, and the on-screen half is the half that worked: the DEBUG build's console *is* the
 framebuffer, so the firmware's own `DEBUG ()` strings are readable off the panel with no
 UART and no shell. What it does not give is scrollback — the console clears itself when
-it runs off the bottom — and it is write-only, so nothing can be read back after the
-fact.
+it runs off the bottom, which on this payload it never does (92 rows of 100), and it is
+write-only, so nothing can be read back after the fact. What does read it back is
+`tools/qemu-panel-read.py`, which samples the region from a running mirror and joins the
+screens into one stream; `docs/08` step 4.125 is the account of what that stream is and of
+what a gap in it is not.
 
 ---
 
