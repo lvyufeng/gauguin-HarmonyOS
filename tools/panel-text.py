@@ -59,6 +59,15 @@ Reading a photograph, and the two things that actually make it hard:
     tools/panel-text.py --render "P2 ERR Out of Resources x27"   # reference sheet
     tools/panel-text.py --decode PHOTO.jpg                       # text back out
     tools/panel-text.py --selftest                               # does it survive
+    tools/panel-text.py --fb fb.bin --fb fb2.bin                 # off the firmware's own memory
+
+`--fb` is the same panel read through a different channel, and the channel is the
+one that has no photograph in it. Dump the "Display Reserved" region of the running
+firmware (`pmemsave 0x... 0x... fb.bin` in a QEMU monitor) and the console's
+content comes back exactly - see `fb_ink` for what that removes. Pass the flag more
+than once and the dumps are joined into one stream in the order given, which is how
+the console's wipe is answered: it clears the screen rather than scrolling it, so a
+boot longer than one screen is only ever readable from a series of dumps.
 
 `--selftest` is the honest part. It renders text through the console model, places
 it inside a larger black scene the way a phone appears in a photograph, applies the
@@ -307,6 +316,112 @@ def console_rows(lines, columns):
     if len(rows) > PANEL_ROWS[0]:
         rows = rows[len(rows) - PANEL_ROWS[0]:]
     return rows
+
+
+# ------------------------------------------------ the framebuffer, read directly
+
+
+def fb_ink(path, geo):
+    """Ink 0/1 from a dump of the panel's own memory - no photograph in the way.
+
+    Ask the running firmware where its console is (`GetFrameBufferMemory` locates
+    the region by name, so the answer is "Display Reserved" and, under QEMU, the
+    address and length the platform's own device tree declares), dump that region
+    with `pmemsave`, and what comes back is the panel's content byte for byte.
+    Everything the photograph path exists to estimate is then already known:
+
+      * **The values are 0 and 1 and nothing else.** `DrawRow` writes
+        `0xFFFFFFFF` or `0x00000000` per pixel, so there is no threshold to
+        choose here - an Otsu cutoff would be a way of estimating a number that is
+        in the source, and a way of getting it wrong.
+      * **There is no blur, so there is nothing to soften.** One template pass,
+        not three.
+      * **The origin is known, not searched.** `WriteFrameBuffer` places cell
+        (r, c) at `(c * cell_w, r * cell_h)` from the buffer's base, the buffer's
+        base is cell (0, 0), and `ClearFrameBuffer` zeroes the cursor before
+        anything is printed - so `dx` and `dy` are zero, and the alignment search
+        that a photograph needs is skipped rather than tuned.
+
+    A dump may be *longer* than the drawn area: the region is `FbLength` bytes and
+    the console only ever touches `FB_WIDTH * FB_HEIGHT * FB_BPP` of them (on this
+    platform 0x9E3400 of 0x2400000). It may not be *shorter*, which is reported
+    and not padded - a padded tail reads as a screen that happened to end, and
+    that is the wrong answer to "why is the last line blank".
+
+    `path` must therefore be a dump taken from the region's **base**. A dump from
+    an offset inside it decodes as a screen whose first rows are missing, and
+    nothing here can tell that apart from a console that started printing later.
+    """
+    raw = open(path, "rb").read()
+    need = geo["width"] * geo["height"] * (geo["bpp"] // 8)
+    if len(raw) < need:
+        die(f"{path} is {len(raw)} bytes, and the console draws {need} "
+            f"({geo['width']}x{geo['height']} at {geo['bpp']}bpp) - a short dump "
+            f"cannot be told from a screen that ended")
+    px = np.frombuffer(raw[:need], dtype="<u4").reshape(geo["height"], geo["width"])
+    return (px != 0).astype(np.float32)
+
+
+def fb_lines(path, geo, font, min_margin):
+    """(lines, report, template name) for one framebuffer dump.
+
+    The origin is pinned to (0, 0) and both search radii to zero, which is the
+    whole difference from the photograph call: the two numbers the photo path
+    spends its search on are read off `WriteFrameBuffer` instead.
+    """
+    ink = fb_ink(path, geo)
+    return decode(ink, geo, font, {"dx": 0, "dy": 0}, 0, 0, min_margin)
+
+
+def fb_overlap(seen, lines):
+    """How many of `lines` the stream `seen` already ends with.
+
+    The longest tail of `seen` that is also the head of `lines`. Longest, not
+    first: a line can legitimately repeat - a retry loop prints the same row
+    twice - and a join on the first match would splice the stream back onto a
+    copy of itself and quietly delete everything between.
+    """
+    for cand in range(min(len(seen), len(lines)), 0, -1):
+        if seen[-cand:] == lines[:cand]:
+            return cand
+    return 0
+
+
+def fb_merge(paths, geo, font, min_margin):
+    """One stream out of many dumps, because the console wipes instead of scrolling.
+
+    One dump is one screen: the last `PANEL_ROWS` lines the firmware printed, and
+    never the first, since `AdvanceNewLine` zeroes the whole buffer when the
+    cursor passes the last row. Reading a boot off this channel therefore means
+    sampling it, and sampling means most lines arrive in several dumps. So the
+    screens are joined on content - the longest tail of what has been collected
+    that is also the head of the next screen is the overlap, and everything after
+    it is new.
+
+    A screen that overlaps by *nothing* is reported, not silently appended. Two
+    dumps that share no line may be adjacent (the console printed more than a
+    screenful between them) or may be a screen the sampler missed the start of,
+    and only the reader can tell those apart. Either way a gap in the middle of a
+    boot log is a hole in the evidence, and the one thing this must not do is make
+    it invisible.
+
+    Returns (lines, screens kept, [(path, lines in it)] for the screens that
+    overlapped nothing, and the weakest per-character margin seen anywhere).
+    """
+    out, kept, gaps, worst, weak = [], 0, [], 60.0, 0
+    for p in paths:
+        lines, report, _t = fb_lines(p, geo, font, min_margin)
+        if not lines:
+            continue
+        for rep in report:
+            worst = min(worst, rep["worst"])
+            weak += len(rep["weak"])
+        k = fb_overlap(out, lines)
+        if kept and k == 0:
+            gaps.append((p, len(lines)))
+        out += lines[k:]
+        kept += 1
+    return out, kept, gaps, worst, weak
 
 
 def soften(bits, passes):
@@ -1314,6 +1429,9 @@ def main():
     ap.add_argument("--render-file", help="render every line of this file")
     ap.add_argument("--render-out", default=None, help="PNG to write")
     ap.add_argument("--decode", action="store_true", help="decode the image argument")
+    ap.add_argument("--fb", action="append", default=[], metavar="DUMP",
+                    help="decode a raw dump of the panel's own memory; repeat to"
+                         " join several dumps into one stream, in the order given")
     ap.add_argument("--crop", help="x0,y0,x1,y1 of the screen in the source image")
     ap.add_argument("--rotate", type=float, default=0.0,
                     help="degrees to undo before decoding")
@@ -1396,6 +1514,46 @@ def main():
                       "wrong - the one outcome worth fixing. A flagged one is the "
                       "reading itself saying which two glyphs it is between.")
         if not all(results):
+            return 1
+
+    if args.fb:
+        lines, kept, gaps, worst, weak = fb_merge(args.fb, geo, font, args.min_margin)
+        print(f"\n{len(args.fb)} framebuffer dump{'s' if len(args.fb) != 1 else ''},"
+              f" {kept} carrying text, {len(lines)} rows merged")
+        if not lines:
+            print("  no dump carries text - nothing to read")
+            return 1
+        if len(args.fb) == 1:
+            # One screen: the row numbers are the panel's own, which is what a
+            # reader comparing against a photograph of the same screen needs.
+            _l, report, tname = fb_lines(args.fb[0], geo, font, args.min_margin)
+            print(f"  templates: {tname}")
+            print(f"  rows carrying text start at panel row {report[0]['row']}\n")
+            for rep in report:
+                flag = ""
+                if rep["weak"]:
+                    pairs = ", ".join(f"{p} ({rep['text'][p-1]} or {rep['rivals'][p]})"
+                                      for p in rep["weak"])
+                    flag = f"   <- {len(rep['weak'])} weak: {pairs}"
+                print(f"  {rep['row']:3d} |{rep['text']}|{flag}")
+        else:
+            print("  the merge is on content, so a row's position in this list is a"
+                  " position in the stream and not on any one screen\n")
+            for i, line in enumerate(lines):
+                print(f"  {i:4d} |{line}|")
+        print(f"\n  weakest row margin {worst:.2f} of 60 sub-blocks;"
+              f" --min-margin is {args.min_margin}")
+        if weak:
+            print(f"  {weak} characters are below it, and are flagged above only when"
+                  f" a single dump was given - with a merged stream each row's flags"
+                  f" belong to the screen it came from.")
+        if gaps:
+            print(f"  {len(gaps)} dump{'s' if len(gaps) != 1 else ''} overlapped"
+                  f" nothing already read: a gap in the stream, not a join")
+            for p, n in gaps:
+                print(f"    {os.path.basename(p)}: {n} rows, none shared")
+            return 1
+        if weak:
             return 1
 
     if args.decode:

@@ -24487,3 +24487,148 @@ Instruments: `tools/fv-census.py` imported for `verify_header_checksum` / `data_
 | corrects | `:891-896`'s "the FFS `Checksum`/`State`/`FileSize` block is not re-validated on the start path anyway (`CoreValidateFfsHeader` runs only on the read path)" — corrected in place, both halves; `:3070`'s citation of `CoreAddToDriverList` as `Dispatcher.c:1142-1190`, which is `:1509-1542`; and the scope of `:1663`'s erased run (`0x702308` belongs to a `0x703000` volume; the payload in `boot` is `0x704000` and stops at `0x703bb8`); and the line drift the correction itself caused, tabulated in "The line numbers this step's edit moved" |
 | does not close | the owed panel reading; which of `EFI_OUT_OF_RESOURCES` / `EFI_NOT_FOUND` / `EFI_ACCESS_DENIED` / `EFI_SECURITY_VIOLATION` / a `CoreLoadPeImage` status backs each of the 27 `L`s; and the P2 wall itself |
 | not an action | nothing was built, nothing was flashed, no partition was written, and the device was absent throughout — every claim here is about bytes on this host |
+
+## Step 4.123 — the run's last row is an assert this build answers by writing PSHOLD and spinning, and the three configurations differ only in which of two addresses faults first
+
+### Three configurations, three faults, one cause
+
+The `--el3-stub` captures in `work/out/` had been read as one run reported three ways.
+They are not: the configurations differ in what the stage-2 table makes reachable, and
+each one stops at the *next* address the firmware touches, in order. Read side by side,
+by their own exception reports:
+
+| flags | machine | where it stops | ESR | FAR | console's last rows |
+|---|---|---|---|---|---|
+| `--el3-stub` (plain) | `virt,secure=on` | EnvDxe RVA **0x950C** | `0x96000010` EC 0x25 ISS 0x10 | `0x0000000001FD4000` | digest, then `Synchronous Exception at 0x000000009CBBD50C` |
+| `--el3-stub --el3-zero-mem` (one block) | `virt,secure=on,virtualization=on,gic-version=2` | EnvDxe RVA **0x7D64** | `0x96000050` EC 0x25 ISS 0x50 | `0x000000000C264000` | digest, `SMEM Target info addr=0x00000000 memory mapping failed.`, `ASSERT smem_target.c +435: …`, then `Synchronous Exception at 0x000000009CBBBD64` |
+| `--el3-stub --el3-zero-mem` with the platform map (55 blocks) | `virt,secure=on,virtualization=on,gic-version=2` | EnvDxe RVA **0x679C**, spinning | — none printed in 90.2 s — | — | digest, `SMEM Target info addr=0x00000000 memory mapping failed.`, `ASSERT smem_target.c +435: …` |
+
+and nothing more, in any of them, about any module that runs later.
+
+The plain run's fault is the **read** of the SMEM target-info word. `0x01FD4000` sits
+inside `virt.flash0`'s window (`0x0..0x3FFFFFF`), which `-M virt,secure=on` maps into the
+secure space alone, so a Non-secure read of it is an external abort (EC 0x25) and not a
+translation fault; the backtrace is `0x950C ← 0x8210 ← 0x5970 ← 0x20D8 ← 0x2354 ← …` in
+EnvDxe and then five DxeCore frames (`0xC660`, `0x1057C`, `0x3C5C`, `0x1260`, `0x1250`).
+The `SMEM Target info …` strings that the second and third captures carry **never print
+here at all**: the abort is the first SMEM access EnvDxe makes, before any of them.
+
+Redirect that one 2 MB block and the read succeeds, reads zero, and the driver takes its
+failure branch: it prints the address it was given (`0x00000000`), then asserts through
+`DebugAssert` (`smem_target.c`, line 435, description
+`SMEM Target info addr=0x%08X memory mapping failed.` — the `%08X` is the *description*, a
+literal, while the formatted `0x00000000` on the line before it is the `DEBUG` print, which
+is why the two lines differ). `DebugAssert` on this build — EnvDxe RVA `0x4064`, read from
+the PE in Step 4.122's family of readings — formats `ASSERT %a +%d: %a\n`, prints it,
+prints one space from RVA `0xA88B`, and then calls RVA `0x677C`:
+
+```
+677c: sub  sp, sp, #0x20
+6780: stp  x29, x30, [sp, #16]
+6784: add  x29, sp, #0x10
+6788: adrp x8, 0x9000
+678c: mov  w1, wzr
+6790: ldr  w0, [x8, #1588]     ; EnvDxe .data RVA 0x9634 = 0x0C264000 = PSHOLD
+6794: bl   0x7d2c              ; MmioWrite32-alignment-checked store
+6798: str  xzr, [sp, #8]
+679c: ldr  x8, [sp, #8]        ; <- PC here, at 45 s and again 10 s later
+67a0: cbz  x8, 0x679c
+```
+
+and the store it calls, at RVA `0x7D2C`, is `mov x8,x0; and x9,x8,#3; cbz x9,0x7d60` →
+`mov w0,w1; str w1,[x8]; ret` — with the unaligned case walking into a
+`DebugAssert("IoLibArm.c", 543, "(Address & 3) == 0")` and `b .` of its own. So
+**an `ASSERT` in this build ends by writing 0 to the power-hold register and entering an
+inlined `CpuDeadLoop`**, and that is the last thing any of these runs does.
+
+In the one-block capture the address the store writes is not redirected, so the store is
+what aborts: `PC 0x00009CBBBD64` (RVA `0x7D64`), `FAR 0x000000000C264000`, `ESR 0x96000050
+EC 0x25 IL 0x1 ISS 0x50`. Redirect the platform's declared regions as well — 55 blocks, and
+`PSHOLD`'s block 97 goes to pool `0x42A00000`, while block 15's does double duty for
+`TCSR_TCSR_REGS 0x01FC0000 + 0x40000` and the target-info word inside it — and the store
+lands in RAM, so nothing faults and the run reaches the deadloop. It is still there 10
+seconds later: PC `0x000000009cbba79c`, twice, and the 90.2-second capture carries **no
+exception report at all**.
+
+### The register dump names the finding rather than inferring it
+
+The one-block capture's own register print at the fault is the disassembly, confirmed from
+inside the guest: `X8 0x000000000C264000` (the store's address), `X0 = X1 = 0` (`mov w1,
+wzr`, so a zero read-back is *not* what these registers are evidence of), `LR
+0x000000009CBBA798` (RVA `0x6798`, the instruction after the call), and three callee-saved
+registers still holding `DebugAssert`'s arguments — `X19 0x000000009CBC077A`, `X20
+0x00000000000001B3`, `X21 0x000000009CBC076C`, i.e. the description string, the **line
+number 435 in decimal**, and the file name. The stack dump two screens later holds those
+same three values at `0x9FFCE800..0x9FFCE840` and, at `0x9FFCE860..0x9FFCE8AF`, the
+ASCII of the formatted line itself (`ASSERT smem_target.c +435: SMEM Target info
+addr=0x%08X memory mapping failed.`) — so the string RVAs `0xC76C` / `0xC77A` and the line
+`435` are fixed by the guest's own memory, not by the PE alone.
+
+### What the assertion is about, and what it means for the instrument
+
+The word EnvDxe wants is what XBL and TZ leave at `0x01FD4000` before the firmware runs
+(the `/reserved-memory/tz-apps` node and `TZ_WONCE_PA` of the ACIP table both name it).
+Nothing on a bare `virt` machine writes it, so EnvDxe's SMEM target-info path has nothing
+to map whatever the stage-2 table does — with the word unreachable it aborts; with it
+reachable it reads zero and asserts. That is a **property of the modelled environment, not
+of the payload**: on the device the value is there.
+
+The consequence for the instrument is exact and worth stating plainly, because
+`tools/qemu-el3-stub.S` promises the opposite in its own header. It buys "the whole
+Apriori batch", the `KEY` line, the `P2 RETRY` statuses and the `P2 FWHY` largest-free-run
+readings. What the console actually carries, in every configuration, is the dispatcher's
+digest row — `K 1 Ss 1/69 free=1024 80CF7257-87AB-47F9-A3FE-D50B76D89541`, one Apriori
+failure out of 69 — and then EnvDxe's assert, four to fourteen instructions later. The
+`P2 RETRY` and `P2 FWHY` rows are printed by DxeCore's patched code around *its own*
+allocations, which run after the dispatch it is counting; a module that power-holds the
+board at entry number one cannot be seen past by a stage-2 table. Making the mirror reach
+them needs the dispatch order changed (or EnvDxe removed from that variant's Apriori), not
+another stage-2 flag — and any such variant is a second payload, kept apart from the one
+in `boot`, because the instrument's own rule is that it changes no byte of what it watches.
+
+The same routine also explains a P2 reading habit that had been recorded without its
+cause: the phone's usable window "between a reset and the assert" is not a display timeout.
+`PSHOLD` is the power-hold register, and the assert writes it to 0 before it spins, so on
+the device an assert in this build ends with the board powering down — which is why the
+digest is printed where it is, and why a screen photographed after the assert is a screen
+photographed after the board is off.
+
+### The provenance the exception report prints for the prebuilt drivers
+
+The symbol list in the one-block capture carries the PE's own debug directory:
+
+```
+[ 0] /home/work/gauguin-r-stable-build/vendor/qcom/non-hlos-sm6350-la20/BOOT.XF.3.3/
+     boot_images/Build/BitraLAA/Core/RELEASE_CLANG40LINUX/AARCH64/QcomPkg/Drivers/
+     EnvDxe/EnvDxe/DEBUG/EnvDxe.dll
+[ 1] …/work/uefi/Mu-Silicium/Build/gauguinPkg/DEBUG_CLANGPDB/AARCH64/MdeModulePkg/
+     Core/Dxe/DxeMain/DEBUG/DxeCore.pdb
+```
+
+That is the build the prebuilt Qualcomm drivers under `uefi/Binaries/gauguin/` came out of —
+`non-hlos-sm6350-la20`, bootloader `BOOT.XF.3.3`, the `BitraLAA` (SM6350/SM7225) core,
+`RELEASE_CLANG40LINUX` — and it is the first line in this log that names it from the
+binaries rather than from a directory name. `DebugAssert`'s RVA `0x9634` literal and the
+`s2_l2.inc` block numbers, both absolute, are only trustworthy because the two builds agree
+on it.
+
+### Read this step
+
+Instruments: `tools/qemu-panel-read.py` imported for `platform_paths` / `low_regions` /
+`l2_plan` / `build_el3_stub`, and read at `:248-307` (`low_regions`, `l2_plan`) to fix the
+plan's key semantics (`{block index: pool address}`, not addresses) before its membership
+was checked; `/tmp/spin-probe2.py` and `/tmp/spin-probe3.py` for the two PC readings;
+`objdump -D` on `uefi/Binaries/gauguin/QcomPkg/Drivers/EnvDxe/EnvDxe.efi` for RVA `0x4064`
+and `0x677C`. Read: `work/out/qemu-panel-el3-ctl.txt`, `…-ctl2.txt`, `…-lowmem.txt` (the
+plain configuration, three captures), `…-zeromem.txt` (one block) and `…-map.txt`,
+`…-map-long.txt` (the platform map), each whole or at the tail; and in this document
+`:24031` onward, whose subject is the same payload.
+
+| | |
+|---|---|
+| instrument | the two run configurations' own exception reports and register dumps, read out of `work/out/qemu-panel-el3-*.txt`; `objdump -D` on EnvDxe for the `DebugAssert` body and the `PSHOLD` routine; `tools/qemu-panel-read.py`'s `low_regions`/`l2_plan` called on this host to fix which blocks the plan holds |
+| shows | that the three `--el3-stub` captures stop at EnvDxe RVA `0x950C` (read of `0x01FD4000`), RVA `0x7D64` (store to `0x0C264000`) and RVA `0x679C` (the deadloop), in that order as the stage-2 table makes more of the platform's declared regions reachable; that `DebugAssert` terminates by writing 0 to `PSHOLD` (`0x0C264000`, from EnvDxe `.data` RVA `0x9634`, named at `MemoryMapLib.c:73`) and looping, so an assert on this build is a power-down; that `X19`/`X20`/`X21` at the fault are `DebugAssert`'s description, line 435 and file name, and the formatted line is on the stack |
+| adds | the fault ladder for the three configurations and the reason each of the three addresses behaves as it does (`virt.flash0` is secure-only below `0x04000000`; `0x0C264000` is undecoded in Non-secure space; block 15 is in the plan through `TCSR_TCSR_REGS 0x01FC0000 + 0x40000` and block 97 through the `AOP_SS_MSG_RAM`/`RPMH_CPRF_CPRF`/`PSHOLD` row); the measured fact that `PSHOLD`'s block is redirected under the platform map and not under the one-block flag, which is the whole difference between the second and third captures; the reading that `P2 RETRY`/`P2 FWHY` cannot be reached by any stage-2 table because the dispatch dies at module 1 of 69; and the PE debug-directory provenance of the prebuilt drivers (`non-hlos-sm6350-la20`, `BOOT.XF.3.3`, `BitraLAA`, `CLANG40LINUX`) |
+| corrects | the reading of the previous family of steps in which the mirrored guest "is polling a register the instrument zeroed": `X0 = X1 = 0` at the store is `mov w1, wzr` in the routine itself, and the run is not polling anything — it is inside an assert's termination; and the reading of the `--el3-stub` captures as one run seen three times, which they are not |
+| does not close | the P3 gate; the owed panel reading; the two `L`s and the Apriori failure the digest's `1/69` counts; and the question of whether a variant built without EnvDxe in the Apriori reaches the `P2` rows at all — nothing was built this step |
+| not an action | nothing was built, nothing was flashed, no partition was written, and the device was absent throughout — every claim here is about bytes on this host and about registers the guest printed itself |
