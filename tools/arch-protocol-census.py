@@ -3,8 +3,8 @@
 
 `CoreAllEfiServicesAvailable` (`DxeProtocolNotify.c:81-93`) returns `EFI_NOT_FOUND`
 at the first entry of `mArchProtocols[]` that was never installed, and
-`CoreDisplayMissingArchProtocols` (`:263`) prints one line per missing entry using
-the printable name in `mMissingProtocols[]` (`:63`). So the panel can say **which**
+`CoreDisplayMissingArchProtocols` (`:263-280`) prints one line per missing entry using
+the printable name in `mMissingProtocols[]` (`:57-69`). So the panel can say **which**
 protocols are absent, and the answer is a set of names off a photograph.
 
 What the panel cannot say is why, and what a person reading the photograph cannot

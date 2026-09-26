@@ -18653,6 +18653,11 @@ that owns the walk.
 - `tools/arch-protocol-census.py` is **639 lines**, 31,488 bytes, sha256
   `8031247128f0ecff919c7d8498a72ba8be684a1006669524c66e9428867fce5e`, untracked until this
   commit. `py_compile` clean on both it and `tools/apriori-index.py`.
+  **Step 4.111 moved two line anchors in its docstring** — `(:263)` to `(:263-280)` and
+  `(:63)` to `(:57-69)` — so the pin is now **639 lines, 31,495 bytes**, sha256
+  `5efc0b403af4080f7284af3475f5c0c26c520a28f814720689caf7f863e7d18e`. The edit is inert:
+  both runs below are byte-identical before and after it, with the same exit statuses, and
+  argparse never reads the docstring, so `--help` differs only by the program name.
 - Build-only mode exits **0** with all thirteen rows undecided; with
   `--seq "ssssssssssssssssssLLLsLLLLLLLLLLLLLLLLLLLLLLLL"` and the panel transcription it
   exits **1** and names exactly one loss, `Variable Write`. The letter string is the stored
@@ -21325,6 +21330,20 @@ immediately before the assert — **first**, because they are a direct reading o
 and they do not depend on any slot map. Step 4.105's priority order is unchanged behind
 them, and `P2 APRI miss=`/`unhit=` remain the fields that decide the walk.
 
+> **Step 4.111 corrects the name in the sentence above, and the rank it was given.**
+> There is no `P2 ARCH`. The eleven `P2 <TAG>` format strings in this firmware are
+> `P2 APRI`, `P2 BIN`, `P2 DIAG`, `P2 ERR`, `P2 FREE`, `P2 NOLOAD`, `P2 RETRY`,
+> `P2 SEQ`, `P2 STATS`, `P2 WALK` and `P2 WHY`, all in `Dispatcher.c`; `P2 ARCH`
+> appears in no source file in the tree and in no byte of any payload — a scan of the
+> payload in `boot` finds `Arch Protocol not present` once, in the volume's `DxeCore`
+> file, and `P2 ARCH` zero times. The line is emitted by `CoreDisplayMissingArchProtocols`
+> at `DxeProtocolNotify.c:274` as `"\n%a Arch Protocol not present!!\n"`, with **no tag at
+> all**: a blank line, the name, then the phrase. A reader sent to the panel to find
+> `P2 ARCH` would find nothing on any build. And the lines are not an *owed* reading —
+> Step 4.9 read them, and `:736-741` is the photograph's transcription. Step 4.111 has
+> the account, the rank they actually deserve, and the DEBUG-only gate that decides
+> whether they print at all.
+
 ### Nothing was built and nothing was flashed
 
 - `docs/08-device-session.md` is the only file this step changes. No `.c`, `.inf`, `.asl`,
@@ -21524,6 +21543,15 @@ Struck off, unchanged: `matched=`, the array's `bytes=`/`sum=`/`first=`/`last=`,
 SEQ's letters as *attributions* to named drivers. The SEQ's letters as a *shape* are now
 worth reading, and that is the distinction this step adds.
 
+> **Step 4.111 corrects item 1 of that list, and item 1 is the only one it touches.**
+> The tag is invented and the reading is not owed. `P2 ARCH` is in no source file and in
+> no payload — the eleven real `P2 <TAG>` strings are all in `Dispatcher.c`, and the line
+> this item means is untagged (`DxeProtocolNotify.c:274`). The lines themselves were read
+> off the panel at Step 4.9 and are transcribed at `:739`. What survives from this item
+> is a *re-reading* against rung 7260 rather than against the payload Step 4.9 photographed
+> (`816b1d41…`), which is a consistency check on a known result and belongs below
+> `P2 APRI miss=`, not above it. Step 4.111 states the corrected order.
+
 ### Nothing was built and nothing was flashed
 
 - `docs/08-device-session.md` is the only file this step changes. No `.c`, `.inf`, `.asl`,
@@ -21625,6 +21653,13 @@ below a strictly worse spelling of its own numbers, because the step did not not
 corrected in place: `P2 ARCH` (Step 4.108), then `P2 ERR`, then `P2 WHY` as a checksum on
 `P2 ERR` and worth taking only in the same photograph.
 
+> **Step 4.111 corrects the first name in that list; the demotion itself stands.** `P2 ARCH`
+> is not a field this firmware has — it is not one of `Dispatcher.c`'s eleven `P2 <TAG>`
+> strings and it is not in any payload's bytes, and the line it was coined for is untagged
+> and was already read at Step 4.9. So the corrected list opens with `P2 ERR` outright
+> rather than with a `P2 ARCH` that would have to be struck before `P2 ERR` could be first.
+> Everything this step says about `P2 ERR` below is unaffected.
+
 There is a second reason `P2 ERR` is the better line and it is not about length. Its
 `x%d` counts over the batch, so the **sum of its counts** is the batch's failure total —
 `SeqLen` minus its successes. Under the cut world that is exactly 27 (`SeqLen` 46, 19 `s`).
@@ -21713,6 +21748,306 @@ block as a comment. No code changed; the tool's output is identical.
   `tools/apriori-prefix.py --seen 48` run against
   `work/out/p2-4.94/Mu-gauguin-silicon-gzip.img`; and, in this document, `:20622`, `:20871`,
   `:21016-21020`, `:2815-2818`, `:3678`, `:4473`, `:4968`, `:5086`, and Steps 4.104-4.109.
+- Standing rules unchanged: `userdata`, the partition table and the firmware LUN are
+  untouched; writes go to `boot` only; the control image is read before anything is
+  overwritten; and the screen is read before the next flash.
+- **The P3 gate remains unmet and is now shown to be further away, not closer.**
+
+## Step 4.111 — the tag that three place-orders agreed on and no build ever printed, and the reading that was taken twenty thousand lines earlier
+
+### What this step is
+
+Steps 4.108, 4.109 and 4.110 each opened the owed reading for the next device session with
+an item they called **`P2 ARCH`'s `<name> Arch Protocol not present!!` lines**. Three
+consecutive steps wrote that name, in the same position, in the same words, and the
+repetition is why nobody looked at it: a name that has been through three revisions reads
+like a field some earlier step verified. It is not a field. This step is the look.
+
+Two things were wrong with the item, and they are independent. The name is invented — no
+build has ever printed the string `P2 ARCH`, so a reader sent to the panel to find it would
+find nothing. And the reading is not owed — Step 4.9 took it, and the transcription has been
+in this document since before the tag was coined. The third finding is what the step is
+worth: the instrument is stronger than any of the three steps described, its line count is
+itself a measurement, and whether it prints at all is decided by a build switch nobody has
+written down.
+
+### The tag is not in the firmware
+
+The eleven `P2 <TAG>` format strings this firmware has are all in `Dispatcher.c`:
+`P2 APRI`, `P2 BIN`, `P2 DIAG`, `P2 ERR`, `P2 FREE`, `P2 NOLOAD`, `P2 RETRY`, `P2 SEQ`,
+`P2 STATS`, `P2 WALK`, `P2 WHY`. That is the whole alphabet, and it is the alphabet the
+document's own citations use (`:2349` for `P2 WHY`, `:2396-2403` for `P2 ERR`, `:2429-2438`
+for `P2 STATS`, `:2290-2300` for `P2 APRI`). `P2 ARCH` is not in it. It is also not anywhere
+else in the tree — a `grep -rn "P2 ARCH"` over the whole repository finds it in exactly
+**four** places, all of them in this document and all of them in the three steps this step
+corrects: one in Step 4.108's re-ordering sentence, two in Step 4.109 (its summary sentence
+and its list item 1), and one in Step 4.110's corrected list. **The four hits were at
+`:21322`, `:21508`, `:21511` and `:21625` when the check was run, and this step's own
+insertions moved them** — which is the hazard in miniature, and the reason the citations
+above name the sites by step rather than by line alone. There is no producer to find because
+there is no string.
+
+The same scan over the payloads settles it by bytes rather than by grep. Each of the three
+images the project holds — the record payload `work/out/p2-4.94/…` (`d621f732…`), the one in
+`boot` (`work/out/p2-variants/…`, `90b21643…`, rung 7260), and the unflashed candidate
+`work/out/usb-host/…` (`efc8e10d…`) — contains **one** `Arch Protocol not present`, at
+`0x23b98` inside the volume's `DxeCore` file (type `0x05`, 172,592 B, file offset 1272), and
+**zero** `P2 ARCH` in either ASCII or UTF-16. For contrast, `P2 ERR` is found twice in the
+same file at `0x22b3c` and `0x22d6c`. The three payloads are byte-identical in this region,
+which is expected — the candidate differs from the record by three added drivers and no
+a-priori entry (Step 4.103), and the DXE core is not one of them — but it is worth having
+checked rather than assumed, because "the tag is in one build and not another" was the
+alternative this finding had to rule out.
+
+### The line that is in the firmware
+
+The prose comes from `CoreDisplayMissingArchProtocols` (`DxeProtocolNotify.c:263-280`),
+whose body is one loop:
+
+```
+:270  for (Entry = mArchProtocols; Entry->ProtocolGuid != NULL; Entry++) {
+:271    if (!Entry->Present) {
+:272      for (MissingEntry = mMissingProtocols; MissingEntry->ProtocolGuid != NULL; MissingEntry++) {
+:273        if (CompareGuid (Entry->ProtocolGuid, MissingEntry->ProtocolGuid)) {
+:274          DEBUG ((DEBUG_ERROR, "\n%a Arch Protocol not present!!\n", MissingEntry->GuidString));
+:275          break;
+```
+
+There is no tag in that format string. The line on the panel is a blank line, the name, then
+the phrase — `\nSecurity Arch Protocol not present!!\n` and so on. `:740` of this document
+records it exactly that way, and has since Step 4.9.
+
+Two properties of the block matter and neither is in the three steps' one-line descriptions
+of it. The first is the **count**. `mArchProtocols[]` (`:22-34`, sentinel `:35`) and
+`mMissingProtocols[]` (`:57-69`, sentinel `:70`) are the same thirteen GUIDs in the same
+order — parsed and compared rather than eyeballed, and they agree exactly:
+
+| # | GUID | `mArchProtocols[]` | `mMissingProtocols[]` name |
+|---|---|---|---|
+| 1 | `gEfiSecurityArchProtocolGuid` | `:22` | `:57` `Security` |
+| 2 | `gEfiCpuArchProtocolGuid` | `:23` | `:58` `CPU` |
+| 3 | `gEfiMetronomeArchProtocolGuid` | `:24` | `:59` `Metronome` |
+| 4 | `gEfiTimerArchProtocolGuid` | `:25` | `:60` `Timer` |
+| 5 | `gEfiBdsArchProtocolGuid` | `:26` | `:61` `Bds` |
+| 6 | `gEfiWatchdogTimerArchProtocolGuid` | `:27` | `:62` `Watchdog Timer` |
+| 7 | `gEfiRuntimeArchProtocolGuid` | `:28` | `:63` `Runtime` |
+| 8 | `gEfiVariableArchProtocolGuid` | `:29` | `:64` `Variable` |
+| 9 | `gEfiVariableWriteArchProtocolGuid` | `:30` | `:65` `Variable Write` |
+| 10 | `gEfiCapsuleArchProtocolGuid` | `:31` | `:66` `Capsule` |
+| 11 | `gEfiMonotonicCounterArchProtocolGuid` | `:32` | `:67` `Monotonic Counter` |
+| 12 | `gEfiResetArchProtocolGuid` | `:33` | `:68` `Reset` |
+| 13 | `gEfiRealTimeClockArchProtocolGuid` | `:34` | `:69` `Real Time Clock` |
+
+Because the GUID sets are identical, the inner loop always matches, so the outer loop prints
+**exactly one line per absent protocol** and the **number of lines is the number of
+protocols absent**, with a ceiling of thirteen. The count is a measurement, not decoration:
+the panel's own count is what Step 4.9 got wrong by one, which is the whole subject of
+`tools/arch-protocol-census.py`.
+
+The second property is that this count is **the same predicate the assert reads**.
+`CoreAllEfiServicesAvailable` (`:81-93`) returns `EFI_NOT_FOUND` at the **first** entry whose
+`Present` is FALSE (`:88-89`), and `DxeMain.c` calls it at `:582`, four statements before
+`ASSERT_EFI_ERROR (Status)` at `:593`. So `EFI_NOT_FOUND` — the assert firing at all —
+happens **iff** at least one entry is absent, which happens **iff** at least one prose line
+was printed. An assert on the panel with no `Arch Protocol not present!!` line above it is
+not a possible state of this firmware. That is a free consistency check on any photograph:
+Step 4.8's own note that "the assert, being on the first one, does not say how many or which"
+(`:696-697`) is right about the *assert*, and this block is precisely the part that supplies
+how many and which — which is what Step 4.8 said in the very next paragraph (`:699-701`).
+
+### The reading was taken, at Step 4.9
+
+`docs/08-device-session.md:736-741` is the photograph:
+
+```
+Step 4.8's screen was read, and it says more than the assert did:
+
+Security, Bds, Watchdog, Variable, Capsule, Monotonic, Reset, Real Time Clock
+Arch Protocol not present
+```
+
+`:743` counts it, `:747-763` is Step 4.95's correction to nine, and `:754-757` already states
+that the panel "prints `mMissingProtocols[]`'s strings **in full**". So the instrument is
+named, quoted, and analysed in this document starting at `:734`, and Step 4.95 built
+`tools/arch-protocol-census.py` around the transcription. The three steps that called it owed
+were re-deriving, from `DxeMain.c` and `DxeProtocolNotify.c`, an instrument this document had
+already read, transcribed and repaired.
+
+It is worse than redundant, and this is the part that matters operationally: **the two
+payloads are different**. Step 4.9's screen was the payload
+`816b1d418365ac7beb209e34c5b801ebeeb90bbaedfe8d48e1811e510dcef137` (`:667-669`), written
+over TWRP on 2026-09-23. The payload in `boot` now is `90b21643…`, rung 7260. So a reading of
+those lines against rung 7260 would be a **new** datum after all — but it is a *re-reading of
+a known answer against a later artifact*, whose value is a consistency check between two
+rungs, not a first sight of the gate. Placing it first in the order and placing
+`P2 APRI miss=`/`unhit=` — the fields that decide the walk, which have never been read on any
+rung — below it inverted the two kinds of item.
+
+### The gate nobody wrote down: this instrument is DEBUG-only
+
+Step 4.8 got the bits right and stopped one step short of the consequence. `:703-706` says
+the `DEBUG_CODE_BEGIN ()` at `DxeMain.c:567` is compiled in "when `PcdDebugPropertyMask` has
+`DEBUG_PROPERTY_DEBUG_CODE_ENABLED` (0x04) set — DEBUG has `0x2F`, and the `0x00` at
+`SiliciumPkg.dsc.inc:411` is a per-module override for `ReportStatusCodeRouterRuntimeDxe`,
+not for DxeCore". Every clause of that is correct and re-verified here. What it leaves out is
+that the macro is not a compile-time gate at all:
+
+```
+DebugLib.h:566   #define DEBUG_CODE_BEGIN()     \
+:567               do {                         \
+:568                 if (DebugCodeEnabled ()) { \
+:569                   do { } while (FALSE)
+```
+
+and `DebugCodeEnabled` is a **runtime read of a PCD** —
+`return (BOOLEAN)((PcdGet8 (PcdDebugPropertyMask) & DEBUG_PROPERTY_DEBUG_CODE_ENABLED) != 0);`
+(`BaseDebugLibSerialPort/DebugLib.c:322-327`). The mask's value comes from the board's build
+target through `SiliciumPkg.dsc.inc:162-168`:
+
+```
+:162  !if $(TARGET) == DEBUG
+:163    SerialPortLib|SiliciumPkg/Library/FrameBufferSerialPortLib/FrameBufferSerialPortLib.inf
+:164    DebugLib|MdePkg/Library/BaseDebugLibSerialPort/BaseDebugLibSerialPort.inf
+:165  !else
+:166    SerialPortLib|MdePkg/Library/BaseSerialPortLibNull/BaseSerialPortLibNull.inf
+:167    DebugLib|MdePkg/Library/BaseDebugLibNull/BaseDebugLibNull.inf
+:168  !endif
+```
+
+So the two branches are not "quieter" and "louder". Under `!else`, `BaseDebugLibNull`'s
+`DebugCodeEnabled` returns `FALSE` unconditionally (`BaseDebugLibNull/DebugLib.c:195-200`),
+its `DebugPrint` is an empty body (`:29-35`), and `SerialPortLib` is null. **A RELEASE build
+of this platform prints nothing at all** — not the arch prose, not `P2 ERR`, not `P2 SEQ`, not
+one `P2 <TAG>` line. The whole P2 instrument set is a DEBUG-target instrument.
+
+The build in use is DEBUG, and that is visible in the tree rather than inferred: the only
+build directory present is `Build/gauguinPkg/DEBUG_CLANGPDB`, and because the mask is
+`FixedAtBuild` (`MdePkg.dec:2346` declares the section, `:2392` the PCD) its value is baked
+into each module's generated header. For the DXE core that header is the **library's**, since
+`DebugCodeEnabled` compiles inside `BaseDebugLibSerialPort`, and it says:
+
+```
+Build/gauguinPkg/DEBUG_CLANGPDB/AARCH64/MdePkg/Library/BaseDebugLibSerialPort/
+    BaseDebugLibSerialPort/DEBUG/AutoGen.h:43
+#define _PCD_VALUE_PcdDebugPropertyMask 0x2F
+```
+
+`0x2F & 0x04 = 0x04`, so `DebugCodeEnabled ()` is TRUE, so `CoreDisplayMissingArchProtocols ()`
+is called and the lines print. That is the positive result. The warning is the other
+direction, and it is not about this step: `gauguin.dsc:17` declares
+`BUILD_TARGETS = RELEASE|DEBUG`, and P4/P5 will want a smaller image. **A RELEASE build would
+silently remove every instrument this project has been reading the phase through**, and the
+way it would look is the way it has looked three times now — a string scan of the payload
+still finds the format strings, because the literals are linked whether or not the library
+prints them. Presence of the bytes is not presence of the reading, and this step's own first
+scan is exactly the kind of check that can be fooled by it.
+
+One small thing about the string itself: `:274` ends it `!!`, and the `:739` transcription
+does not. That is the third compression in those two lines — `Watchdog` for `Watchdog Timer`
+and `Monotonic` for `Monotonic Counter` are the two the tool reports as abbreviations, and
+the dropped `!!` is a third of the same kind. It is harmless as long as a later reader
+matching text on a photograph allows for it, which is the only reason it is worth a sentence.
+
+### The corrected order
+
+Item 1 is deleted, not re-ranked. `P2 ERR` is first outright — it is the only line that
+carries the failure counts in words, it cannot be half-photographed, and it has been ranked
+first since Step 4.15. The `Arch Protocol not present!!` lines reappear as a lower item, as
+what they are: a **re-read** of an answer Step 4.9 already has, against the rung in `boot`.
+
+1. **`P2 ERR`'s `<status name> x<count>` lines** — the counts, in words, on a line that
+   cannot be truncated. First since Step 4.15; Step 4.110 restored it and this step removes
+   the fabricated name that was still sitting above it.
+2. `P2 APRI miss=` and `unhit=` — the fields that decide the walk (Steps 4.105-4.106), which
+   have never been read on any rung.
+3. `P2 WALK t=0 seen=` and `last=`; then `P2 STATS discovered=`.
+4. `P2 WHY`'s letter counts — redundant with 1, worth taking only in the same photograph, as
+   a checksum on 1.
+5. **`Arch Protocol not present!!`'s lines, untagged** — a re-reading of Step 4.9's answer
+   against rung 7260, as a consistency check between two rungs. Not first: the answer is
+   known, and the item's cost on the device (a photograph framed on a specific block rather
+   than on the whole screenful) is the same as an item whose answer is not.
+6. Then Step 4.105's remaining order unchanged.
+
+Struck off, unchanged: `matched=`, the array's `bytes=`/`sum=`/`first=`/`last=`, and the SEQ's
+letters as *attributions* to named drivers.
+
+### A lead closed, and it is not a defect
+
+The previous session ended by scouting `tools/arch-protocol-census.py`'s thirteen
+`verdict: undecided` cells as a possible unexamined claim — a column that prints a word on
+every row, in a tool whose output is quoted in this document, and that nothing appeared to
+justify. It is justified, in three places, and the lead is closed as a negative result rather
+than carried forward. The tool's docstring says it at `:92`: "Without `--seq` every row is
+undecided by construction and the tool reports the build". Step 4.95's record says it at
+`:18660`: "Build-only mode exits **0** with all thirteen rows undecided". And the two runs are
+reproduced verbatim in the same step, the second one filling the column in (`:18461-18473` for
+the build-only table, `:18489-18501` for the run with `--seq` and `--panel`). Both were
+re-run here and match the recorded text line for line, with exit statuses 0 and 1.
+
+### Two line anchors in the tool, and the pin
+
+`tools/arch-protocol-census.py`'s docstring restates its own premise and cited two anchors a
+range short: `CoreDisplayMissingArchProtocols` as `(:263)` when the function is `:263-280`, and
+the printable names as `mMissingProtocols[]` `(:63)` when `:63` is the fourth entry of a table
+spanning `:57-69`. Both moved, and nothing else in the tool changed. The pin this document
+records at `:18653` moved with them — **639 lines**, 31,488 → **31,495** bytes, sha256
+`8031247128f0…` → `5efc0b403af4080f7284af3475f5c0c26c520a28f814720689caf7f863e7d18e`. The
+seven bytes are the two anchors and nothing else.
+
+The edit is inert and that was measured rather than argued: the previous revision was checked
+out beside the current one, both were run against
+`work/out/p2-4.94/Mu-gauguin-silicon-gzip.img`, and both output streams are byte-identical in
+both modes — build-only, exit 0, thirteen `undecided`; and with
+`--seq "ssssssssssssssssssLLLsLLLLLLLLLLLLLLLLLLLLLLLL"` and
+`--panel "Security,Bds,Watchdog,Variable,Capsule,Monotonic,Reset,Real Time Clock"`, exit 1,
+"9 absent, 4 present", the two abbreviation notes, "transcribed: 8 names; measured absent: 9",
+and the `Variable Write` line. `py_compile` is clean and argparse never reads the docstring,
+so `--help` differs only in the program name.
+
+### What this does not change
+
+- **The gate, the assert, the nine and the 27.** `CoreAllEfiServicesAvailable` returns
+  `EFI_NOT_FOUND`, `DxeMain.c:593` asserts, `:606` `gBds->Entry` is never reached, BDS does
+  not run, and the nine absent protocols are the load failures seen from the other end. Every
+  part of Step 4.108's finding stands; what changes is the name of the instrument that reads
+  it and the rank it was given.
+- **The `P2 SEQ` shape and Step 4.109's result.** The string is written in dispatch order
+  under both candidate maps, and its shape (18 `s`, `L L L`, one `s`, 24 `L`) is readable
+  without a map. Unaffected.
+- **Step 4.110's `P2 ERR` argument.** Its counts separate the cut world (27) from the complete
+  walk (above 27) and that reading is untouched.
+- **Step 4.105's order** and the struck-off fields.
+- **`tools/arch-protocol-census.py`'s results**, which are re-produced here rather than
+  changed: thirteen protocols, thirteen promoted producers, the nine-to-four partition, and
+  `Variable Write` as the transcription's one loss.
+
+### Nothing was built and nothing was flashed
+
+- Two files change: `docs/08-device-session.md` and `tools/arch-protocol-census.py`, and in
+  the tool only two line anchors inside the module docstring. No `.c`, `.inf`, `.asl`,
+  `APRIORI.inc`, FFS file or payload was written, and the build tree was opened read-only.
+- **The device is absent from this host throughout** — `adb devices` is empty, `lsusb` shows
+  no Qualcomm function (the only non-hub device is a Huawei mouse), and there is no
+  `/dev/ttyUSB*`/`/dev/ttyACM*`. The reading owed on the payload in `boot` (`90B21643…`,
+  rung 7260) remains owed, and nothing was flashed.
+- Digests unchanged: record `work/out/p2-4.94/Mu-gauguin-silicon-gzip.img`, 1,144,832 B,
+  `d621f732f4763a303e980c5af04451479c2ace31801e796993a258f226c177a5`; `boot`'s
+  `work/out/p2-variants/Mu-gauguin-silicon-gzip.img`, 1,142,784 B,
+  `90b21643e3450c326fb3d24baf64d58d4692a5d155c36b76d2e020ff04a96b59` — twenty-eighth step
+  running; candidate 1,169,408 B,
+  `efc8e10d09f0f286011e1aacc638a7edd2ed5fcd86884640b28d14628f58f9f3`, unflashed.
+- Cited, re-read rather than remembered: `DxeProtocolNotify.c:22-34`, `:35`, `:57-69`, `:70`,
+  `:81-93`, `:263-280`, `:270-275`, `:274`; `DxeMain.c:562`, `:567-569`, `:575-577`, `:582`,
+  `:593`, `:606`; `Dispatcher.c:2349`, `:2396-2403`, `:2429-2438`; the `P2 <TAG>` alphabet
+  grepped out of `Dispatcher.c`; `DebugLib.h:29-31`, `:566-569`;
+  `BaseDebugLibSerialPort/DebugLib.c:322-327`; `BaseDebugLibNull/DebugLib.c:29-35`,
+  `:195-200`; `SiliciumPkg.dsc.inc:69`, `:73`, `:162-168`, `:411`; `gauguin.dsc:17`;
+  `MdePkg.dec:2346`, `:2392`; the two `AutoGen.h` artifacts under
+  `Build/gauguinPkg/DEBUG_CLANGPDB/AARCH64/`; `tools/arch-protocol-census.py:92`; and, in this
+  document, `:662`, `:667-669`, `:696-697`, `:699-708`, `:734`, `:736-741`, `:740`, `:743`,
+  `:747-763`, `:754-757`, `:18461-18473`, `:18489-18501`, `:18653-18655`, `:18660`, `:21327`,
+  `:21527`, `:21530`, `:21653`.
 - Standing rules unchanged: `userdata`, the partition table and the firmware LUN are
   untouched; writes go to `boot` only; the control image is read before anything is
   overwritten; and the screen is read before the next flash.
